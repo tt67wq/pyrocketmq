@@ -61,7 +61,7 @@ class RemotingCommandSerializer:
             body_length = len(command.body) if command.body else 0
 
             # 计算总长度
-            total_length = cls.LENGTH_SIZE + header_length + body_length
+            total_length = cls.LENGTH_SIZE * 2 + header_length + body_length
 
             # 检查总大小限制
             if total_length > cls.MAX_FRAME_SIZE:
@@ -140,7 +140,8 @@ class RemotingCommandSerializer:
 
             # 解析body
             body_start = header_end
-            if body_start < total_length:
+            body_length = total_length - body_start
+            if body_length > 0:
                 command.body = data[body_start:total_length]
             else:
                 command.body = None

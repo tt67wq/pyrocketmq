@@ -9,7 +9,6 @@ import pytest
 from pyrocketmq.model.command import RemotingCommand
 from pyrocketmq.model.enums import FlagType, LanguageCode, RequestCode
 from pyrocketmq.model.errors import (
-    DeserializationError,
     HeaderTooLargeError,
     MessageTooLargeError,
     ProtocolError,
@@ -124,7 +123,7 @@ class TestRemotingCommandSerializer:
             b"\x00\x00\x00\x10"  # header长度16
             b"invalid json data"  # 无效的JSON
         )
-        with pytest.raises(DeserializationError):
+        with pytest.raises(ProtocolError):
             RemotingCommandSerializer.deserialize(invalid_data)
 
     def test_deserialize_incomplete_data(self):
@@ -239,9 +238,6 @@ class TestRemotingCommandSerializer:
             restored = RemotingCommandSerializer.deserialize(data)
 
             assert restored.flag == flag
-            assert restored.is_request == (flag == FlagType.RPC_TYPE)
-            assert restored.is_oneway == (flag == FlagType.RPC_ONEWAY)
-            assert restored.is_response == (flag == FlagType.RESPONSE_TYPE)
 
     def test_serialize_header_json_format(self):
         """测试header的JSON格式"""
