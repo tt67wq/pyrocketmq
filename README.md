@@ -2,110 +2,87 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Development Status](https://img.shields.io/badge/Development-Alpha-orange.svg)](#)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](#)
 
-pyrocketmq 是一个高性能的 Python RocketMQ 客户端库，完全兼容 RocketMQ TCP 协议规范。
+> **⚠️ 开发状态警告**: 本项目目前处于**早期开发阶段**，仅实现了 RocketMQ 协议的数据结构层。网络传输层尚未完成，**还不能用于生产环境**。
 
-## ✨ 特性
+pyrocketmq 是一个正在开发中的高性能 Python RocketMQ 客户端库，旨在完全兼容 RocketMQ TCP 协议规范。
 
-- 🔧 **完全兼容** - 与 RocketMQ Go 语言实现完全兼容
-- 🚀 **高性能** - 基于 Python 3.11+ 的高效实现
-- 🛡️ **类型安全** - 全面的类型注解和严格的数据验证
-- 📦 **易于使用** - 提供工厂方法、构建器和丰富的工具函数
-- 🧪 **充分测试** - 完整的单元测试覆盖
-- 📊 **协议完整** - 支持所有标准请求代码和响应代码
+## 🎯 当前进展
 
-## 🚀 快速开始
+### ✅ 已完成功能
+- **协议模型层**: 完整的 RemotingCommand 数据结构实现
+- **序列化器**: 基于 RocketMQ TCP 协议的二进制序列化/反序列化
+- **协议兼容**: 与 Go 语言实现完全兼容的枚举定义
+- **工具函数**: 丰富的命令创建、验证和处理工具
+- **测试覆盖**: 完整的单元测试覆盖（16个测试用例全部通过）
 
-### 安装
+### 🚧 正在开发中
+- **网络传输层**: TCP 连接实现
+- **连接管理**: 连接池和负载均衡
+- **消息处理**: 生产者和消费者实现
+- **性能优化**: 高并发场景优化
 
-```bash
-git clone https://github.com/your-username/pyrocketmq.git
-cd pyrocketmq
+### 📋 待实现功能
+- **完整客户端**: 生产者和消费者API
+- **事务支持**: 分布式事务消息
+- **监控指标**: 性能监控和统计
+- **安全特性**: TLS 加密和认证
 
-# 激活虚拟环境
-source .venv/bin/activate
+## 🏗️ 当前架构
 
-# 安装依赖
-pip install -e .
+虽然还在开发中，但项目已经具备了清晰的架构设计：
+
+```
+src/pyrocketmq/
+├── model/              # ✅ 已完成的协议模型层
+│   ├── command.py      # 核心数据结构 RemotingCommand
+│   ├── serializer.py   # 二进制序列化器
+│   ├── enums.py        # 协议枚举定义
+│   ├── factory.py      # 工厂方法和构建器
+│   ├── utils.py        # 工具函数
+│   └── errors.py       # 模型层异常定义
+├── transport/          # 🚧 开发中的网络传输层
+│   ├── abc.py          # 传输层抽象接口
+│   ├── tcp.py          # TCP连接实现（部分完成）
+│   ├── config.py       # 传输配置管理
+│   ├── states.py       # 连接状态机
+│   └── errors.py       # 传输层异常定义
+└── logging/           # ✅ 日志模块
+    ├── logger.py       # 日志记录器
+    └── config.py       # 日志配置
 ```
 
-### 基本使用
+## 💡 当前的使用场景
 
-#### 创建消息命令
+虽然完整功能尚未完成，但当前的协议模型层可以用于：
 
-```python
-from pyrocketmq.model import RemotingCommandFactory, RequestCode
+### 学习和研究
+- 理解 RocketMQ 协议的内部结构
+- 学习协议数据结构的实现方式
+- 作为实现其他语言客户端的参考
 
-# 创建发送消息请求
-command = RemotingCommandFactory.create_send_message_request(
-    topic="test_topic",
-    body=b"Hello, RocketMQ!",
-    producer_group="test_group"
-)
+### 自定义实现
+- 基于现有的协议模型实现自定义的网络层
+- 扩展协议功能用于特殊场景
+- 作为其他消息系统的参考实现
 
-# 序列化
-from pyrocketmq.model import RemotingCommandSerializer
-data = RemotingCommandSerializer.serialize(command)
+### 测试和验证
+- 验证协议兼容性
+- 测试消息序列化性能
+- 开发自定义的RocketMQ工具
 
-# 反序列化
-restored = RemotingCommandSerializer.deserialize(data)
-```
+## 🔬 当前可用的API
 
-#### 使用构建器模式
-
-```python
-from pyrocketmq.model import RemotingCommandBuilder, RequestCode
-
-command = (RemotingCommandBuilder(code=RequestCode.SEND_MESSAGE)
-          .with_topic("test_topic")
-          .with_body(b"Hello, RocketMQ!")
-          .with_producer_group("test_group")
-          .with_tags("important")
-          .as_request()
-          .build())
-```
-
-#### 创建响应
-
-```python
-from pyrocketmq.model import RemotingCommandFactory
-
-# 创建成功响应
-response = RemotingCommandFactory.create_success_response(
-    opaque=command.opaque,
-    body=b"Message received"
-)
-
-# 创建错误响应
-error_response = RemotingCommandFactory.create_error_response(
-    opaque=command.opaque,
-    remark="Topic not found"
-)
-```
-
-## 📋 系统要求
-
-- Python 3.11+
-- RocketMQ 4.x+
-
-## 📚 API 文档
-
-### 核心组件
-
-#### RemotingCommand
-RocketMQ 协议的核心数据结构：
-
+### 基础数据结构操作
 ```python
 from pyrocketmq.model import RemotingCommand, RequestCode, LanguageCode
 
+# 创建命令对象
 command = RemotingCommand(
     code=RequestCode.SEND_MESSAGE,
     language=LanguageCode.PYTHON,
-    version=1,
-    opaque=123,
-    flag=0,
-    remark="test remark",
     ext_fields={
         "topic": "test_topic",
         "producerGroup": "test_group"
@@ -113,105 +90,89 @@ command = RemotingCommand(
     body=b"message content"
 )
 
-# 检查命令类型
-if command.is_request:
-    print("这是一个请求命令")
-elif command.is_response:
-    print("这是一个响应命令")
-elif command.is_oneway:
-    print("这是一个单向消息")
+# 使用工厂方法
+from pyrocketmq.model import RemotingCommandFactory
+command = RemotingCommandFactory.create_send_message_request(
+    topic="test_topic",
+    body=b"Hello, RocketMQ!",
+    producer_group="test_group"
+)
+
+# 使用构建器
+from pyrocketmq.model import RemotingCommandBuilder
+command = (RemotingCommandBuilder(code=RequestCode.SEND_MESSAGE)
+          .with_topic("test_topic")
+          .with_body(b"Hello, RocketMQ!")
+          .with_producer_group("test_group")
+          .build())
 ```
 
-#### 序列化器
-高效的二进制序列化和反序列化：
-
+### 序列化和反序列化
 ```python
 from pyrocketmq.model import RemotingCommandSerializer
 
-# 序列化
+# 序列化命令为二进制数据
 data = RemotingCommandSerializer.serialize(command)
 
-# 反序列化
+# 从二进制数据反序列化命令
 restored = RemotingCommandSerializer.deserialize(data)
 
-# 验证数据帧
+# 验证数据帧格式
 if RemotingCommandSerializer.validate_frame(data):
     total_length, header_length = RemotingCommandSerializer.get_frame_info(data)
-    print(f"总长度: {total_length}, Header长度: {header_length}")
 ```
 
-#### 工具函数
-丰富的实用工具函数：
-
+### 工具函数
 ```python
 from pyrocketmq.model.utils import (
-    validate_command, generate_opaque, is_success_response,
-    get_topic_from_command, get_command_summary
+    validate_command, generate_opaque, get_command_summary,
+    is_success_response, get_topic_from_command
 )
 
-# 验证命令
+# 验证命令有效性
 validate_command(command)
 
-# 生成唯一ID
+# 生成唯一消息ID
 opaque = generate_opaque()
 
-# 检查响应状态
-if is_success_response(response):
-    print("请求成功")
-
-# 提取信息
-topic = get_topic_from_command(command)
+# 获取命令摘要信息
 summary = get_command_summary(command)
-print(f"主题: {topic}")
-print(f"摘要: {summary}")
+
+# 从命令中提取主题信息
+topic = get_topic_from_command(command)
 ```
-
-### 支持的请求类型
-
-- **消息相关**: `SEND_MESSAGE`, `PULL_MESSAGE`, `QUERY_MESSAGE`
-- **消费者相关**: `CONSUMER_SEND_MSG_BACK`, `GET_CONSUMER_LIST_BY_GROUP`
-- **生产者相关**: `HEART_BEAT`, `SEND_BATCH_MESSAGE`
-- **偏移量相关**: `QUERY_CONSUMER_OFFSET`, `UPDATE_CONSUMER_OFFSET`
-- **主题相关**: `CREATE_TOPIC`, `GET_ROUTE_INFO_BY_TOPIC`
-- **事务相关**: `END_TRANSACTION`, `CHECK_TRANSACTION_STATE`
 
 ## 🧪 运行测试
 
+当前只实现了模型层的测试，可以验证协议实现的正确性：
+
 ```bash
-# 设置环境变量
+# 设置环境变量（必需）
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 
 # 运行所有测试
 python -m pytest tests/ -v
 
-# 运行特定模块测试
+# 运行序列化器测试
 python -m pytest tests/model/test_serializer.py -v
 
 # 运行单个测试方法
 python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::test_serialize_basic_command -v
 ```
 
-## 🏗️ 项目架构
+## 🤝 参与贡献
 
-```
-src/pyrocketmq/
-├── model/              # RocketMQ协议模型层
-│   ├── command.py      # 核心数据结构
-│   ├── serializer.py   # 序列化器
-│   ├── enums.py        # 协议枚举
-│   ├── factory.py      # 工厂和构建器
-│   ├── utils.py        # 工具函数
-│   └── errors.py       # 异常定义
-├── transport/          # 网络传输层
-│   ├── abc.py          # 抽象接口
-│   ├── tcp.py          # TCP实现
-│   ├── config.py       # 配置管理
-│   ├── states.py       # 状态机
-│   └── errors.py       # 传输异常
-└── logging/           # 日志模块
-    ├── logger.py       # 日志记录器
-    └── config.py       # 日志配置
-```
+项目处于早期开发阶段，非常欢迎贡献代码！以下是急需帮助的领域：
+
+1. **网络传输层**: 实现完整的TCP连接功能
+2. **性能测试**: 进行大规模性能测试
+3. **文档完善**: 补充API文档和使用示例
+4. **社区建设**: 回答问题，帮助其他开发者
+
+## 📋 系统要求
+
+- Python 3.11+
+- 网络传输层完成后需要 RocketMQ 4.x+
 
 ## 🔬 协议规范
 
@@ -224,20 +185,12 @@ src/pyrocketmq/
 - 最大帧大小: 32MB
 - 最大 Header 大小: 64KB
 
-### Flag 类型
-- `RPC_TYPE = 0`: 请求命令
-- `RPC_ONEWAY = 1`: 单向消息
-- `RESPONSE_TYPE = 1`: 响应命令
-
-## 🤝 贡献
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+### 支持的协议特性
+- ✅ 所有标准请求代码和响应代码
+- ✅ 完整的扩展字段支持
+- ✅ 多语言客户端兼容
+- ✅ Unicode 字符支持
+- ✅ 错误处理机制
 
 ## 📝 许可证
 
@@ -252,8 +205,8 @@ src/pyrocketmq/
 
 - 项目主页: [GitHub Repository](https://github.com/your-username/pyrocketmq)
 - 问题反馈: [GitHub Issues](https://github.com/your-username/pyrocketmq/issues)
-- 邮箱: your-email@example.com
+- 开发讨论: [GitHub Discussions](https://github.com/your-username/pyrocketmq/discussions)
 
 ---
 
-**⭐ 如果这个项目对你有帮助，请给它一个星标！**
+**⚠️ 请注意**: 这是一个**正在开发中的项目**，请勿在生产环境中使用。欢迎关注项目进展或参与贡献代码！
