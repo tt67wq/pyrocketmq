@@ -31,11 +31,12 @@ class ConnectionStateMachine(StateMachine):
         self.config = config
         self._socket = None  # 这里可以存储实际的socket对象
         self._logger = get_logger("transport.tcp")
+        super().__init__()
 
     def connect(self):
         """启动连接过程"""
         if self.is_disconnected:
-            self.send("_close")
+            self.send("_connect")
         else:
             self._logger.warning("当前状态不允许连接操作")
 
@@ -120,10 +121,13 @@ class ConnectionStateMachine(StateMachine):
         # 清理socket资源
         self._close_socket()
 
-        # 这里可以添加重连逻辑
-        self._logger.info("准备重连...")
-        time.sleep(self.config.retry_interval)
-        self.send("_connect")
+        # 重连逻辑：只有在配置允许重连时才自动重连
+        if self.config.max_retries != 0 and self.config.retry_interval > 0:
+            self._logger.info("准备重连...")
+            time.sleep(self.config.retry_interval)
+            self.send("_connect")
+        else:
+            self._logger.info("重连已禁用，保持断开状态")
 
     def on_enter_closed(self):
         """进入关闭状态"""
