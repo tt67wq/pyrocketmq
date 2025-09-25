@@ -17,16 +17,34 @@ class ConnectionStateMachine(StateMachine):
     disconnected = State(initial=True)
     connecting = State()
     connected = State()
+    closed = State()
 
     # 事件定义
-    connect = disconnected.to(connecting)
-    connect_success = connecting.to(connected)
-    disconnect = connected.to(disconnected) | connecting.to(disconnected)
+    _connect = disconnected.to(connecting)
+    _connect_success = connecting.to(connected)
+    _disconnect = connected.to(disconnected) | connecting.to(disconnected)
+    _close = (
+        disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
+    )
 
     def __init__(self, config: TransportConfig):
         self.config = config
         self._socket = None  # 这里可以存储实际的socket对象
         self._logger = get_logger("transport.tcp")
+
+    def connect(self):
+        """启动连接过程"""
+        if self.is_disconnected:
+            self.send("_close")
+        else:
+            self._logger.warning("当前状态不允许连接操作")
+
+    def close(self):
+        """关闭连接"""
+        if not self.is_disconnected:
+            self.send("_disconnect")
+        else:
+            self._logger.warning("当前状态不允许断开操作")
 
     # 状态转换回调
     def on_enter_connecting(self):
@@ -37,10 +55,10 @@ class ConnectionStateMachine(StateMachine):
             self._socket.connect(self.config.address)
         except Exception as e:
             self._logger.error(f"连接失败: {e}")
-            self.send("disconnect")
+            self.send("_disconnect")
         else:
             self._logger.info("连接成功")
-            self.send("connect_success")
+            self.send("_connect_success")
 
     def on_enter_connected(self):
         """进入已连接状态"""
@@ -100,6 +118,21 @@ class ConnectionStateMachine(StateMachine):
         """进入断开连接状态"""
         self._logger.info(f"连接已断开: {self.config.address}")
         # 清理socket资源
+        self._close_socket()
+
+        # 这里可以添加重连逻辑
+        self._logger.info("准备重连...")
+        time.sleep(self.config.retry_interval)
+        self.send("_connect")
+
+    def on_enter_closed(self):
+        """进入关闭状态"""
+        self._logger.info("连接已关闭")
+        # 清理socket资源
+        self._close_socket()
+
+    def _close_socket(self):
+        """关闭socket连接"""
         if self._socket:
             try:
                 self._socket.close()
@@ -108,10 +141,6 @@ class ConnectionStateMachine(StateMachine):
                 self._logger.error(f"关闭Socket时发生错误: {e}")
             finally:
                 self._socket = None
-        # 这里可以添加重连逻辑
-        self._logger.info("准备重连...")
-        time.sleep(self.config.retry_interval)
-        self.send("connect")
 
     def output(self, msg: bytes) -> None:
         """发送二进制消息"""
@@ -141,7 +170,7 @@ class ConnectionStateMachine(StateMachine):
         except Exception as e:
             self._logger.error(f"发送消息失败: {e}")
             # 发送失败，断开连接
-            self.send("disconnect")
+            self.send("_disconnect")
             raise
 
     def recv(self, size: int) -> bytes:
@@ -167,7 +196,7 @@ class ConnectionStateMachine(StateMachine):
             if not data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭")
-                self.send("disconnect")
+                self.send("_disconnect")
                 return b""
 
             self._logger.debug(
@@ -181,7 +210,7 @@ class ConnectionStateMachine(StateMachine):
         except Exception as e:
             self._logger.error(f"接收消息失败: {e}")
             # 接收失败，断开连接
-            self.send("disconnect")
+            self.send("_disconnect")
             raise
 
     @property
