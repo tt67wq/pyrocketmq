@@ -5,21 +5,99 @@ pyrocketmq模型层
 """
 
 from .command import RemotingCommand
-from .enums import FlagType, LanguageCode, RequestCode
+from .enums import FlagType, LanguageCode, RequestCode, ResponseCode
 from .errors import (
+    ConnectionClosedError,
     DeserializationError,
+    HeaderTooLargeError,
+    InvalidHeaderError,
+    InvalidMessageError,
+    MessageTooLargeError,
     ProtocolError,
     RemotingCommandError,
     SerializationError,
+    TimeoutError,
+    UnsupportedLanguageError,
+    UnsupportedRequestCodeError,
+    UnsupportedVersionError,
+    ValidationError,
+)
+from .factory import RemotingCommandBuilder, RemotingCommandFactory
+from .serializer import RemotingCommandSerializer
+from .utils import (
+    command_to_dict,
+    commands_to_json,
+    copy_command_with_new_opaque,
+    create_response_for_request,
+    filter_commands_by_group,
+    filter_commands_by_topic,
+    format_ext_fields_for_display,
+    generate_opaque,
+    get_command_stats,
+    get_command_summary,
+    get_command_type_name,
+    get_group_from_command,
+    get_offset_from_command,
+    get_queue_id_from_command,
+    get_topic_from_command,
+    is_error_response,
+    is_heartbeat_command,
+    is_pull_message_command,
+    is_send_message_command,
+    is_success_response,
+    parse_command_from_json,
+    validate_command,
 )
 
 __all__ = [
+    # 核心数据结构
     "RemotingCommand",
+    # 枚举类型
     "LanguageCode",
     "RequestCode",
     "FlagType",
+    "ResponseCode",
+    # 异常类型
     "RemotingCommandError",
     "SerializationError",
     "DeserializationError",
     "ProtocolError",
+    "ValidationError",
+    "MessageTooLargeError",
+    "HeaderTooLargeError",
+    "InvalidHeaderError",
+    "InvalidMessageError",
+    "ConnectionClosedError",
+    "TimeoutError",
+    "UnsupportedVersionError",
+    "UnsupportedLanguageError",
+    "UnsupportedRequestCodeError",
+    # 序列化器
+    "RemotingCommandSerializer",
+    # 工厂和构建器
+    "RemotingCommandBuilder",
+    "RemotingCommandFactory",
+    # 工具函数
+    "validate_command",
+    "generate_opaque",
+    "is_success_response",
+    "is_error_response",
+    "get_command_summary",
+    "get_topic_from_command",
+    "get_group_from_command",
+    "get_queue_id_from_command",
+    "get_offset_from_command",
+    "copy_command_with_new_opaque",
+    "create_response_for_request",
+    "filter_commands_by_topic",
+    "filter_commands_by_group",
+    "get_command_stats",
+    "format_ext_fields_for_display",
+    "command_to_dict",
+    "commands_to_json",
+    "parse_command_from_json",
+    "get_command_type_name",
+    "is_heartbeat_command",
+    "is_send_message_command",
+    "is_pull_message_command",
 ]

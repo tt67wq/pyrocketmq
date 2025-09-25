@@ -110,26 +110,6 @@ class RemotingCommand:
             header_dict, separators=(",", ":"), ensure_ascii=False
         ).encode("utf-8")
 
-    @classmethod
-    def _deserialize_header(cls, data: bytes) -> "RemotingCommand":
-        """从JSON格式反序列化header数据"""
-        try:
-            header_dict = json.loads(data.decode("utf-8"))
-
-            command = cls(
-                code=header_dict["code"],
-                language=LanguageCode(header_dict["language"]),
-                version=header_dict.get("version", 1),
-                opaque=header_dict.get("opaque", 0),
-                flag=header_dict.get("flag", 0),
-                remark=header_dict.get("remark"),
-                ext_fields=header_dict.get("extFields", {}),
-            )
-
-            return command
-        except (json.JSONDecodeError, KeyError, ValueError) as e:
-            raise ValueError(f"Header反序列化失败: {e}")
-
     def __str__(self) -> str:
         """字符串表示"""
         parts = [
