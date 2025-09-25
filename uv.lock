@@ -52,6 +52,7 @@ name = "pyrocketmq"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "pytest" },
     { name = "python-statemachine" },
 ]
 
@@ -61,7 +62,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "python-statemachine", specifier = ">=2.5.0" }]
+requires-dist = [
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "python-statemachine", specifier = ">=2.5.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.4.2" }]

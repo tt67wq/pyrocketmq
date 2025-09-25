@@ -217,6 +217,113 @@ class ConnectionStateMachine(StateMachine):
             self.send("_disconnect")
             raise
 
+    def recv_pkg(self) -> bytes:
+        """接收完整的数据包（header + body）
+
+        数据包格式:
+        - Header: 4字节大端序整数，表示body长度
+        - Body: 实际数据内容
+
+        Returns:
+            完整的数据包（body部分），连接关闭时返回空字节
+        """
+        if not self.is_connected:
+            raise RuntimeError("连接未建立，无法接收消息")
+
+        if not self._socket:
+            raise RuntimeError("Socket未初始化")
+
+        try:
+            # 1. 接收4字节header
+            header_data = self._recv_exactly(4)
+            if not header_data:
+                # 连接被对方关闭
+                self._logger.info("连接被对方关闭（接收header时）")
+                self.send("_disconnect")
+                return b""
+
+            if len(header_data) != 4:
+                raise ValueError(
+                    f"Header长度不正确，期望4字节，实际{len(header_data)}字节"
+                )
+
+            # 2. 解析body长度（大端序）
+            body_length = int.from_bytes(
+                header_data, byteorder="big", signed=False
+            )
+
+            # 3. 验证body长度合理性
+            if body_length < 0:
+                raise ValueError(f"Body长度不能为负数: {body_length}")
+            if body_length > self.config.max_message_size:
+                raise ValueError(
+                    f"Body长度超过限制: {body_length} > {self.config.max_message_size}"
+                )
+
+            # 4. 接收body数据
+            if body_length == 0:
+                # 空消息包
+                self._logger.debug("接收到空消息包")
+                return b""
+
+            body_data = self._recv_exactly(body_length)
+            if not body_data:
+                # 连接被对方关闭
+                self._logger.info("连接被对方关闭（接收body时）")
+                self.send("_disconnect")
+                return b""
+
+            if len(body_data) != body_length:
+                raise ValueError(
+                    f"Body长度不匹配，期望{body_length}字节，实际{len(body_data)}字节"
+                )
+
+            self._logger.debug(
+                f"接收数据包成功: header=4bytes, body={len(body_data)}bytes"
+            )
+            return body_data
+
+        except socket.timeout:
+            self._logger.warning("接收数据包超时")
+            raise TimeoutError("接收数据包超时")
+        except Exception as e:
+            self._logger.error(f"接收数据包失败: {e}")
+            # 接收失败，断开连接
+            self.send("_disconnect")
+            raise
+
+    def _recv_exactly(self, size: int) -> bytes:
+        """精确接收指定长度的数据"""
+        if size <= 0:
+            return b""
+
+        if not self.is_connected:
+            raise RuntimeError("连接未建立，无法接收消息")
+
+        if not self._socket:
+            raise RuntimeError("Socket未初始化")
+
+        data = b""
+        remaining = size
+
+        while remaining > 0:
+            try:
+                chunk = self._socket.recv(remaining)
+                if not chunk:
+                    # 连接被对方关闭
+                    return b""
+
+                data += chunk
+                remaining -= len(chunk)
+
+            except socket.timeout:
+                self._logger.warning(
+                    f"接收数据超时，已接收{len(data)}/{size}字节"
+                )
+                raise
+
+        return data
+
     @property
     def current_state_name(self) -> str:
         """获取当前状态名称"""

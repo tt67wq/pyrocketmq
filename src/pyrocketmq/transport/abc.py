@@ -39,6 +39,25 @@ class Transport(ABC):
         pass
 
     @abstractmethod
+    def recv_pkg(self) -> bytes:
+        """接收完整的数据包（header + body）
+
+        数据包格式:
+        - Header: 4字节大端序整数，表示body长度
+        - Body: 实际数据内容
+
+        Returns:
+            完整的数据包（body部分），连接关闭时返回空字节
+
+        Raises:
+            RuntimeError: 连接未建立
+            TimeoutError: 接收超时
+            TransportError: 传输层错误
+            ValueError: 数据包格式错误
+        """
+        pass
+
+    @abstractmethod
     def connect(self) -> None:
         """建立连接
 
@@ -88,6 +107,10 @@ class SyncTransport(Transport):
         """接收二进制消息"""
         return super().recv(size)
 
+    def recv_pkg(self) -> bytes:
+        """接收完整的数据包（header + body）"""
+        return super().recv_pkg()
+
     def connect(self) -> None:
         """建立连接"""
         return super().connect()
@@ -129,6 +152,25 @@ class AsyncTransport(ABC):
             ValueError: 参数无效
             TimeoutError: 接收超时
             TransportError: 传输层错误
+        """
+        pass
+
+    @abstractmethod
+    async def recv_pkg(self) -> bytes:
+        """异步接收完整的数据包（header + body）
+
+        数据包格式:
+        - Header: 4字节大端序整数，表示body长度
+        - Body: 实际数据内容
+
+        Returns:
+            完整的数据包（body部分），连接关闭时返回空字节
+
+        Raises:
+            RuntimeError: 连接未建立
+            TimeoutError: 接收超时
+            TransportError: 传输层错误
+            ValueError: 数据包格式错误
         """
         pass
 
