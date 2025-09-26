@@ -20,10 +20,10 @@ class ConnectionStateMachine(StateMachine):
     closed = State()
 
     # 事件定义
-    _connect = disconnected.to(connecting)
-    _connect_success = connecting.to(connected)
-    _disconnect = connected.to(disconnected) | connecting.to(disconnected)
-    _close = (
+    connect = disconnected.to(connecting)
+    connect_success = connecting.to(connected)
+    disconnect = connected.to(disconnected) | connecting.to(disconnected)
+    close = (
         disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
     )
 
@@ -33,17 +33,17 @@ class ConnectionStateMachine(StateMachine):
         self._logger = get_logger("transport.tcp")
         super().__init__()
 
-    def connect(self):
+    def start(self):
         """启动连接过程"""
         if self.is_disconnected:
-            self.send("_connect")
+            self.connect()
         else:
             self._logger.warning("当前状态不允许连接操作")
 
-    def close(self):
+    def stop(self):
         """关闭连接"""
         if not self.is_disconnected:
-            self.send("_disconnect")
+            self.disconnect()
         else:
             self._logger.warning("当前状态不允许断开操作")
 
@@ -56,10 +56,10 @@ class ConnectionStateMachine(StateMachine):
             self._socket.connect(self.config.address)
         except Exception as e:
             self._logger.error(f"连接失败: {e}")
-            self.send("_disconnect")
+            self.disconnect()
         else:
             self._logger.info("连接成功")
-            self.send("_connect_success")
+            self.connect_success()
 
     def on_enter_connected(self):
         """进入已连接状态"""
@@ -125,7 +125,7 @@ class ConnectionStateMachine(StateMachine):
         if self.config.max_retries != 0 and self.config.retry_interval > 0:
             self._logger.info("准备重连...")
             time.sleep(self.config.retry_interval)
-            self.send("_connect")
+            self.connect()
         else:
             self._logger.info("重连已禁用，保持断开状态")
 
@@ -174,7 +174,7 @@ class ConnectionStateMachine(StateMachine):
         except Exception as e:
             self._logger.error(f"发送消息失败: {e}")
             # 发送失败，断开连接
-            self.send("_disconnect")
+            self.disconnect()
             raise
 
     def recv(self, size: int) -> bytes:
@@ -200,7 +200,7 @@ class ConnectionStateMachine(StateMachine):
             if not data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭")
-                self.send("_disconnect")
+                self.disconnect()
                 return b""
 
             self._logger.debug(
@@ -214,7 +214,7 @@ class ConnectionStateMachine(StateMachine):
         except Exception as e:
             self._logger.error(f"接收消息失败: {e}")
             # 接收失败，断开连接
-            self.send("_disconnect")
+            self.disconnect()
             raise
 
     def recv_pkg(self) -> bytes:
@@ -239,7 +239,7 @@ class ConnectionStateMachine(StateMachine):
             if not header_data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭（接收header时）")
-                self.send("_disconnect")
+                self.disconnect()
                 return b""
 
             if len(header_data) != 4:
@@ -270,7 +270,7 @@ class ConnectionStateMachine(StateMachine):
             if not body_data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭（接收body时）")
-                self.send("_disconnect")
+                self.disconnect()
                 return b""
 
             if len(body_data) != body_length:
@@ -289,7 +289,7 @@ class ConnectionStateMachine(StateMachine):
         except Exception as e:
             self._logger.error(f"接收数据包失败: {e}")
             # 接收失败，断开连接
-            self.send("_disconnect")
+            self.disconnect()
             raise
 
     def _recv_exactly(self, size: int) -> bytes:

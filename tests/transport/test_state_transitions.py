@@ -39,7 +39,7 @@ class TestStateTransitions:
             mock_sock_instance.connect = delayed_connect
 
             # 触发连接操作
-            state_machine.connect()
+            state_machine.start()
 
             # 立即检查状态，应该还在connecting（连接还未完成）
             # 注意：由于python-statemachine的同步特性，我们需要重新设计这个测试
@@ -69,7 +69,7 @@ class TestStateTransitions:
             mock_sock_instance.connect.return_value = None
 
             # 触发连接
-            state_machine.connect()
+            state_machine.start()
 
             # 验证转换到connected状态
             assert state_machine.is_connected
@@ -90,7 +90,7 @@ class TestStateTransitions:
             )
 
             # 触发连接（应该失败）
-            state_machine.connect()
+            state_machine.start()
 
             # 验证回到disconnected状态
             assert state_machine.is_disconnected
@@ -108,11 +108,11 @@ class TestStateTransitions:
             mock_socket.return_value = mock_sock_instance
             mock_sock_instance.connect.return_value = None
 
-            state_machine.connect()
+            state_machine.start()
             assert state_machine.is_connected
 
             # 触发断开连接
-            state_machine.close()
+            state_machine.stop()
 
             # 验证状态转换
             assert state_machine.is_disconnected
@@ -124,7 +124,7 @@ class TestStateTransitions:
         state_machine = ConnectionStateMachine(config)
 
         # 测试从disconnected状态关闭
-        state_machine.connect()  # 这会触发close，因为当前是disconnected
+        state_machine.start()  # 这会触发close，因为当前是disconnected
         # 注意：当前实现中，disconnected状态调用connect会触发_close
 
         # 验证状态
@@ -152,7 +152,7 @@ class TestStateTransitions:
             mock_sock_instance.connect.return_value = None
 
             # 连接过程
-            state_machine.connect()
+            state_machine.start()
 
             # 验证状态序列
             # 应该有: 从disconnected到connecting，然后到connected
@@ -198,7 +198,7 @@ class TestStateTransitions:
             mock_socket.return_value = mock_sock_instance
             mock_sock_instance.connect.return_value = None
 
-            state_machine.connect()
+            state_machine.start()
 
             assert state_machine.is_disconnected == (
                 state_machine.current_state_name == "disconnected"
@@ -229,7 +229,7 @@ class TestStateTransitions:
             mock_sock_instance.connect.side_effect = mock_connect
 
             # 第一次连接（失败）
-            state_machine.connect()
+            state_machine.start()
 
             # 等待重连
             import time
