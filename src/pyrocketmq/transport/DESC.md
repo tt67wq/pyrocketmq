@@ -54,6 +54,9 @@
 - `keep_alive_interval` - 保活探测间隔
 - `keep_alive_timeout` - 保活超时时间
 
+**消息大小限制**：
+- `max_message_size` - 最大消息大小限制
+
 **预定义配置**：
 - `DEFAULT_CONFIG` - 默认配置
 - `HIGH_PERFORMANCE_CONFIG` - 高性能配置
@@ -68,6 +71,7 @@
 - **自动重连**: 根据配置自动处理重连逻辑
 - **TCP KeepAlive**: 完整的保活机制实现
 - **消息收发**: 支持基本消息和数据包收发
+- **完整的数据包接收**: `recv_pkg()` 方法支持分包接收和错误处理
 
 **AsyncConnectionStateMachine (异步状态机)**：
 - **异步状态转换**: 所有操作均为async/await
@@ -79,6 +83,13 @@
 ```
 | length(4字节) | body-data |
 ```
+
+**recv_pkg() 方法特性**：
+- 支持完整的长度前缀协议解析
+- 自动处理分包接收
+- 完善的错误处理机制
+- 支持空消息、大消息、Unicode和二进制内容
+- 连接状态验证和超时处理
 
 **状态管理特性**：
 - 完整的状态转换验证
@@ -165,11 +176,46 @@ config = TransportConfig(
     retry_interval=1.0,
     buffer_size=16384,
     keep_alive=True,
-    keep_alive_interval=15.0
+    keep_alive_interval=15.0,
+    max_message_size=1024 * 1024  # 1MB消息大小限制
 )
 
 # 从预定义配置创建
 config = HIGH_PERFORMANCE_CONFIG.copy_with(host="custom.host")
+```
+
+## 测试覆盖
+
+### 单元测试
+模块包含完整的单元测试覆盖：
+
+- **状态转换测试** (`test_state_transitions.py`)：
+  - 测试各种状态转换场景
+  - 验证自动重连机制
+  - 测试连接成功和失败情况
+
+- **异步连接测试** (`test_async_connection.py`, `test_simple_async.py`)：
+  - 测试异步状态机基本功能
+  - 验证异步状态转换
+  - 测试异步连接管理
+
+- **数据包接收测试** (`test_recv_pkg.py`)：
+  - 正常数据包接收
+  - 空消息和大消息处理
+  - 分包接收和超时处理
+  - 错误情况处理（连接关闭、格式错误等）
+  - Unicode和二进制内容支持
+
+### 运行测试
+```bash
+# 设置环境变量
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
+
+# 运行所有transport测试
+python -m pytest tests/transport/ -v
+
+# 运行特定测试文件
+python -m pytest tests/transport/test_recv_pkg.py -v
 ```
 
 ## 设计特点
@@ -203,6 +249,12 @@ config = HIGH_PERFORMANCE_CONFIG.copy_with(host="custom.host")
 - **可调缓冲区**: 根据场景调整缓冲区大小
 - **非阻塞IO**: 异步模式支持高并发
 
+### 7. 完整的错误处理
+- **连接状态验证**: 防止在无效状态下操作
+- **超时处理**: 支持配置超时时间
+- **协议格式验证**: 严格的数据包格式检查
+- **资源清理**: 异常时自动清理资源
+
 ## 技术细节
 
 ### 协议格式
@@ -210,10 +262,17 @@ config = HIGH_PERFORMANCE_CONFIG.copy_with(host="custom.host")
 - **Header**: 4字节大端序整数，表示body长度
 - **Body**: 实际消息数据
 
+### recv_pkg() 方法实现
+- **长度验证**: 检查body长度是否超过配置限制
+- **分包处理**: 支持多次recv调用接收完整数据包
+- **错误处理**: 处理连接关闭、超时、格式错误等情况
+- **类型支持**: 支持文本、Unicode和二进制数据
+
 ### 错误处理
 - **连接失败**: 自动重连机制
 - **超时处理**: 可配置的超时时间
 - **状态验证**: 防止在无效状态下操作
+- **协议错误**: 严格的格式验证和错误报告
 
 ### 线程安全
 - **同步状态机**: 需要外部同步保护
@@ -231,3 +290,12 @@ config = HIGH_PERFORMANCE_CONFIG.copy_with(host="custom.host")
 3. **监控集成**: 利用TransportMetrics接口进行监控
 4. **错误处理**: 实现ConnectionObserver进行错误处理
 5. **性能调优**: 根据场景选择合适的配置参数
+6. **测试策略**: 利用现有的单元测试框架进行功能验证
+
+## 开发注意事项
+
+1. **环境变量**: 开发时必须设置`PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src`
+2. **测试运行**: 使用pytest运行测试，确保所有功能正常
+3. **异步测试**: 异步功能测试需要使用asyncio.run()或事件循环
+4. **Mock使用**: 测试中使用unittest.mock模拟网络操作
+5. **状态调试**: 使用日志记录状态转换和操作过程

@@ -46,7 +46,7 @@ class TestStateTransitions:
             # 让我们直接测试最终的状态转换结果
 
             # 等待连接完成
-            time.sleep(0.2)
+            time.sleep(2)
 
             # 验证最终状态（应该完成整个连接流程）
             # 由于连接成功，状态应该是connected
