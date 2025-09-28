@@ -69,7 +69,7 @@ class ConnectionPool:
             self._logger.info(f"连接池初始化完成，大小: {self.pool_size}")
 
     @contextmanager
-    def get_connection(self, timeout: Optional[float] = None) -> Remote:
+    def get_connection(self, timeout: Optional[float] = None):
         """获取连接
 
         Args:
@@ -227,9 +227,7 @@ class AsyncConnectionPool:
         await self._initialize_task
 
     @asynccontextmanager
-    async def get_connection(
-        self, timeout: Optional[float] = None
-    ) -> AsyncRemote:
+    async def get_connection(self, timeout: Optional[float] = None):
         """获取连接
 
         Args:
