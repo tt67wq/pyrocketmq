@@ -304,7 +304,7 @@ class Remote:
 
             # 移除过期的等待者
             for opaque in expired_opaques:
-                event, _, _ = self._waiters.pop(opaque, None)
+                event, _, _ = self._waiters.pop(opaque, (None, None, None))
                 if event:
                     event.set()
 

@@ -1,0 +1,329 @@
+"""
+异步远程通信实现
+"""
+
+import asyncio
+import time
+from typing import Dict, Optional
+
+from pyrocketmq.logging import get_logger
+from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
+from pyrocketmq.transport.abc import AsyncTransport
+
+from .config import RemoteConfig
+from .errors import (
+    ConnectionError,
+    MaxWaitersExceededError,
+    ProtocolError,
+    RemoteError,
+    SerializationError,
+    TimeoutError,
+    TransportError,
+)
+
+
+class AsyncRemote:
+    """异步远程通信类"""
+
+    def __init__(self, transport: AsyncTransport, config: RemoteConfig):
+        self.transport = transport
+        self.config = config
+        self._logger = get_logger("remote.async")
+
+        # 请求等待者管理: opaque -> (event, response, timestamp)
+        self._waiters: Dict[
+            int, tuple[asyncio.Event, Optional[RemotingCommand], float]
+        ] = {}
+        self._waiters_lock = asyncio.Lock()
+
+        # opaque生成器
+        self._opaque_lock = asyncio.Lock()
+        self._next_opaque = config.opaque_start
+
+        # 清理任务
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+        # 序列化器
+        self._serializer = RemotingCommandSerializer()
+
+    async def connect(self) -> None:
+        """建立连接"""
+        try:
+            await self.transport.connect()
+            self._logger.info("异步连接建立成功")
+
+            # 启动清理任务
+            self._start_cleanup_task()
+
+        except Exception as e:
+            self._logger.error(f"异步连接建立失败: {e}")
+            raise ConnectionError(f"连接建立失败: {e}") from e
+
+    async def close(self) -> None:
+        """关闭连接"""
+        try:
+            # 停止清理任务
+            await self._stop_cleanup_task()
+
+            # 关闭传输层
+            await self.transport.close()
+
+            # 清理所有等待者
+            async with self._waiters_lock:
+                for opaque, (event, _, _) in self._waiters.items():
+                    event.set()
+                self._waiters.clear()
+
+            self._logger.info("异步连接已关闭")
+
+        except Exception as e:
+            self._logger.error(f"关闭异步连接失败: {e}")
+            raise RemoteError(f"关闭连接失败: {e}") from e
+
+    async def rpc(
+        self, command: RemotingCommand, timeout: Optional[float] = None
+    ) -> RemotingCommand:
+        """发送RPC请求并等待响应
+
+        Args:
+            command: 要发送的命令
+            timeout: 超时时间，None则使用配置值
+
+        Returns:
+            响应命令
+
+        Raises:
+            ConnectionError: 连接错误
+            TimeoutError: 超时错误
+            SerializationError: 序列化错误
+            ProtocolError: 协议错误
+            ResourceExhaustedError: 资源耗尽错误
+        """
+        if not self.transport.is_connected:
+            raise ConnectionError("连接未建立")
+
+        # 使用传入的超时或配置的超时
+        rpc_timeout = (
+            timeout if timeout is not None else self.config.rpc_timeout
+        )
+
+        # 生成opaque并设置为请求
+        opaque = await self._generate_opaque()
+        command.opaque = opaque
+        command.set_request()
+
+        # 创建等待事件
+        event = asyncio.Event()
+
+        # 注册等待者
+        if not await self._register_waiter(opaque, event):
+            raise MaxWaitersExceededError(
+                f"等待者数量超过限制: {self.config.max_waiters}"
+            )
+
+        try:
+            # 序列化并发送命令
+            data = self._serializer.serialize(command)
+            await self.transport.output(data)
+
+            self._logger.debug(
+                f"发送异步RPC请求: opaque={opaque}, code={command.code}"
+            )
+
+            # 等待响应
+            try:
+                await asyncio.wait_for(event.wait(), timeout=rpc_timeout)
+            except asyncio.TimeoutError:
+                # 超时，移除等待者
+                await self._unregister_waiter(opaque)
+                raise TimeoutError(f"RPC请求超时: opaque={opaque}")
+
+            # 获取响应
+            response = await self._get_waiter_response(opaque)
+            if response is None:
+                raise ProtocolError(f"未收到有效响应: opaque={opaque}")
+
+            self._logger.debug(
+                f"收到异步RPC响应: opaque={opaque}, code={response.code}"
+            )
+            return response
+
+        except SerializationError:
+            raise
+        except (ConnectionError, TransportError):
+            # 连接或传输错误，移除等待者
+            await self._unregister_waiter(opaque)
+            raise
+        except Exception as e:
+            # 其他错误，移除等待者
+            await self._unregister_waiter(opaque)
+            self._logger.error(f"异步RPC调用失败: opaque={opaque}, error={e}")
+            raise RemoteError(f"RPC调用失败: {e}") from e
+
+    async def oneway(self, command: RemotingCommand) -> None:
+        """发送单向消息
+
+        Args:
+            command: 要发送的命令
+
+        Raises:
+            ConnectionError: 连接错误
+            SerializationError: 序列化错误
+        """
+        if not self.transport.is_connected:
+            raise ConnectionError("连接未建立")
+
+        # 生成opaque并设置为单向请求
+        opaque = await self._generate_opaque()
+        command.opaque = opaque
+        command.set_oneway()
+
+        try:
+            # 序列化并发送命令
+            data = self._serializer.serialize(command)
+            await self.transport.output(data)
+
+            self._logger.debug(
+                f"发送异步单向消息: opaque={opaque}, code={command.code}"
+            )
+
+        except SerializationError:
+            raise
+        except (ConnectionError, TransportError):
+            raise
+        except Exception as e:
+            self._logger.error(
+                f"异步单向消息发送失败: opaque={opaque}, error={e}"
+            )
+            raise RemoteError(f"单向消息发送失败: {e}") from e
+
+    async def _generate_opaque(self) -> int:
+        """生成唯一的opaque值"""
+        async with self._opaque_lock:
+            opaque = self._next_opaque
+            self._next_opaque += 1
+            return opaque
+
+    async def _register_waiter(self, opaque: int, event: asyncio.Event) -> bool:
+        """注册等待者
+
+        Returns:
+            是否注册成功
+        """
+        async with self._waiters_lock:
+            if len(self._waiters) >= self.config.max_waiters:
+                return False
+
+            self._waiters[opaque] = (event, None, time.time())
+            return True
+
+    async def _unregister_waiter(self, opaque: int) -> bool:
+        """取消注册等待者
+
+        Returns:
+            是否取消成功
+        """
+        async with self._waiters_lock:
+            return self._waiters.pop(opaque, None) is not None
+
+    async def _get_waiter_response(
+        self, opaque: int
+    ) -> Optional[RemotingCommand]:
+        """获取等待者的响应
+
+        Returns:
+            响应命令，如果不存在则返回None
+        """
+        async with self._waiters_lock:
+            waiter = self._waiters.get(opaque)
+            if waiter:
+                _, response, _ = waiter
+                return response
+            return None
+
+    async def _set_waiter_response(
+        self, opaque: int, response: RemotingCommand
+    ) -> bool:
+        """设置等待者的响应
+
+        Returns:
+            是否设置成功
+        """
+        async with self._waiters_lock:
+            waiter = self._waiters.get(opaque)
+            if waiter:
+                event, _, timestamp = waiter
+                # 更新响应和时间戳
+                self._waiters[opaque] = (event, response, time.time())
+                event.set()
+                return True
+            return False
+
+    def _start_cleanup_task(self) -> None:
+        """启动清理任务"""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(
+                self._cleanup_worker(), name="remote-cleanup"
+            )
+            self._logger.debug("异步清理任务已启动")
+
+    async def _stop_cleanup_task(self) -> None:
+        """停止清理任务"""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._logger.debug("异步清理任务已停止")
+
+    async def _cleanup_worker(self) -> None:
+        """清理工作协程"""
+        while True:
+            try:
+                await asyncio.sleep(self.config.cleanup_interval)
+                await self._cleanup_expired_waiters()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._logger.error(f"异步清理等待者时发生错误: {e}")
+
+    async def _cleanup_expired_waiters(self) -> None:
+        """清理过期的等待者"""
+        current_time = time.time()
+        expired_opaques = []
+
+        async with self._waiters_lock:
+            for opaque, (_, _, timestamp) in self._waiters.items():
+                if current_time - timestamp > self.config.waiter_timeout:
+                    expired_opaques.append(opaque)
+
+            # 移除过期的等待者
+            for opaque in expired_opaques:
+                event, _, _ = self._waiters.pop(opaque, None)
+                if event:
+                    event.set()
+
+        if expired_opaques:
+            self._logger.warning(
+                f"清理了 {len(expired_opaques)} 个过期的等待者"
+            )
+
+    async def __aenter__(self):
+        """异步上下文管理器入口"""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """异步上下文管理器出口"""
+        await self.close()
+
+    @property
+    def is_connected(self) -> bool:
+        """是否已连接"""
+        return self.transport.is_connected
+
+    async def get_active_waiters_count(self) -> int:
+        """获取活跃等待者数量"""
+        async with self._waiters_lock:
+            return len(self._waiters)
