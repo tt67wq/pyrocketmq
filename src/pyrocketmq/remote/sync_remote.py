@@ -17,8 +17,8 @@ from .errors import (
     MaxWaitersExceededError,
     ProtocolError,
     RemoteError,
+    RpcTimeoutError,
     SerializationError,
-    TimeoutError,
     TransportError,
 )
 
@@ -108,7 +108,7 @@ class Remote:
 
         Raises:
             ConnectionError: 连接错误
-            TimeoutError: 超时错误
+            RpcTimeoutError: 超时错误
             SerializationError: 序列化错误
             ProtocolError: 协议错误
             ResourceExhaustedError: 资源耗尽错误
@@ -148,7 +148,7 @@ class Remote:
             if not event.wait(rpc_timeout):
                 # 超时，移除等待者
                 self._unregister_waiter(opaque)
-                raise TimeoutError(f"RPC请求超时: opaque={opaque}")
+                raise RpcTimeoutError(f"RPC请求超时: opaque={opaque}")
 
             # 获取响应
             response = self._get_waiter_response(opaque)
@@ -166,8 +166,7 @@ class Remote:
             # 连接或传输错误，移除等待者
             self._unregister_waiter(opaque)
             raise
-        except TimeoutError:
-            # 其他错误，移除等待者
+        except RpcTimeoutError:
             self._unregister_waiter(opaque)
             self._logger.error(f"RPC调用失败: opaque={opaque} 超时")
             raise

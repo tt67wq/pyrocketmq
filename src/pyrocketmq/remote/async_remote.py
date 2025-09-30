@@ -17,8 +17,8 @@ from .errors import (
     MaxWaitersExceededError,
     ProtocolError,
     RemoteError,
+    RpcTimeoutError,
     SerializationError,
-    TimeoutError,
     TransportError,
 )
 
@@ -139,7 +139,7 @@ class AsyncRemote:
             except asyncio.TimeoutError:
                 # 超时，移除等待者
                 await self._unregister_waiter(opaque)
-                raise TimeoutError(f"RPC请求超时: opaque={opaque}")
+                raise RpcTimeoutError(f"RPC请求超时: opaque={opaque}")
 
             # 获取响应
             response = await self._get_waiter_response(opaque)

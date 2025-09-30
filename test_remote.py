@@ -55,12 +55,11 @@ def test_remote_connection():
         # 测试发送一个请求（如果没有服务器，应该会失败）
         logger.info("测试发送请求...")
         try:
-            command = RemotingCommandFactory.create_get_broker_info_request(
-                opaque=1
-            )
+            command = RemotingCommandFactory.create_get_broker_info_request()
 
-            response = remote.rpc(command, timeout=3.0)
+            response = remote.rpc(command, timeout=5.0)
             print(response)
+            print(response.body)
             logger.info(f"收到响应: {response}")
 
         except Exception as e:

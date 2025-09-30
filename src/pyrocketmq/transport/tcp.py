@@ -209,7 +209,7 @@ class ConnectionStateMachine(StateMachine):
             return data
 
         except socket.timeout:
-            self._logger.warning("接收消息超时")
+            self._logger.debug("接收消息超时")
             raise TimeoutError("接收消息超时")
         except Exception as e:
             self._logger.error(f"接收消息失败: {e}")
@@ -284,7 +284,6 @@ class ConnectionStateMachine(StateMachine):
             return body_data
 
         except socket.timeout:
-            self._logger.warning("接收数据包超时")
             raise TimeoutError("接收数据包超时")
         except Exception as e:
             self._logger.error(f"接收数据包失败: {e}")
@@ -317,9 +316,12 @@ class ConnectionStateMachine(StateMachine):
                 remaining -= len(chunk)
 
             except socket.timeout:
-                self._logger.warning(
+                self._logger.debug(
                     f"接收数据超时，已接收{len(data)}/{size}字节"
                 )
+                raise
+            except Exception as e:
+                self._logger.error(f"接收数据失败: {e}")
                 raise
 
         return data

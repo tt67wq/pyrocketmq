@@ -61,7 +61,7 @@ class RemotingCommandSerializer:
             body_length = len(command.body) if command.body else 0
 
             # 计算总长度
-            total_length = cls.LENGTH_SIZE * 2 + header_length + body_length
+            total_length = cls.LENGTH_SIZE + header_length + body_length
 
             # 检查总大小限制
             if total_length > cls.MAX_FRAME_SIZE:
@@ -104,17 +104,14 @@ class RemotingCommandSerializer:
         """
         try:
             # 检查最小数据长度
-            if len(data) < cls.LENGTH_SIZE * 2:
+            if len(data) < cls.LENGTH_SIZE:
                 raise ProtocolError(
-                    f"数据长度不足，最少需要{cls.LENGTH_SIZE * 2}字节"
+                    f"数据长度不足，最少需要{cls.LENGTH_SIZE}字节"
                 )
 
             # 解析长度字段
             offset = 0
-            total_length = struct.unpack_from(cls.LENGTH_FORMAT, data, offset)[
-                0
-            ]
-            offset += cls.LENGTH_SIZE
+            total_length = len(data)
 
             header_length = struct.unpack_from(cls.LENGTH_FORMAT, data, offset)[
                 0
@@ -126,12 +123,6 @@ class RemotingCommandSerializer:
                 raise ProtocolError(
                     f"数据不完整，预期{total_length}字节，实际{len(data)}字节"
                 )
-
-            if (
-                header_length < 0
-                or header_length > total_length - cls.LENGTH_SIZE * 2
-            ):
-                raise ProtocolError(f"无效的header长度: {header_length}")
 
             # 解析header
             header_end = offset + header_length
@@ -184,6 +175,27 @@ class RemotingCommandSerializer:
         ).encode("utf-8")
 
     @classmethod
+    def _parse_language_code(cls, language_value) -> LanguageCode:
+        """解析language字段，支持字符串格式和枚举值格式
+
+        Args:
+            language_value: language字段的值，可以是字符串或整数
+
+        Returns:
+            对应的LanguageCode枚举值
+        """
+        if isinstance(language_value, str):
+            # 如果是字符串，尝试匹配枚举名称
+            try:
+                return LanguageCode[language_value.upper()]
+            except KeyError:
+                # 如果没有找到匹配的枚举，默认使用PYTHON
+                return LanguageCode.PYTHON
+        else:
+            # 如果是整数，直接转换为枚举
+            return LanguageCode(language_value)
+
+    @classmethod
     def _deserialize_header(cls, data: bytes) -> RemotingCommand:
         """从JSON格式反序列化header数据
 
@@ -198,7 +210,7 @@ class RemotingCommandSerializer:
 
             # 提取必需字段
             code = header_dict["code"]
-            language = LanguageCode(header_dict["language"])
+            language = cls._parse_language_code(header_dict["language"])
             version = header_dict.get("version", 1)
             opaque = header_dict.get("opaque", 0)
             flag = header_dict.get("flag", 0)

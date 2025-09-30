@@ -15,7 +15,7 @@ class ConnectionError(RemoteError):
     pass
 
 
-class TimeoutError(RemoteError):
+class RpcTimeoutError(RemoteError):
     """超时错误"""
 
     pass
