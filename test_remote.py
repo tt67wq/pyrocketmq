@@ -9,13 +9,14 @@ import time
 # 添加项目路径
 sys.path.insert(0, "/Users/admin/Project/Python/pyrocketmq/src")
 
-from pyrocketmq.logging import get_logger
+from pyrocketmq.logging import LoggerFactory, LoggingConfig
 from pyrocketmq.model import RemotingCommandFactory
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.sync_remote import Remote
 from pyrocketmq.transport.config import TransportConfig
 
-logger = get_logger("test")
+LoggerFactory.setup_default_config(LoggingConfig(level="DEBUG"))
+logger = LoggerFactory.get_logger("test")
 
 
 def test_remote_connection():
@@ -59,6 +60,7 @@ def test_remote_connection():
             )
 
             response = remote.rpc(command, timeout=3.0)
+            print(response)
             logger.info(f"收到响应: {response}")
 
         except Exception as e:

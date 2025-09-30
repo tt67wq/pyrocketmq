@@ -103,8 +103,8 @@ class LoggerFactory:
         if cls._config:
             logger.setLevel(getattr(logging, cls._config.level))
 
-        # 确保logger不会将消息传播到根logger
-        logger.propagate = False
+        # 确保logger能将消息传播到根logger
+        logger.propagate = True
 
     @classmethod
     def _create_formatter(cls, config: LoggingConfig) -> logging.Formatter:
