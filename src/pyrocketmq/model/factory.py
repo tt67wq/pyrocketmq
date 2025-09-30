@@ -588,7 +588,25 @@ class RemotingCommandFactory:
         from .enums import ResponseCode
 
         return RemotingCommandFactory.create_response(
-            code=ResponseCode.SUCCESS, opaque=opaque, body=body
+            code=ResponseCode.SUCCESS,
+            opaque=opaque,
+            body=body,
+        )
+
+    @staticmethod
+    def create_get_broker_info_request(opaque: int = 0) -> RemotingCommand:
+        """创建获取Broker集群信息请求
+
+        Args:
+            opaque: 消息ID，默认为0
+
+        Returns:
+            构造的获取Broker集群信息请求
+        """
+        return RemotingCommandFactory.create_request(
+            code=RequestCode.GET_BROKER_CLUSTER_INFO,
+            language=LanguageCode.PYTHON,
+            opaque=opaque,
         )
 
     @staticmethod

@@ -24,7 +24,8 @@ def test_remote_connection():
 
     # 创建配置
     transport_config = TransportConfig(
-        address=("127.0.0.1", 9876),
+        host="d1-dmq-namesrv.shizhuang-inc.net",
+        port=31110,
         timeout=5.0,
         max_retries=0,  # 不重连
     )
@@ -53,10 +54,8 @@ def test_remote_connection():
         # 测试发送一个请求（如果没有服务器，应该会失败）
         logger.info("测试发送请求...")
         try:
-            command = RemotingCommandFactory.create_send_message_request(
-                topic="test_topic",
-                body=b"test message",
-                producer_group="test_group",
+            command = RemotingCommandFactory.create_get_broker_info_request(
+                opaque=1
             )
 
             response = remote.rpc(command, timeout=3.0)

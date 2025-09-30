@@ -8,7 +8,8 @@ from typing import Dict, Optional
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
-from pyrocketmq.transport.abc import AsyncTransport
+from pyrocketmq.transport.config import TransportConfig
+from pyrocketmq.transport.tcp import AsyncConnectionStateMachine
 
 from .config import RemoteConfig
 from .errors import (
@@ -25,8 +26,10 @@ from .errors import (
 class AsyncRemote:
     """异步远程通信类"""
 
-    def __init__(self, transport: AsyncTransport, config: RemoteConfig):
-        self.transport = transport
+    def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig):
+        self.transport: AsyncConnectionStateMachine = (
+            AsyncConnectionStateMachine(transport_cfg)
+        )
         self.config = config
         self._logger = get_logger("remote.async")
 
@@ -49,7 +52,7 @@ class AsyncRemote:
     async def connect(self) -> None:
         """建立连接"""
         try:
-            await self.transport.connect()
+            await self.transport.start()
             self._logger.info("异步连接建立成功")
 
             # 启动清理任务
@@ -66,7 +69,7 @@ class AsyncRemote:
             await self._stop_cleanup_task()
 
             # 关闭传输层
-            await self.transport.close()
+            await self.transport.stop()
 
             # 清理所有等待者
             async with self._waiters_lock:
@@ -300,7 +303,7 @@ class AsyncRemote:
 
             # 移除过期的等待者
             for opaque in expired_opaques:
-                event, _, _ = self._waiters.pop(opaque, None)
+                event, _, _ = self._waiters.pop(opaque, (None, None, None))
                 if event:
                     event.set()
 
