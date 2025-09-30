@@ -6,6 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协议实现。项目旨在提供高性能、可靠的RocketMQ消息队列客户端功能，完全兼容Go语言实现的协议规范。
 
+### 项目状态
+- **协议模型层**: ✅ 完整实现，包含所有核心数据结构
+- **网络传输层**: 🚧 基本完成，支持TCP连接状态机
+- **远程通信层**: ✅ 异步/同步通信实现
+- **连接池**: ✅ 连接池管理功能
+- **NameServer支持**: 🚧 开发中
+
 ## 开发环境配置
 
 ### 环境设置
@@ -13,7 +20,7 @@ pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协�
 # 激活虚拟环境
 source .venv/bin/activate
 
-# 设置PYTHONPATH
+# 设置PYTHONPATH（必需）
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 
 # 安装依赖
@@ -25,6 +32,12 @@ pip install -e .
 # 运行所有测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/
 
+# 运行模型层测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/ -v
+
+# 运行传输层测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/ -v
+
 # 运行单个测试文件
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/test_serializer.py -v
 
@@ -32,27 +45,47 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::test_serialize_basic_command -v
 ```
 
+### 开发工具
+```bash
+# 启用调试日志
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -c "
+import sys
+sys.path.insert(0, 'src')
+from pyrocketmq.logging import LoggerFactory, LoggingConfig
+LoggerFactory.setup_default_config(LoggingConfig(level='DEBUG'))
+"
+```
+
 ## 核心架构
 
 ### 项目结构
 ```
 src/pyrocketmq/
-├── model/              # RocketMQ协议模型层
+├── model/              # RocketMQ协议模型层 ✅
 │   ├── command.py      # 核心数据结构 RemotingCommand
 │   ├── serializer.py   # 二进制序列化/反序列化器
 │   ├── enums.py        # 协议枚举定义（与Go语言实现一致）
 │   ├── factory.py      # 工厂方法和构建器
 │   ├── utils.py        # 工具函数
 │   └── errors.py       # 模型层异常定义
-├── transport/          # 网络传输层
+├── transport/          # 网络传输层 🚧
 │   ├── abc.py          # 传输层抽象接口
-│   ├── tcp.py          # TCP连接实现
+│   ├── tcp.py          # TCP连接实现（基于状态机）
 │   ├── config.py       # 传输配置管理
-│   ├── states.py       # 连接状态机
+│   ├── states.py       # 连接状态机定义
 │   └── errors.py       # 传输层异常定义
-└── logging/           # 日志模块
-    ├── logger.py       # 日志记录器
-    └── config.py       # 日志配置
+├── remote/             # 远程通信层 ✅
+│   ├── async_remote.py # 异步远程通信实现
+│   ├── sync_remote.py  # 同步远程通信实现
+│   ├── config.py       # 远程通信配置
+│   ├── factory.py      # 工厂函数
+│   ├── pool.py         # 连接池管理
+│   └── errors.py       # 远程通信异常定义
+├── logging/           # 日志模块 ✅
+│   ├── logger.py       # 日志记录器
+│   └── config.py       # 日志配置
+└── nameserver/        # NameServer支持 🚧
+    └── ns.md           # NameServer协议文档
 ```
 
 ### 核心设计原则
@@ -106,6 +139,34 @@ src/pyrocketmq/
   - RemotingCommandFactory: 静态工厂方法
   - 预定义的命令创建方法（如create_send_message_request）
 
+### Remote层 (`src/pyrocketmq/remote/`)
+
+#### 异步远程通信
+- **位置**: `remote/async_remote.py`
+- **功能**: 异步RPC通信实现，支持请求-响应模式
+- **特性**:
+  - 基于asyncio的异步通信
+  - 内置超时处理和重试机制
+  - 请求等待者管理
+  - 自动连接状态维护
+
+#### 同步远程通信
+- **位置**: `remote/sync_remote.py`
+- **功能**: 同步RPC通信实现
+- **特性**:
+  - 基于asyncio.run的同步封装
+  - 与异步接口相同的API设计
+  - 适合阻塞式调用场景
+
+#### 连接池管理
+- **位置**: `remote/pool.py`
+- **功能**: 连接池实现，支持连接复用
+- **特性**:
+  - 异步连接池 (AsyncConnectionPool)
+  - 同步连接池 (ConnectionPool)
+  - 连接生命周期管理
+  - 负载均衡支持
+
 ### Transport层 (`src/pyrocketmq/transport/`)
 
 #### 抽象接口
@@ -117,6 +178,10 @@ src/pyrocketmq/
 - **位置**: `transport/tcp.py`
 - **功能**: 基于python-statemachine的TCP连接状态机
 - **状态**: DISCONNECTED, CONNECTING, CONNECTED, CLOSING, CLOSED
+- **特性**:
+  - 状态机驱动的连接管理
+  - 自动重连机制
+  - 心跳检测支持
 
 ## 开发模式
 
@@ -201,12 +266,61 @@ topic = get_topic_from_command(command)
 summary = get_command_summary(command)
 ```
 
+### 远程通信使用
+
+#### 异步远程通信
+```python
+from pyrocketmq.remote import create_async_remote
+from pyrocketmq.remote.config import RemoteConfig
+from pyrocketmq.transport.config import TransportConfig
+
+# 创建配置
+transport_config = TransportConfig(host="localhost", port=9876)
+remote_config = RemoteConfig()
+
+# 创建异步远程客户端
+async_remote = await create_async_remote(transport_config, remote_config)
+
+# 发送请求
+request = RemotingCommandFactory.create_send_message_request(
+    topic="test_topic",
+    body=b"Hello, RocketMQ!",
+    producer_group="test_group"
+)
+
+# 异步发送并等待响应
+response = await async_remote.invoke(request)
+```
+
+#### 同步远程通信
+```python
+from pyrocketmq.remote import create_sync_remote
+
+# 创建同步远程客户端
+sync_remote = create_sync_remote(transport_config, remote_config)
+
+# 同步发送请求
+response = sync_remote.invoke(request)
+```
+
+#### 连接池使用
+```python
+from pyrocketmq.remote import AsyncConnectionPool
+
+# 创建连接池
+pool = AsyncConnectionPool(transport_config, remote_config, max_size=5)
+
+# 从池中获取连接
+async with pool.get_connection() as conn:
+    response = await conn.invoke(request)
+```
+
 ## 协议规范
 
 ### Flag类型说明
 由于Go语言实现中`RPC_ONEWAY`和`RESPONSE_TYPE`都使用值1，判断逻辑如下：
 - `is_request()`: flag == FlagType.RPC_TYPE (0)
-- `is_response()`: flag == FlagType.RESPONSE_TYPE (1) 
+- `is_response()`: flag == FlagType.RESPONSE_TYPE (1)
 - `is_oneway()`: flag == FlagType.RPC_ONEWAY (1)
 
 ### 大小限制
@@ -215,18 +329,18 @@ summary = get_command_summary(command)
 - 长度字段格式: 大端序4字节整数
 
 ### 错误处理层次
-- `RemotingCommandError`: 基础异常
-- `SerializationError`/`DeserializationError`: 序列化异常
-- `ProtocolError`: 协议格式错误
-- `MessageTooLargeError`/`HeaderTooLargeError`: 大小限制错误
+- **Model层**: `RemotingCommandError`, `SerializationError`, `DeserializationError`, `ProtocolError`
+- **Transport层**: `TransportError`, `ConnectionError`, `ConnectionClosedError`
+- **Remote层**: `RemoteError`, `RpcTimeoutError`, `ConfigurationError`, `MaxWaitersExceededError`
 
 ## 测试策略
 
 ### 测试覆盖
-- 单元测试覆盖所有核心功能
-- 边界条件测试（大小限制、空数据、无效数据）
-- Unicode字符支持测试
-- 大消息体性能测试
+- **模型层测试**: 协议序列化/反序列化、数据结构验证
+- **传输层测试**: 连接状态机、TCP通信
+- **远程通信测试**: 异步/同步RPC调用
+- **边界条件测试**: 大小限制、空数据、无效数据
+- **性能测试**: 大消息体处理、并发连接
 
 ### 测试运行
 必须设置`PYTHONPATH`环境变量以确保能正确导入模块：
@@ -247,10 +361,27 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 3. 更新工厂和构建器方法
 4. 添加工具函数支持
 
-### 性能优化
-- 序列化器使用紧凑JSON格式
-- bytes类型直接赋值（无需copy）
-- 大消息体大小限制检查
+### 配置远程通信
+```python
+# 生产环境配置
+from pyrocketmq.remote.config import PRODUCTION_CONFIG
+config = PRODUCTION_CONFIG.copy(
+    timeout=10.0,
+    max_retries=3,
+    pool_size=10
+)
+```
+
+### 调试连接问题
+```python
+# 启用详细日志
+from pyrocketmq.logging import LoggerFactory, LoggingConfig
+LoggerFactory.setup_default_config(LoggingConfig(level="DEBUG"))
+
+# 检查连接状态
+print(f"连接状态: {async_remote.transport.current_state_name}")
+print(f"是否已连接: {async_remote.transport.is_connected}")
+```
 
 ## 注意事项
 
@@ -259,3 +390,5 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 3. **Flag判断**: 由于Go语言实现特点，RPC_ONEWAY和RESPONSE_TYPE值相同
 4. **大小限制**: 严格检查帧大小和header大小限制
 5. **类型安全**: 所有代码都使用类型注解，确保编译时类型检查
+6. **异步模式**: 远程通信主要基于asyncio，同步模式是其封装
+7. **连接管理**: 使用连接池可以提高性能，避免频繁创建连接
