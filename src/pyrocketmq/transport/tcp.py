@@ -47,11 +47,12 @@ class ConnectionStateMachine(StateMachine):
             self._logger.warning("当前状态不允许断开操作")
 
     # 状态转换回调
-    def on_connecting(self):
+    def on_connect(self):
         """进入连接中状态"""
         self._logger.info(f"开始连接到 {self.config.address}")
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.settimeout(self.config.connect_timeout)
             self._socket.connect(self.config.address)
         except Exception as e:
             self._logger.error(f"连接失败: {e}")

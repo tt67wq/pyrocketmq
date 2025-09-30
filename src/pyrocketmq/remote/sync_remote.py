@@ -166,10 +166,13 @@ class Remote:
             # 连接或传输错误，移除等待者
             self._unregister_waiter(opaque)
             raise
-        except Exception as e:
+        except TimeoutError:
             # 其他错误，移除等待者
             self._unregister_waiter(opaque)
-            self._logger.error(f"RPC调用失败: opaque={opaque}, error={e}")
+            self._logger.error(f"RPC调用失败: opaque={opaque} 超时")
+            raise
+        except Exception as e:
+            self._unregister_waiter(opaque)
             raise RemoteError(f"RPC调用失败: {e}") from e
 
     def oneway(self, command: RemotingCommand) -> None:
@@ -198,7 +201,6 @@ class Remote:
             self._logger.debug(
                 f"发送单向消息: opaque={opaque}, code={command.code}"
             )
-
         except SerializationError:
             raise
         except (ConnectionError, TransportError):
