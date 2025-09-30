@@ -46,6 +46,9 @@ class AsyncRemote:
         # 清理任务
         self._cleanup_task: Optional[asyncio.Task] = None
 
+        # 消息接收任务
+        self._recv_task: Optional[asyncio.Task] = None
+
         # 序列化器
         self._serializer = RemotingCommandSerializer()
 
@@ -58,6 +61,9 @@ class AsyncRemote:
             # 启动清理任务
             self._start_cleanup_task()
 
+            # 启动消息接收任务
+            self._start_recv_task()
+
         except Exception as e:
             self._logger.error(f"异步连接建立失败: {e}")
             raise ConnectionError(f"连接建立失败: {e}") from e
@@ -65,6 +71,9 @@ class AsyncRemote:
     async def close(self) -> None:
         """关闭连接"""
         try:
+            # 停止消息接收任务
+            await self._stop_recv_task()
+
             # 停止清理任务
             await self._stop_cleanup_task()
 
@@ -311,6 +320,91 @@ class AsyncRemote:
             self._logger.warning(
                 f"清理了 {len(expired_opaques)} 个过期的等待者"
             )
+
+    def _start_recv_task(self) -> None:
+        """启动消息接收任务"""
+        if self._recv_task is None or self._recv_task.done():
+            self._recv_task = asyncio.create_task(
+                self._recv_worker(), name="remote-recv"
+            )
+            self._logger.debug("异步消息接收任务已启动")
+
+    async def _stop_recv_task(self) -> None:
+        """停止消息接收任务"""
+        if self._recv_task and not self._recv_task.done():
+            self._recv_task.cancel()
+            try:
+                await self._recv_task
+            except asyncio.CancelledError:
+                pass
+            self._logger.debug("异步消息接收任务已停止")
+
+    async def _recv_worker(self) -> None:
+        """消息接收工作协程"""
+        self._logger.info("异步消息接收协程开始工作")
+
+        while True:
+            try:
+                if not self.transport.is_connected:
+                    # 连接断开，等待重连
+                    self._logger.debug("连接断开，等待重连...")
+                    await asyncio.sleep(1.0)
+                    continue
+
+                # 接收数据包
+                data = await self.transport.recv_pkg()
+                if not data:
+                    # 连接关闭
+                    self._logger.info("连接已关闭，停止接收")
+                    break
+
+                # 反序列化响应
+                try:
+                    response = self._serializer.deserialize(data)
+                    self._logger.debug(
+                        f"接收到响应: opaque={response.opaque}, code={response.code}"
+                    )
+                except Exception as e:
+                    self._logger.error(f"反序列化响应失败: {e}")
+                    continue
+
+                # 处理响应
+                await self._handle_response(response)
+
+            except asyncio.CancelledError:
+                break
+            except TimeoutError:
+                # 接收超时，继续循环
+                continue
+            except ConnectionError:
+                # 连接错误，等待重连
+                self._logger.warning("连接错误，等待重连...")
+                await asyncio.sleep(1.0)
+                continue
+            except Exception as e:
+                self._logger.error(f"接收消息时发生错误: {e}")
+                await asyncio.sleep(1.0)
+
+        self._logger.info("异步消息接收协程结束")
+
+    async def _handle_response(self, response: RemotingCommand) -> None:
+        """处理接收到的响应"""
+        if not response.is_response:
+            self._logger.warning(
+                f"收到的不是响应消息: opaque={response.opaque}"
+            )
+            return
+
+        opaque = response.opaque
+        if opaque is None:
+            self._logger.warning("响应消息缺少opaque字段")
+            return
+
+        # 查找对应的等待者并设置响应
+        if await self._set_waiter_response(opaque, response):
+            self._logger.debug(f"响应已匹配到等待者: opaque={opaque}")
+        else:
+            self._logger.warning(f"未找到对应的等待者: opaque={opaque}")
 
     async def __aenter__(self):
         """异步上下文管理器入口"""

@@ -52,7 +52,7 @@ __all__ = [
     # 异常相关
     "RemoteError",
     "ConnectionError",
-    "TimeoutError",
+    "RpcTimeoutError",
     "SerializationError",
     "ProtocolError",
     "ResourceExhaustedError",
