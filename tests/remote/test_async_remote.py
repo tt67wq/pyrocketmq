@@ -4,11 +4,8 @@
 """
 
 import asyncio
-import sys
 
 # 添加项目路径
-sys.path.insert(0, "/Users/admin/Project/Python/pyrocketmq/src")
-
 from pyrocketmq.logging import LoggerFactory, LoggingConfig
 from pyrocketmq.model import RemotingCommandFactory
 from pyrocketmq.remote.async_remote import AsyncRemote

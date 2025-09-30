@@ -633,6 +633,47 @@ class RemotingCommandFactory:
         )
 
     @staticmethod
+    def create_query_topic_route_info_request(
+        topic: str, opaque: int = 0
+    ) -> RemotingCommand:
+        """创建查询Topic路由信息请求
+
+        Args:
+            topic: 主题名称
+            opaque: 消息ID，默认为0
+
+        Returns:
+            构造的查询Topic路由信息请求
+        """
+        return RemotingCommand(
+            code=RequestCode.GET_ROUTE_INFO_BY_TOPIC,
+            language=LanguageCode.PYTHON,
+            version=1,
+            opaque=opaque,
+            flag=FlagType.RPC_TYPE,
+            ext_fields={
+                "topic": topic,
+            },
+        )
+
+    @staticmethod
+    def create_get_broker_cluster_info_request(
+        opaque: int = 0,
+    ) -> RemotingCommand:
+        """创建获取Broker集群信息请求
+
+        Args:
+            opaque: 消息ID，默认为0
+
+        Returns:
+            构造的获取Broker集群信息请求
+        """
+        return RemotingCommandFactory.create_request(
+            code=RequestCode.GET_BROKER_CLUSTER_INFO,
+            opaque=opaque,
+        )
+
+    @staticmethod
     def builder(code: int) -> RemotingCommandBuilder:
         """创建构建器
 

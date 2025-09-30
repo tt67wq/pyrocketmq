@@ -3,12 +3,9 @@
 测试Remote类的基本功能
 """
 
-import sys
 import time
 
 # 添加项目路径
-sys.path.insert(0, "/Users/admin/Project/Python/pyrocketmq/src")
-
 from pyrocketmq.logging import LoggerFactory, LoggingConfig
 from pyrocketmq.model import RemotingCommandFactory
 from pyrocketmq.remote.config import RemoteConfig
