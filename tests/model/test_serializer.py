@@ -35,8 +35,11 @@ class TestRemotingCommandSerializer:
         # 验证数据长度
         assert len(data) >= 8  # 至少包含两个长度字段
 
+        # 模拟transport层处理：跳过前4个字节的total_length
+        transport_data = data[4:]
+
         # 验证可以正确反序列化
-        restored = RemotingCommandSerializer.deserialize(data)
+        restored = RemotingCommandSerializer.deserialize(transport_data)
         assert restored.code == command.code
         assert restored.language == command.language
         assert restored.version == command.version
@@ -50,7 +53,8 @@ class TestRemotingCommandSerializer:
         command = RemotingCommand(code=RequestCode.SEND_MESSAGE, body=body_data)
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         assert restored.body == body_data
 
@@ -66,7 +70,8 @@ class TestRemotingCommandSerializer:
         )
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         assert restored.ext_fields == command.ext_fields
 
@@ -90,7 +95,8 @@ class TestRemotingCommandSerializer:
         )
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         # 验证所有字段
         assert restored == command
@@ -100,7 +106,8 @@ class TestRemotingCommandSerializer:
         command = RemotingCommand(code=RequestCode.HEART_BEAT)
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         assert restored.code == command.code
         assert restored.language == LanguageCode.PYTHON  # 默认值
@@ -117,9 +124,8 @@ class TestRemotingCommandSerializer:
         with pytest.raises(ProtocolError):
             RemotingCommandSerializer.deserialize(b"short")
 
-        # 测试损坏的JSON
+        # 测试损坏的JSON（注意：这里不包含total_length字段，因为transport层已经处理了）
         invalid_data = (
-            b"\x00\x00\x00\x20"  # 总长度32
             b"\x00\x00\x00\x10"  # header长度16
             b"invalid json data"  # 无效的JSON
         )
@@ -128,9 +134,8 @@ class TestRemotingCommandSerializer:
 
     def test_deserialize_incomplete_data(self):
         """测试反序列化不完整数据"""
-        # 构造一个不完整的数据包
+        # 构造一个不完整的数据包（不包含total_length字段）
         incomplete_data = (
-            b"\x00\x00\x00\x30"  # 总长度48
             b"\x00\x00\x00\x10"  # header长度16
             b'{"code":10}'  # 只有10字节的header，应该有16字节
         )
@@ -146,7 +151,8 @@ class TestRemotingCommandSerializer:
         )
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         assert restored.body == large_body
 
@@ -181,7 +187,7 @@ class TestRemotingCommandSerializer:
             data
         )
 
-        assert total_length == len(data)
+        assert total_length == len(data) - 4
         assert header_length > 0
         assert header_length < total_length
 
@@ -215,7 +221,8 @@ class TestRemotingCommandSerializer:
         )
 
         data = RemotingCommandSerializer.serialize(command)
-        restored = RemotingCommandSerializer.deserialize(data)
+        # 模拟transport层处理：跳过前4个字节的total_length
+        restored = RemotingCommandSerializer.deserialize(data[4:])
 
         assert restored.remark == "中文测试"
         assert restored.ext_fields["topic"] == "测试主题"
@@ -235,7 +242,8 @@ class TestRemotingCommandSerializer:
             command = RemotingCommand(code=RequestCode.SEND_MESSAGE, flag=flag)
 
             data = RemotingCommandSerializer.serialize(command)
-            restored = RemotingCommandSerializer.deserialize(data)
+            # 模拟transport层处理：跳过前4个字节的total_length
+            restored = RemotingCommandSerializer.deserialize(data[4:])
 
             assert restored.flag == flag
 

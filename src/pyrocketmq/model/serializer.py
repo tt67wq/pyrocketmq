@@ -238,9 +238,9 @@ class RemotingCommandSerializer:
             return command
 
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise ValueError(f"JSON解析失败: {e}")
+            raise ProtocolError(f"JSON解析失败: {e}")
         except KeyError as e:
-            raise ValueError(f"缺少必需字段: {e}")
+            raise ProtocolError(f"缺少必需字段: {e}")
         except ValueError as e:
             raise ValueError(f"字段值错误: {e}")
 
