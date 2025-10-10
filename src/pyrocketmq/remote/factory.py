@@ -6,9 +6,6 @@ from typing import Optional, Tuple, Union
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig
-from pyrocketmq.transport.tcp import (
-    AsyncConnectionStateMachine,
-)
 
 from .async_remote import AsyncRemote
 from .config import RemoteConfig, get_config
@@ -106,11 +103,8 @@ class RemoteFactory:
         transport_config.host = host
         transport_config.port = port
 
-        # 创建传输层
-        transport = AsyncConnectionStateMachine(transport_config)
-
         # 创建远程通信实例
-        remote = AsyncRemote(transport, config)
+        remote = AsyncRemote(transport_config, config)
 
         logger.info(f"异步远程通信实例创建成功: {parsed_address}")
         return remote
