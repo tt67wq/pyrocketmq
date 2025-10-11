@@ -303,23 +303,43 @@ class ConsumerData:
 class SendMessageResult:
     """发送消息结果
 
-    包含消息发送后的返回信息
+    包含消息发送后的返回信息，与Go语言实现保持兼容
     """
 
+    status: int  # 发送状态 (SendStatus枚举值)
     msg_id: str  # 消息ID
-    queue_id: int  # 队列ID
+    message_queue: MessageQueue  # 消息队列信息
     queue_offset: int  # 队列偏移量
-    region_id: str = "DefaultRegion"  # 区域ID
     transaction_id: Optional[str] = None  # 事务ID
     offset_msg_id: Optional[str] = None  # 偏移量消息ID
+    region_id: str = "DefaultRegion"  # 区域ID
+    trace_on: bool = False  # 是否开启Trace
+
+    @property
+    def is_success(self) -> bool:
+        """判断发送是否成功"""
+        return SendStatus.is_success(self.status)
+
+    @property
+    def status_name(self) -> str:
+        """获取状态名称"""
+        return SendStatus.to_name(self.status)
+
+    @property
+    def queue_id(self) -> int:
+        """获取队列ID (兼容性属性)"""
+        return self.message_queue.queue_id
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
         result = {
+            "status": self.status,
+            "statusName": self.status_name,
             "msgId": self.msg_id,
-            "queueId": self.queue_id,
+            "messageQueue": self.message_queue.to_dict(),
             "queueOffset": self.queue_offset,
             "regionId": self.region_id,
+            "traceOn": self.trace_on,
         }
 
         if self.transaction_id:
@@ -332,38 +352,24 @@ class SendMessageResult:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SendMessageResult":
         """从字典创建实例"""
-        return cls(
-            msg_id=data["msgId"],
-            queue_id=data["queueId"],
-            queue_offset=data["queueOffset"],
-            region_id=data.get("regionId", "DefaultRegion"),
-            transaction_id=data.get("transactionId"),
-            offset_msg_id=data.get("offsetMsgId"),
+        # 解析MessageQueue
+        mq_data = data.get("messageQueue", {})
+        message_queue = MessageQueue(
+            topic=mq_data.get("topic", ""),
+            broker_name=mq_data.get("brokerName", ""),
+            queue_id=mq_data.get("queueId", 0),
         )
 
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "SendMessageResult":
-        """从字节数据创建实例
-
-        Args:
-            data: 原始响应体字节数据
-
-        Returns:
-            SendMessageResult: SendMessageResult实例
-
-        Raises:
-            DeserializationError: 数据格式无效时抛出异常
-        """
-        try:
-            data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
-            return cls.from_dict(parsed_data)
-        except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse SendMessageResult from bytes: {e}"
-            )
-        except Exception as e:
-            raise DeserializationError(f"Invalid SendMessageResult format: {e}")
+        return cls(
+            status=data.get("status", SendStatus.SEND_UNKNOWN_ERROR),
+            msg_id=data["msgId"],
+            message_queue=message_queue,
+            queue_offset=data["queueOffset"],
+            transaction_id=data.get("transactionId"),
+            offset_msg_id=data.get("offsetMsgId"),
+            region_id=data.get("regionId", "DefaultRegion"),
+            trace_on=data.get("traceOn", False),
+        )
 
 
 @dataclass
@@ -510,6 +516,41 @@ class MessageModel:
     CLUSTERING = "CLUSTERING"  # 集群模式
 
 
+# 消息属性常量
+class MessageProperty:
+    """消息属性常量定义"""
+
+    KEY_SEPARATOR = " "
+    KEYS = "KEYS"
+    TAGS = "TAGS"
+    WAIT_STORE_MSG_OK = "WAIT"
+    DELAY_TIME_LEVEL = "DELAY"
+    RETRY_TOPIC = "RETRY_TOPIC"
+    REAL_TOPIC = "REAL_TOPIC"
+    REAL_QUEUE_ID = "REAL_QID"
+    TRANSACTION_PREPARED = "TRAN_MSG"
+    PRODUCER_GROUP = "PGROUP"
+    MIN_OFFSET = "MIN_OFFSET"
+    MAX_OFFSET = "MAX_OFFSET"
+    BUYER_ID = "BUYER_ID"
+    ORIGIN_MESSAGE_ID = "ORIGIN_MESSAGE_ID"
+    TRANSFER_FLAG = "TRANSFER_FLAG"
+    CORRECTION_FLAG = "CORRECTION_FLAG"
+    MQ2_FLAG = "MQ2_FLAG"
+    RECONSUME_TIME = "RECONSUME_TIME"
+    MSG_REGION = "MSG_REGION"
+    TRACE_SWITCH = "TRACE_ON"
+    UNIQUE_CLIENT_MESSAGE_ID_KEYINDEX = "UNIQ_KEY"
+    MAX_RECONSUME_TIMES = "MAX_RECONSUME_TIMES"
+    CONSUME_START_TIME = "CONSUME_START_TIME"
+    TRANSACTION_PREPARED_QUEUE_OFFSET = "TRAN_PREPARED_QUEUE_OFFSET"
+    TRANSACTION_CHECK_TIMES = "TRANSACTION_CHECK_TIMES"
+    CHECK_IMMUNITY_TIME_IN_SECONDS = "CHECK_IMMUNITY_TIME_IN_SECONDS"
+    SHARDING_KEY = "SHARDING_KEY"
+    TRANSACTION_ID = "__transactionId__"
+    START_DELIVER_TIME = "START_DELIVER_TIME"
+
+
 # 消费起始位置枚举
 class ConsumeFromWhere:
     """消费起始位置"""
@@ -521,3 +562,43 @@ class ConsumeFromWhere:
         "CONSUME_FROM_FIRST_OFFSET"  # 从第一个偏移量开始消费
     )
     CONSUME_FROM_TIMESTAMP = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
+
+
+# 发送状态枚举
+class SendStatus:
+    """发送状态枚举"""
+
+    SEND_OK = 0  # 发送成功
+    SEND_FLUSH_DISK_TIMEOUT = 1  # 刷盘超时
+    SEND_FLUSH_SLAVE_TIMEOUT = 2  # 从节点刷盘超时
+    SEND_SLAVE_NOT_AVAILABLE = 3  # 从节点不可用
+    SEND_UNKNOWN_ERROR = 4  # 未知错误
+
+    @classmethod
+    def from_name(cls, name: str) -> int:
+        """从状态名称获取状态值"""
+        status_map = {
+            "SEND_OK": cls.SEND_OK,
+            "SEND_FLUSH_DISK_TIMEOUT": cls.SEND_FLUSH_DISK_TIMEOUT,
+            "SEND_FLUSH_SLAVE_TIMEOUT": cls.SEND_FLUSH_SLAVE_TIMEOUT,
+            "SEND_SLAVE_NOT_AVAILABLE": cls.SEND_SLAVE_NOT_AVAILABLE,
+            "SEND_UNKNOWN_ERROR": cls.SEND_UNKNOWN_ERROR,
+        }
+        return status_map.get(name, cls.SEND_UNKNOWN_ERROR)
+
+    @classmethod
+    def to_name(cls, status: int) -> str:
+        """从状态值获取状态名称"""
+        name_map = {
+            cls.SEND_OK: "SEND_OK",
+            cls.SEND_FLUSH_DISK_TIMEOUT: "SEND_FLUSH_DISK_TIMEOUT",
+            cls.SEND_FLUSH_SLAVE_TIMEOUT: "SEND_FLUSH_SLAVE_TIMEOUT",
+            cls.SEND_SLAVE_NOT_AVAILABLE: "SEND_SLAVE_NOT_AVAILABLE",
+            cls.SEND_UNKNOWN_ERROR: "SEND_UNKNOWN_ERROR",
+        }
+        return name_map.get(status, "SEND_UNKNOWN_ERROR")
+
+    @classmethod
+    def is_success(cls, status: int) -> bool:
+        """判断是否为成功状态"""
+        return status == cls.SEND_OK

@@ -4,6 +4,7 @@ Broker 客户端实现
 """
 
 import time
+from typing import Dict, Optional
 
 from ..logging import LoggerFactory
 from ..model.enums import ResponseCode
@@ -14,8 +15,15 @@ from .errors import (
     BrokerResponseError,
     BrokerTimeoutError,
     MessagePullError,
+    MessageSendError,
 )
-from .models import PullMessageResult
+from .models import (
+    MessageProperty,
+    MessageQueue,
+    PullMessageResult,
+    SendMessageResult,
+    SendStatus,
+)
 
 logger = LoggerFactory.get_logger(__name__)
 
@@ -70,6 +78,108 @@ class BrokerClient:
     def client_id(self) -> str:
         """获取客户端ID"""
         return self._client_id
+
+    def _process_send_response(
+        self, broker_name: str, response, topic: str, send_rt: float
+    ) -> SendMessageResult:
+        """处理发送消息响应，参考Go语言实现
+
+        Args:
+            broker_name: broker名称
+            response: 响应对象
+            topic: 主题名称
+            send_rt: 发送耗时
+
+        Returns:
+            SendMessageResult: 发送结果
+
+        Raises:
+            MessageSendError: 发送失败时抛出异常
+        """
+        # 根据响应码确定状态
+        status = SendStatus.SEND_UNKNOWN_ERROR
+        if response.code == ResponseCode.SUCCESS:
+            status = SendStatus.SEND_OK
+        elif response.code == ResponseCode.FLUSH_DISK_TIMEOUT:
+            status = SendStatus.SEND_FLUSH_DISK_TIMEOUT
+        elif response.code == ResponseCode.FLUSH_SLAVE_TIMEOUT:
+            status = SendStatus.SEND_FLUSH_SLAVE_TIMEOUT
+        elif response.code == ResponseCode.SLAVE_NOT_AVAILABLE:
+            status = SendStatus.SEND_SLAVE_NOT_AVAILABLE
+        else:
+            # 其他错误码视为未知错误
+            raise MessageSendError(
+                response.remark or f"Unknown send error: {response.code}",
+                topic=topic,
+            )
+
+        # 从扩展字段中提取信息
+        ext_fields = response.ext_fields or {}
+
+        # 提取消息ID
+        msg_id = ext_fields.get("msgId", "unknown")
+
+        # 提取偏移量消息ID
+        offset_msg_id = ext_fields.get("msgId")
+
+        # 提取队列ID
+        queue_id = 0
+        try:
+            queue_id = int(ext_fields.get("queueId", "0"))
+        except (ValueError, TypeError):
+            queue_id = 0
+
+        # 提取队列偏移量
+        queue_offset = 0
+        try:
+            queue_offset = int(ext_fields.get("queueOffset", "0"))
+        except (ValueError, TypeError):
+            queue_offset = 0
+
+        # 提取区域ID
+        region_id = ext_fields.get(MessageProperty.MSG_REGION, "DefaultRegion")
+
+        # 提取事务ID
+        transaction_id = ext_fields.get(MessageProperty.TRANSACTION_ID)
+
+        # 提取Trace开关
+        trace_on = (
+            ext_fields.get(MessageProperty.TRACE_SWITCH) is not None
+            and ext_fields.get(MessageProperty.TRACE_SWITCH) != "false"
+        )
+
+        # 创建MessageQueue对象
+        message_queue = MessageQueue(
+            topic=topic, broker_name=broker_name, queue_id=queue_id
+        )
+
+        # 创建发送结果
+        result = SendMessageResult(
+            status=status,
+            msg_id=msg_id,
+            message_queue=message_queue,
+            queue_offset=queue_offset,
+            transaction_id=transaction_id,
+            offset_msg_id=offset_msg_id,
+            region_id=region_id,
+            trace_on=trace_on,
+        )
+
+        # 记录日志
+        if status == SendStatus.SEND_OK:
+            logger.info(
+                f"Successfully sent message to topic={topic}, "
+                f"queueId={queue_id}, offset={queue_offset}, "
+                f"msgId={msg_id}, status={result.status_name}, sendRT={send_rt:.3f}s"
+            )
+        else:
+            logger.warning(
+                f"Message sent with warning status to topic={topic}, "
+                f"queueId={queue_id}, status={result.status_name}, "
+                f"msgId={msg_id}, sendRT={send_rt:.3f}s"
+            )
+
+        return result
 
     def pull_message(
         self,
@@ -215,6 +325,118 @@ class BrokerClient:
                 f"Unexpected error during pull_message: {e}",
                 topic=topic,
                 queue_id=queue_id,
+            )
+
+    def send_message(
+        self,
+        producer_group: str,
+        topic: str,
+        body: bytes,
+        queue_id: int = 0,
+        tags: Optional[str] = None,
+        keys: Optional[str] = None,
+        properties: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> SendMessageResult:
+        """发送消息
+
+        Args:
+            producer_group: 生产者组名
+            topic: 主题名称
+            body: 消息体内容
+            queue_id: 队列ID，默认0
+            tags: 消息标签，可选
+            keys: 消息键，可选
+            properties: 消息属性字典，可选
+            **kwargs: 其他参数
+
+        Returns:
+            SendMessageResult: 发送消息结果
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+            MessageSendError: 消息发送错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Sending message: producerGroup={producer_group}, "
+                f"topic={topic}, queueId={queue_id}, bodySize={len(body)}"
+            )
+
+            # 准备消息属性
+            properties_str = ""
+            if properties:
+                import json
+
+                properties_str = json.dumps(properties)
+
+            # 创建发送消息请求
+            request = RemotingRequestFactory.create_send_message_request(
+                producer_group=producer_group,
+                topic=topic,
+                body=body,
+                queue_id=queue_id,
+                properties=properties_str,
+                tags=tags,
+                keys=keys,
+                **kwargs,
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            send_rt = time.time() - start_time
+
+            logger.debug(
+                f"Send response received: code={response.code}, sendRT={send_rt:.3f}s"
+            )
+
+            # 处理特殊错误响应
+            if response.code == ResponseCode.TOPIC_NOT_EXIST:
+                # 主题不存在
+                error_msg = f"Topic not exist: {topic}"
+                logger.error(error_msg)
+                raise MessageSendError(error_msg, topic=topic)
+
+            elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
+                # 服务不可用
+                error_msg = f"Service not available: {response.remark}"
+                logger.error(error_msg)
+                raise MessageSendError(error_msg, topic=topic)
+
+            elif response.code == ResponseCode.SYSTEM_BUSY:
+                # 系统繁忙
+                error_msg = f"System busy: {response.remark}"
+                logger.error(error_msg)
+                raise MessageSendError(error_msg, topic=topic)
+
+            # 使用统一的响应处理逻辑
+            broker_name = "unknown"  # TODO: 从连接信息中获取实际的broker名称
+            return self._process_send_response(
+                broker_name, response, topic, send_rt
+            )
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                    MessageSendError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during send_message: {e}")
+            raise MessageSendError(
+                f"Unexpected error during send_message: {e}",
+                topic=topic,
             )
 
 

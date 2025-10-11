@@ -4,6 +4,7 @@ pyrocketmq模型层
 提供RocketMQ消息数据结构的Python实现。
 """
 
+from .client_data import ConsumerData, ProducerData
 from .command import RemotingCommand
 from .enums import FlagType, LanguageCode, RequestCode, ResponseCode
 from .errors import (
@@ -25,6 +26,23 @@ from .errors import (
 from .factory import (
     RemotingCommandBuilder,
     RemotingRequestFactory,
+)
+from .message import (
+    Message,
+    create_delay_message,
+    create_message,
+    create_transaction_message,
+)
+from .message_ext import MessageExt
+from .message_queue import MessageQueue
+from .result_data import (
+    ConsumeFromWhere,
+    ConsumeType,
+    MessageModel,
+    OffsetResult,
+    PullMessageResult,
+    SendMessageResult,
+    SendStatus,
 )
 from .serializer import RemotingCommandSerializer
 from .utils import (
@@ -55,11 +73,27 @@ from .utils import (
 __all__ = [
     # 核心数据结构
     "RemotingCommand",
+    "Message",
+    "MessageQueue",
+    "MessageExt",
+    "ProducerData",
+    "ConsumerData",
+    "SendMessageResult",
+    "PullMessageResult",
+    "OffsetResult",
+    # 消息创建函数
+    "create_message",
+    "create_transaction_message",
+    "create_delay_message",
     # 枚举类型
     "LanguageCode",
     "RequestCode",
     "FlagType",
     "ResponseCode",
+    "SendStatus",
+    "ConsumeType",
+    "MessageModel",
+    "ConsumeFromWhere",
     # 异常类型
     "RemotingCommandError",
     "SerializationError",
