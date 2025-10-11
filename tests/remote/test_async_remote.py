@@ -7,7 +7,13 @@ import asyncio
 
 # 添加项目路径
 from pyrocketmq.logging import LoggerFactory, LoggingConfig
-from pyrocketmq.model import RemotingCommandFactory
+from pyrocketmq.model import (
+    FlagType,
+    LanguageCode,
+    RemotingRequestFactory,
+    RequestCode,
+)
+from pyrocketmq.model.factory import RemotingCommandBuilder
 from pyrocketmq.remote.async_remote import AsyncRemote
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
@@ -49,9 +55,11 @@ async def test_async_remote_connection():
             # 测试发送一个请求（如果没有服务器，应该会失败）
             logger.info("测试发送请求...")
             try:
-                command = (
-                    RemotingCommandFactory.create_get_broker_info_request()
-                )
+                command = RemotingCommandBuilder(
+                    code=RequestCode.GET_BROKER_CLUSTER_INFO,
+                    language=LanguageCode.PYTHON,
+                    flag=FlagType.RPC_TYPE,
+                ).build()
 
                 response = await remote.rpc(command, timeout=5.0)
                 logger.info(f"收到响应: {response}")
@@ -63,7 +71,7 @@ async def test_async_remote_connection():
             logger.info("测试发送单向消息...")
             try:
                 oneway_command = (
-                    RemotingCommandFactory.create_send_message_request(
+                    RemotingRequestFactory.create_send_message_request(
                         topic="test_topic",
                         body=b"test message",
                         producer_group="test_group",
@@ -111,9 +119,11 @@ async def test_async_remote_timeout():
             start_time = asyncio.get_event_loop().time()
 
             try:
-                command = (
-                    RemotingCommandFactory.create_get_broker_info_request()
-                )
+                command = RemotingCommandBuilder(
+                    code=RequestCode.GET_BROKER_CLUSTER_INFO,
+                    language=LanguageCode.PYTHON,
+                    flag=FlagType.RPC_TYPE,
+                ).build()
                 response = await remote.rpc(command, timeout=1.0)
                 logger.info(f"意外收到响应: {response}")
             except Exception as e:
@@ -169,7 +179,11 @@ async def send_concurrent_request(remote: AsyncRemote, task_id: int):
     """发送并发请求的辅助函数"""
     try:
         logger.info(f"任务 {task_id} 开始发送请求...")
-        command = RemotingCommandFactory.create_get_broker_info_request()
+        command = RemotingCommandBuilder(
+            code=RequestCode.GET_BROKER_CLUSTER_INFO,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+        ).build()
         response = await remote.rpc(command, timeout=3.0)
         logger.info(f"任务 {task_id} 收到响应")
         return response

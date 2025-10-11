@@ -22,7 +22,10 @@ from .errors import (
     UnsupportedVersionError,
     ValidationError,
 )
-from .factory import RemotingCommandBuilder, RemotingCommandFactory
+from .factory import (
+    RemotingCommandBuilder,
+    RemotingRequestFactory,
+)
 from .serializer import RemotingCommandSerializer
 from .utils import (
     command_to_dict,
@@ -76,7 +79,8 @@ __all__ = [
     "RemotingCommandSerializer",
     # 工厂和构建器
     "RemotingCommandBuilder",
-    "RemotingCommandFactory",
+    "RemotingRequestFactory",
+    "RemotingRequestFactory",
     # 工具函数
     "validate_command",
     "generate_opaque",

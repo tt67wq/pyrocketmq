@@ -8,6 +8,7 @@ pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协�
 
 ### 项目状态
 - **协议模型层**: ✅ 完整实现，包含所有核心数据结构
+- **请求工厂**: ✅ RemotingRequestFactory实现，支持所有RocketMQ请求类型
 - **网络传输层**: 🚧 基本完成，支持TCP连接状态机
 - **远程通信层**: ✅ 异步/同步通信实现
 - **连接池**: ✅ 连接池管理功能
@@ -66,6 +67,7 @@ src/pyrocketmq/
 │   ├── serializer.py   # 二进制序列化/反序列化器
 │   ├── enums.py        # 协议枚举定义（与Go语言实现一致）
 │   ├── factory.py      # 工厂方法和构建器
+│   ├── headers.py      # 请求Header数据结构定义
 │   ├── utils.py        # 工具函数
 │   └── errors.py       # 模型层异常定义
 ├── transport/          # 网络传输层 🚧
@@ -112,7 +114,7 @@ src/pyrocketmq/
 #### RemotingCommand核心数据结构
 - **位置**: `model/command.py`
 - **功能**: RocketMQ协议的核心数据结构，支持所有协议字段
-- **特性**: 
+- **特性**:
   - 支持扩展字段管理
   - 内置flag类型判断（is_request, is_response, is_oneway）
   - 自动header序列化/反序列化
@@ -131,13 +133,24 @@ src/pyrocketmq/
 - **内容**: LanguageCode, RequestCode, FlagType, ResponseCode
 - **特点**: 与Go语言实现完全兼容
 
-#### 工厂和构建器
+#### RemotingRequestFactory请求工厂
 - **位置**: `model/factory.py`
-- **功能**: 提供便捷的命令创建方式
-- **特性**:
-  - RemotingCommandBuilder: 链式调用构建器
-  - RemotingCommandFactory: 静态工厂方法
-  - 预定义的命令创建方法（如create_send_message_request）
+- **功能**: 基于Go语言实现的快速请求创建工厂
+- **支持的请求类型**:
+  - **消息操作**: 发送消息、拉取消息、批量发送消息
+  - **消费者管理**: 获取消费者列表、查询/更新消费者偏移量
+  - **路由信息**: 获取主题路由信息、获取所有主题列表
+  - **事务操作**: 结束事务、检查事务状态
+  - **主题管理**: 创建主题、删除主题
+  - **系统管理**: 心跳请求、消费者运行信息
+  - **偏移量操作**: 搜索偏移量、获取最大/最小偏移量
+  - **消息查询**: 根据键查询消息、根据偏移量查看消息
+  - **消息编号**: 保存/获取消息编号
+
+#### RemotingCommandBuilder构建器
+- **位置**: `model/factory.py`
+- **功能**: 提供链式调用来构建RemotingCommand对象
+- **特性**: 灵活的参数设置和链式调用
 
 ### Remote层 (`src/pyrocketmq/remote/`)
 
@@ -187,20 +200,61 @@ src/pyrocketmq/
 
 ### 命令创建模式
 
-#### 使用工厂方法
+#### 使用RemotingRequestFactory（推荐）
 ```python
-from pyrocketmq.model import RemotingCommandFactory, RequestCode
-from pyrocketmq.model.enums import LanguageCode
+from pyrocketmq.model import RemotingRequestFactory
 
 # 创建发送消息请求
-command = RemotingCommandFactory.create_send_message_request(
+send_cmd = RemotingRequestFactory.create_send_message_request(
+    producer_group="test_producer",
     topic="test_topic",
-    body=b"message content",
-    producer_group="test_group"
+    body=b"Hello, RocketMQ!",
+    queue_id=1,
+    tags="test_tag",
+    keys="test_key"
+)
+
+# 创建拉取消息请求
+pull_cmd = RemotingRequestFactory.create_pull_message_request(
+    consumer_group="test_consumer",
+    topic="test_topic",
+    queue_id=0,
+    queue_offset=100,
+    max_msg_nums=32
+)
+
+# 创建获取路由信息请求
+route_cmd = RemotingRequestFactory.create_get_route_info_request("test_topic")
+
+# 创建心跳请求
+heartbeat_cmd = RemotingRequestFactory.create_heartbeat_request()
+
+# 创建事务请求
+end_tx_cmd = RemotingRequestFactory.create_end_transaction_request(
+    producer_group="test_producer",
+    tran_state_table_offset=1000,
+    commit_log_offset=2000,
+    commit_or_rollback=1,
+    msg_id="msg_id",
+    transaction_id="tx_id"
+)
+
+# 创建批量消息请求
+batch_cmd = RemotingRequestFactory.create_send_batch_message_request(
+    producer_group="test_producer",
+    topic="test_topic",
+    body=b"Message1\nMessage2\nMessage3"
+)
+
+# 创建主题管理请求
+create_topic_cmd = RemotingRequestFactory.create_create_topic_request(
+    topic="new_topic",
+    read_queue_nums=16,
+    write_queue_nums=16
 )
 ```
 
-#### 使用构建器
+#### 使用RemotingCommandBuilder
 ```python
 from pyrocketmq.model import RemotingCommandBuilder, RequestCode
 
@@ -282,7 +336,7 @@ remote_config = RemoteConfig()
 async_remote = await create_async_remote(transport_config, remote_config)
 
 # 发送请求
-request = RemotingCommandFactory.create_send_message_request(
+request = RemotingRequestFactory.create_send_message_request(
     topic="test_topic",
     body=b"Hello, RocketMQ!",
     producer_group="test_group"
@@ -350,10 +404,69 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 
 ## 常见任务
 
+### 使用RemotingRequestFactory创建请求
+RemotingRequestFactory提供了所有标准RocketMQ请求的创建方法：
+
+```python
+from pyrocketmq.model import RemotingRequestFactory
+
+# 消息相关请求
+send_request = RemotingRequestFactory.create_send_message_request(
+    producer_group="my_producer", topic="my_topic", body=b"msg"
+)
+pull_request = RemotingRequestFactory.create_pull_message_request(
+    consumer_group="my_consumer", topic="my_topic", 
+    queue_id=0, queue_offset=100, max_msg_nums=32
+)
+batch_request = RemotingRequestFactory.create_send_batch_message_request(
+    producer_group="my_producer", topic="my_topic", body=b"batch_msg"
+)
+
+# 消费者相关请求
+consumer_list = RemotingRequestFactory.create_get_consumer_list_request("my_group")
+query_offset = RemotingRequestFactory.create_query_consumer_offset_request(
+    consumer_group="my_group", topic="my_topic", queue_id=0
+)
+update_offset = RemotingRequestFactory.create_update_consumer_offset_request(
+    consumer_group="my_group", topic="my_topic", queue_id=0, commit_offset=200
+)
+
+# 路由和集群信息
+route_info = RemotingRequestFactory.create_get_route_info_request("my_topic")
+cluster_info = RemotingCommand(
+    code=RequestCode.GET_BROKER_CLUSTER_INFO,
+    language=LanguageCode.PYTHON,
+    flag=FlagType.RPC_TYPE,
+)
+all_topics = RemotingRequestFactory.create_get_all_topic_list_request()
+
+# 事务相关请求
+end_tx = RemotingRequestFactory.create_end_transaction_request(
+    producer_group="my_producer", tran_state_table_offset=1000,
+    commit_log_offset=2000, commit_or_rollback=1
+)
+check_tx = RemotingRequestFactory.create_check_transaction_state_request(
+    tran_state_table_offset=1000, commit_log_offset=2000
+)
+
+# 系统管理请求
+heartbeat = RemotingRequestFactory.create_heartbeat_request()
+consumer_info = RemotingRequestFactory.create_get_consumer_running_info_request(
+    consumer_group="my_group", client_id="my_client"
+)
+
+# 主题管理请求
+create_topic = RemotingRequestFactory.create_create_topic_request(
+    topic="new_topic", read_queue_nums=16, write_queue_nums=16
+)
+delete_topic = RemotingRequestFactory.create_delete_topic_request("old_topic")
+```
+
 ### 添加新的请求代码
 1. 在`model/enums.py`的RequestCode中添加新枚举
-2. 在工厂类中添加对应的创建方法
-3. 添加相应的测试用例
+2. 在`model/headers.py`中定义对应的Header数据结构
+3. 在RemotingRequestFactory中添加对应的创建方法
+4. 添加相应的测试用例
 
 ### 扩展协议字段
 1. 在`RemotingCommand`类中添加新属性

@@ -3,8 +3,11 @@ NameServer 客户端实现
 提供同步和异步两种方式与 RocketMQ NameServer 进行通信
 """
 
+from pyrocketmq.model.factory import RemotingCommandBuilder
+
 from ..logging import LoggerFactory
-from ..model import RemotingCommandFactory
+from ..model import RemotingRequestFactory
+from ..model.enums import FlagType, LanguageCode, RequestCode
 from ..model.utils import is_success_response
 from ..remote.async_remote import AsyncRemote
 from ..remote.factory import create_async_remote, create_sync_remote
@@ -65,10 +68,8 @@ class SyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = (
-                RemotingCommandFactory.create_query_topic_route_info_request(
-                    topic=topic
-                )
+            command = RemotingRequestFactory.create_get_route_info_request(
+                topic
             )
 
             logger.debug(f"Querying topic route info for topic: {topic}")
@@ -122,9 +123,11 @@ class SyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = (
-                RemotingCommandFactory.create_get_broker_cluster_info_request()
-            )
+            command = RemotingCommandBuilder(
+                code=RequestCode.GET_BROKER_CLUSTER_INFO,
+                language=LanguageCode.PYTHON,
+                flag=FlagType.RPC_TYPE,
+            ).build()
 
             logger.debug("Getting broker cluster info")
 
@@ -226,10 +229,8 @@ class AsyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = (
-                RemotingCommandFactory.create_query_topic_route_info_request(
-                    topic=topic
-                )
+            command = RemotingRequestFactory.create_get_route_info_request(
+                topic
             )
 
             logger.debug(f"Querying topic route info for topic: {topic}")
@@ -283,9 +284,11 @@ class AsyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = (
-                RemotingCommandFactory.create_get_broker_cluster_info_request()
-            )
+            command = RemotingCommandBuilder(
+                code=RequestCode.GET_BROKER_CLUSTER_INFO,
+                language=LanguageCode.PYTHON,
+                flag=FlagType.RPC_TYPE,
+            ).build()
 
             logger.debug("Getting broker cluster info")
 

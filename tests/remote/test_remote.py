@@ -7,7 +7,7 @@ import time
 
 # 添加项目路径
 from pyrocketmq.logging import LoggerFactory, LoggingConfig
-from pyrocketmq.model import RemotingCommandFactory
+from pyrocketmq.model import RemotingRequestFactory
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.sync_remote import Remote
 from pyrocketmq.transport.config import TransportConfig
@@ -52,7 +52,7 @@ def test_remote_connection():
         # 测试发送一个请求（如果没有服务器，应该会失败）
         logger.info("测试发送请求...")
         try:
-            command = RemotingCommandFactory.create_get_broker_info_request()
+            command = RemotingRequestFactory.create_get_broker_info_request()
 
             response = remote.rpc(command, timeout=5.0)
             print(response)

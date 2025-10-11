@@ -13,10 +13,11 @@ pyrocketmq 是一个正在开发中的高性能 Python RocketMQ 客户端库，�
 
 ### ✅ 已完成功能
 - **协议模型层**: 完整的 RemotingCommand 数据结构实现
+- **请求工厂**: RemotingRequestFactory实现，支持所有RocketMQ请求类型
 - **序列化器**: 基于 RocketMQ TCP 协议的二进制序列化/反序列化
 - **协议兼容**: 与 Go 语言实现完全兼容的枚举定义
 - **工具函数**: 丰富的命令创建、验证和处理工具
-- **测试覆盖**: 完整的单元测试覆盖（16个测试用例全部通过）
+- **测试覆盖**: 完整的单元测试覆盖（20+个测试用例全部通过）
 
 ### 🚧 正在开发中
 - **网络传输层**: TCP 连接实现
@@ -41,6 +42,7 @@ src/pyrocketmq/
 │   ├── serializer.py   # 二进制序列化器
 │   ├── enums.py        # 协议枚举定义
 │   ├── factory.py      # 工厂方法和构建器
+│   ├── headers.py      # 请求Header数据结构定义
 │   ├── utils.py        # 工具函数
 │   └── errors.py       # 模型层异常定义
 ├── transport/          # 🚧 开发中的网络传输层
@@ -75,6 +77,62 @@ src/pyrocketmq/
 
 ## 🔬 当前可用的API
 
+### 使用RemotingRequestFactory（推荐）
+RemotingRequestFactory提供了所有标准RocketMQ请求的创建方法：
+
+```python
+from pyrocketmq.model import RemotingRequestFactory
+
+# 创建发送消息请求
+send_cmd = RemotingRequestFactory.create_send_message_request(
+    producer_group="test_producer",
+    topic="test_topic",
+    body=b"Hello, RocketMQ!",
+    queue_id=1,
+    tags="test_tag",
+    keys="test_key"
+)
+
+# 创建拉取消息请求
+pull_cmd = RemotingRequestFactory.create_pull_message_request(
+    consumer_group="test_consumer",
+    topic="test_topic",
+    queue_id=0,
+    queue_offset=100,
+    max_msg_nums=32
+)
+
+# 创建获取路由信息请求
+route_cmd = RemotingRequestFactory.create_get_route_info_request("test_topic")
+
+# 创建心跳请求
+heartbeat_cmd = RemotingRequestFactory.create_heartbeat_request()
+
+# 创建批量消息请求
+batch_cmd = RemotingRequestFactory.create_send_batch_message_request(
+    producer_group="test_producer",
+    topic="test_topic",
+    body=b"Message1\nMessage2\nMessage3"
+)
+
+# 创建事务请求
+end_tx_cmd = RemotingRequestFactory.create_end_transaction_request(
+    producer_group="test_producer",
+    tran_state_table_offset=1000,
+    commit_log_offset=2000,
+    commit_or_rollback=1,
+    msg_id="msg_id",
+    transaction_id="tx_id"
+)
+
+# 创建主题管理请求
+create_topic_cmd = RemotingRequestFactory.create_create_topic_request(
+    topic="new_topic",
+    read_queue_nums=16,
+    write_queue_nums=16
+)
+```
+
 ### 基础数据结构操作
 ```python
 from pyrocketmq.model import RemotingCommand, RequestCode, LanguageCode
@@ -88,14 +146,6 @@ command = RemotingCommand(
         "producerGroup": "test_group"
     },
     body=b"message content"
-)
-
-# 使用工厂方法
-from pyrocketmq.model import RemotingCommandFactory
-command = RemotingCommandFactory.create_send_message_request(
-    topic="test_topic",
-    body=b"Hello, RocketMQ!",
-    producer_group="test_group"
 )
 
 # 使用构建器
@@ -186,11 +236,16 @@ python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::
 - 最大 Header 大小: 64KB
 
 ### 支持的协议特性
-- ✅ 所有标准请求代码和响应代码
+- ✅ 所有标准请求代码和响应代码（25+种请求类型）
 - ✅ 完整的扩展字段支持
+- ✅ 基于Go语言实现的请求工厂方法
 - ✅ 多语言客户端兼容
 - ✅ Unicode 字符支持
 - ✅ 错误处理机制
+- ✅ 事务消息支持
+- ✅ 批量消息支持
+- ✅ 主题和队列管理
+- ✅ 消费者组管理
 
 ## 📝 许可证
 

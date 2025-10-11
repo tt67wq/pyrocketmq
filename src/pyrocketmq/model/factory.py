@@ -7,6 +7,28 @@ from typing import Dict, Optional
 
 from .command import RemotingCommand
 from .enums import FlagType, LanguageCode, RequestCode
+from .headers import (
+    CheckTransactionStateRequestHeader,
+    ConsumeMessageDirectlyHeader,
+    ConsumerSendMsgBackRequestHeader,
+    CreateTopicRequestHeader,
+    DeleteTopicRequestHeader,
+    EndTransactionRequestHeader,
+    GetConsumerListRequestHeader,
+    GetConsumerRunningInfoHeader,
+    GetMaxOffsetRequestHeader,
+    GetRouteInfoRequestHeader,
+    PullMessageRequestHeader,
+    QueryConsumerOffsetRequestHeader,
+    QueryMessageRequestHeader,
+    ResetOffsetHeader,
+    SaveOrGetMsgNoHeader,
+    SearchOffsetRequestHeader,
+    SendMessageRequestHeader,
+    SendMessageRequestV2Header,
+    UpdateConsumerOffsetRequestHeader,
+    ViewMessageRequestHeader,
+)
 
 
 @dataclass
@@ -315,149 +337,47 @@ class RemotingCommandBuilder:
         )
 
 
-class RemotingCommandFactory:
-    """远程命令工厂类
+class RemotingRequestFactory:
+    """RocketMQ请求工厂类
 
-    提供便捷的方法创建各种类型的RemotingCommand对象
+    基于Go语言实现的方法，提供快速生成各类RocketMQ请求的工厂方法
     """
 
     @staticmethod
-    def create_request(
-        code: int,
-        opaque: int = 0,
-        body: Optional[bytes] = None,
-        language: LanguageCode = LanguageCode.PYTHON,
-        version: int = 1,
-    ) -> RemotingCommand:
-        """创建请求命令
-
-        Args:
-            code: 请求代码
-            opaque: 消息ID，默认为0
-            body: 消息体，可选
-            language: 语言代码，默认为PYTHON
-            version: 版本号，默认为1
-
-        Returns:
-            构造的请求命令
-        """
-        return RemotingCommand(
-            code=code,
-            language=language,
-            version=version,
-            opaque=opaque,
-            flag=FlagType.RPC_TYPE,
-            body=body,
-        )
-
-    @staticmethod
-    def create_response(
-        code: int,
-        opaque: int,
-        body: Optional[bytes] = None,
-        remark: Optional[str] = None,
-        language: LanguageCode = LanguageCode.PYTHON,
-        version: int = 1,
-    ) -> RemotingCommand:
-        """创建响应命令
-
-        Args:
-            code: 响应代码
-            opaque: 消息ID，必须与请求对应
-            body: 响应体，可选
-            remark: 备注信息，可选
-            language: 语言代码，默认为PYTHON
-            version: 版本号，默认为1
-
-        Returns:
-            构造的响应命令
-        """
-        return RemotingCommand(
-            code=code,
-            language=language,
-            version=version,
-            opaque=opaque,
-            flag=FlagType.RESPONSE_TYPE,
-            remark=remark,
-            body=body,
-        )
-
-    @staticmethod
-    def create_oneway(
-        code: int,
-        opaque: int = 0,
-        body: Optional[bytes] = None,
-        language: LanguageCode = LanguageCode.PYTHON,
-        version: int = 1,
-    ) -> RemotingCommand:
-        """创建单向命令
-
-        Args:
-            code: 请求代码
-            opaque: 消息ID，默认为0
-            body: 消息体，可选
-            language: 语言代码，默认为PYTHON
-            version: 版本号，默认为1
-
-        Returns:
-            构造的单向命令
-        """
-        return RemotingCommand(
-            code=code,
-            language=language,
-            version=version,
-            opaque=opaque,
-            flag=FlagType.RPC_ONEWAY,
-            body=body,
-        )
-
-    @staticmethod
-    def create_heartbeat(opaque: int = 0) -> RemotingCommand:
-        """创建心跳命令
-
-        Args:
-            opaque: 消息ID，默认为0
-
-        Returns:
-            构造的心跳命令
-        """
-        return RemotingCommandFactory.create_request(
-            code=RequestCode.HEART_BEAT, opaque=opaque
-        )
-
-    @staticmethod
     def create_send_message_request(
+        producer_group: str,
         topic: str,
         body: bytes,
-        producer_group: str,
-        opaque: int = 0,
         queue_id: int = 0,
+        properties: str = "",
         tags: Optional[str] = None,
         keys: Optional[str] = None,
-        wait_store_msg_ok: bool = True,
+        **kwargs,
     ) -> RemotingCommand:
         """创建发送消息请求
 
         Args:
-            topic: 主题名称
-            body: 消息体
             producer_group: 生产者组
-            opaque: 消息ID，默认为0
-            queue_id: 队列ID，默认为0
-            tags: 消息标签，可选
-            keys: 消息键，可选
-            wait_store_msg_ok: 是否等待存储确认，默认为True
+            topic: 主题
+            body: 消息体
+            queue_id: 队列ID
+            properties: 消息属性
+            tags: 消息标签
+            keys: 消息键
+            **kwargs: 其他参数
 
         Returns:
-            构造的发送消息请求
+            发送消息请求命令
         """
-        ext_fields = {
-            "topic": topic,
-            "producerGroup": producer_group,
-            "queueId": str(queue_id),
-            "waitStoreMsgOK": "true" if wait_store_msg_ok else "false",
-        }
+        header = SendMessageRequestHeader(
+            producer_group=producer_group,
+            topic=topic,
+            queue_id=queue_id,
+            properties=properties,
+            **kwargs,
+        )
 
+        ext_fields = header.encode()
         if tags:
             ext_fields["tags"] = tags
         if keys:
@@ -466,221 +386,587 @@ class RemotingCommandFactory:
         return RemotingCommand(
             code=RequestCode.SEND_MESSAGE,
             language=LanguageCode.PYTHON,
-            version=1,
-            opaque=opaque,
             flag=FlagType.RPC_TYPE,
             ext_fields=ext_fields,
             body=body,
         )
 
     @staticmethod
-    def create_pull_message_request(
+    def create_send_message_v2_request(
+        producer_group: str,
         topic: str,
-        consumer_group: str,
-        queue_id: int,
-        offset: int,
-        max_num: int,
-        opaque: int = 0,
+        body: bytes,
+        queue_id: int = 0,
+        properties: str = "",
+        **kwargs,
     ) -> RemotingCommand:
-        """创建拉取消息请求
+        """创建发送消息V2请求（使用单字母字段名）
 
         Args:
-            topic: 主题名称
-            consumer_group: 消费者组
+            producer_group: 生产者组
+            topic: 主题
+            body: 消息体
             queue_id: 队列ID
-            offset: 开始偏移量
-            max_num: 最大拉取数量
-            opaque: 消息ID，默认为0
+            properties: 消息属性
+            **kwargs: 其他参数
 
         Returns:
-            构造的拉取消息请求
+            发送消息V2请求命令
         """
-        return RemotingCommand(
-            code=RequestCode.PULL_MESSAGE,
-            language=LanguageCode.PYTHON,
-            version=1,
-            opaque=opaque,
-            flag=FlagType.RPC_TYPE,
-            ext_fields={
-                "topic": topic,
-                "consumerGroup": consumer_group,
-                "queueId": str(queue_id),
-                "offset": str(offset),
-                "maxMsgNums": str(max_num),
-            },
+        header = SendMessageRequestV2Header(
+            producer_group=producer_group,
+            topic=topic,
+            queue_id=queue_id,
+            properties=properties,
+            **kwargs,
         )
 
-    @staticmethod
-    def create_consumer_offset_request(
-        topic: str,
-        consumer_group: str,
-        queue_id: int,
-        offset: int,
-        opaque: int = 0,
-    ) -> RemotingCommand:
-        """创建消费者偏移量请求
-
-        Args:
-            topic: 主题名称
-            consumer_group: 消费者组
-            queue_id: 队列ID
-            offset: 偏移量
-            opaque: 消息ID，默认为0
-
-        Returns:
-            构造的消费者偏移量请求
-        """
         return RemotingCommand(
-            code=RequestCode.UPDATE_CONSUMER_OFFSET,
+            code=RequestCode.SEND_MESSAGE,
             language=LanguageCode.PYTHON,
-            version=1,
-            opaque=opaque,
             flag=FlagType.RPC_TYPE,
-            ext_fields={
-                "topic": topic,
-                "consumerGroup": consumer_group,
-                "queueId": str(queue_id),
-                "offset": str(offset),
-            },
-        )
-
-    @staticmethod
-    def create_query_consumer_offset_request(
-        topic: str, consumer_group: str, queue_id: int, opaque: int = 0
-    ) -> RemotingCommand:
-        """创建查询消费者偏移量请求
-
-        Args:
-            topic: 主题名称
-            consumer_group: 消费者组
-            queue_id: 队列ID
-            opaque: 消息ID，默认为0
-
-        Returns:
-            构造的查询消费者偏移量请求
-        """
-        return RemotingCommand(
-            code=RequestCode.QUERY_CONSUMER_OFFSET,
-            language=LanguageCode.PYTHON,
-            version=1,
-            opaque=opaque,
-            flag=FlagType.RPC_TYPE,
-            ext_fields={
-                "topic": topic,
-                "consumerGroup": consumer_group,
-                "queueId": str(queue_id),
-            },
-        )
-
-    @staticmethod
-    def create_success_response(
-        opaque: int, body: Optional[bytes] = None
-    ) -> RemotingCommand:
-        """创建成功响应
-
-        Args:
-            opaque: 消息ID，必须与请求对应
-            body: 响应体，可选
-
-        Returns:
-            构造的成功响应
-        """
-        from .enums import ResponseCode
-
-        return RemotingCommandFactory.create_response(
-            code=ResponseCode.SUCCESS,
-            opaque=opaque,
+            ext_fields=header.encode(),
             body=body,
         )
 
     @staticmethod
-    def create_get_broker_info_request(opaque: int = 0) -> RemotingCommand:
-        """创建获取Broker集群信息请求
+    def create_pull_message_request(
+        consumer_group: str,
+        topic: str,
+        queue_id: int,
+        queue_offset: int,
+        max_msg_nums: int,
+        **kwargs,
+    ) -> RemotingCommand:
+        """创建拉取消息请求
 
         Args:
-            opaque: 消息ID，默认为0
+            consumer_group: 消费者组
+            topic: 主题
+            queue_id: 队列ID
+            queue_offset: 队列偏移量
+            max_msg_nums: 最大消息数量
+            **kwargs: 其他参数
 
         Returns:
-            构造的获取Broker集群信息请求
+            拉取消息请求命令
         """
-        return RemotingCommandFactory.create_request(
-            code=RequestCode.GET_BROKER_CLUSTER_INFO,
+        header = PullMessageRequestHeader(
+            consumer_group=consumer_group,
+            topic=topic,
+            queue_id=queue_id,
+            queue_offset=queue_offset,
+            max_msg_nums=max_msg_nums,
+            **kwargs,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.PULL_MESSAGE,
             language=LanguageCode.PYTHON,
-            opaque=opaque,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
         )
 
     @staticmethod
-    def create_error_response(
-        opaque: int, remark: str, code: Optional[int] = None
+    def create_get_consumer_list_request(
+        consumer_group: str,
     ) -> RemotingCommand:
-        """创建错误响应
+        """创建获取消费者列表请求
 
         Args:
-            opaque: 消息ID，必须与请求对应
-            remark: 错误信息
-            code: 错误代码，如果未指定则使用SYSTEM_ERROR
+            consumer_group: 消费者组
 
         Returns:
-            构造的错误响应
+            获取消费者列表请求命令
         """
-        from .enums import ResponseCode
+        header = GetConsumerListRequestHeader(consumer_group=consumer_group)
 
-        if code is None:
-            code = ResponseCode.SYSTEM_ERROR
-
-        return RemotingCommandFactory.create_response(
-            code=code, opaque=opaque, remark=remark
+        return RemotingCommand(
+            code=RequestCode.GET_CONSUMER_LIST_BY_GROUP,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
         )
 
     @staticmethod
-    def create_query_topic_route_info_request(
-        topic: str, opaque: int = 0
+    def create_get_max_offset_request(
+        topic: str, queue_id: int
     ) -> RemotingCommand:
-        """创建查询Topic路由信息请求
+        """创建获取最大偏移量请求
 
         Args:
-            topic: 主题名称
-            opaque: 消息ID，默认为0
+            topic: 主题
+            queue_id: 队列ID
 
         Returns:
-            构造的查询Topic路由信息请求
+            获取最大偏移量请求命令
         """
+        header = GetMaxOffsetRequestHeader(topic=topic, queue_id=queue_id)
+
+        return RemotingCommand(
+            code=RequestCode.GET_MAX_OFFSET,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_query_consumer_offset_request(
+        consumer_group: str, topic: str, queue_id: int
+    ) -> RemotingCommand:
+        """创建查询消费者偏移量请求
+
+        Args:
+            consumer_group: 消费者组
+            topic: 主题
+            queue_id: 队列ID
+
+        Returns:
+            查询消费者偏移量请求命令
+        """
+        header = QueryConsumerOffsetRequestHeader(
+            consumer_group=consumer_group, topic=topic, queue_id=queue_id
+        )
+
+        return RemotingCommand(
+            code=RequestCode.QUERY_CONSUMER_OFFSET,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_update_consumer_offset_request(
+        consumer_group: str, topic: str, queue_id: int, commit_offset: int
+    ) -> RemotingCommand:
+        """创建更新消费者偏移量请求
+
+        Args:
+            consumer_group: 消费者组
+            topic: 主题
+            queue_id: 队列ID
+            commit_offset: 提交偏移量
+
+        Returns:
+            更新消费者偏移量请求命令
+        """
+        header = UpdateConsumerOffsetRequestHeader(
+            consumer_group=consumer_group,
+            topic=topic,
+            queue_id=queue_id,
+            commit_offset=commit_offset,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.UPDATE_CONSUMER_OFFSET,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_search_offset_request(
+        topic: str, queue_id: int, timestamp: int
+    ) -> RemotingCommand:
+        """创建搜索偏移量请求
+
+        Args:
+            topic: 主题
+            queue_id: 队列ID
+            timestamp: 时间戳
+
+        Returns:
+            搜索偏移量请求命令
+        """
+        header = SearchOffsetRequestHeader(
+            topic=topic, queue_id=queue_id, timestamp=timestamp
+        )
+
+        return RemotingCommand(
+            code=RequestCode.SEARCH_OFFSET_BY_TIMESTAMP,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_get_route_info_request(topic: str) -> RemotingCommand:
+        """创建获取路由信息请求
+
+        Args:
+            topic: 主题
+
+        Returns:
+            获取路由信息请求命令
+        """
+        header = GetRouteInfoRequestHeader(topic=topic)
+
         return RemotingCommand(
             code=RequestCode.GET_ROUTE_INFO_BY_TOPIC,
             language=LanguageCode.PYTHON,
-            version=1,
-            opaque=opaque,
             flag=FlagType.RPC_TYPE,
-            ext_fields={
-                "topic": topic,
-            },
+            ext_fields=header.encode(),
         )
 
     @staticmethod
-    def create_get_broker_cluster_info_request(
-        opaque: int = 0,
+    def create_heartbeat_request() -> RemotingCommand:
+        """创建心跳请求
+
+        Returns:
+            心跳请求命令
+        """
+        return RemotingCommand(
+            code=RequestCode.HEART_BEAT,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+        )
+
+    @staticmethod
+    def create_end_transaction_request(
+        producer_group: str,
+        tran_state_table_offset: int,
+        commit_log_offset: int,
+        commit_or_rollback: int,
+        **kwargs,
     ) -> RemotingCommand:
-        """创建获取Broker集群信息请求
+        """创建结束事务请求
 
         Args:
-            opaque: 消息ID，默认为0
+            producer_group: 生产者组
+            tran_state_table_offset: 事务状态表偏移量
+            commit_log_offset: 提交日志偏移量
+            commit_or_rollback: 提交或回滚
+            **kwargs: 其他参数
 
         Returns:
-            构造的获取Broker集群信息请求
+            结束事务请求命令
         """
-        return RemotingCommandFactory.create_request(
-            code=RequestCode.GET_BROKER_CLUSTER_INFO,
-            opaque=opaque,
+        header = EndTransactionRequestHeader(
+            producer_group=producer_group,
+            tran_state_table_offset=tran_state_table_offset,
+            commit_log_offset=commit_log_offset,
+            commit_or_rollback=commit_or_rollback,
+            **kwargs,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.END_TRANSACTION,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
         )
 
     @staticmethod
-    def builder(code: int) -> RemotingCommandBuilder:
-        """创建构建器
+    def create_check_transaction_state_request(
+        tran_state_table_offset: int, commit_log_offset: int, **kwargs
+    ) -> RemotingCommand:
+        """创建检查事务状态请求
 
         Args:
-            code: 请求代码
+            tran_state_table_offset: 事务状态表偏移量
+            commit_log_offset: 提交日志偏移量
+            **kwargs: 其他参数
 
         Returns:
-            构建器实例
+            检查事务状态请求命令
         """
-        return RemotingCommandBuilder(code=code)
+        header = CheckTransactionStateRequestHeader(
+            tran_state_table_offset=tran_state_table_offset,
+            commit_log_offset=commit_log_offset,
+            **kwargs,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.CHECK_TRANSACTION_STATE,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_consumer_send_msg_back_request(
+        group: str,
+        offset: int,
+        delay_level: int,
+        origin_msg_id: str,
+        origin_topic: str,
+        **kwargs,
+    ) -> RemotingCommand:
+        """创建消费者发送消息回退请求
+
+        Args:
+            group: 消费者组
+            offset: 偏移量
+            delay_level: 延迟级别
+            origin_msg_id: 原始消息ID
+            origin_topic: 原始主题
+            **kwargs: 其他参数
+
+        Returns:
+            消费者发送消息回退请求命令
+        """
+        header = ConsumerSendMsgBackRequestHeader(
+            group=group,
+            offset=offset,
+            delay_level=delay_level,
+            origin_msg_id=origin_msg_id,
+            origin_topic=origin_topic,
+            **kwargs,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.CONSUMER_SEND_MSG_BACK,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_get_consumer_running_info_request(
+        consumer_group: str, client_id: str
+    ) -> RemotingCommand:
+        """创建获取消费者运行信息请求
+
+        Args:
+            consumer_group: 消费者组
+            client_id: 客户端ID
+
+        Returns:
+            获取消费者运行信息请求命令
+        """
+        header = GetConsumerRunningInfoHeader(
+            consumer_group=consumer_group, client_id=client_id
+        )
+
+        return RemotingCommand(
+            code=RequestCode.GET_CONSUMER_RUNNING_INFO,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_consume_message_directly_request(
+        consumer_group: str, client_id: str, msg_id: str, broker_name: str
+    ) -> RemotingCommand:
+        """创建直接消费消息请求
+
+        Args:
+            consumer_group: 消费者组
+            client_id: 客户端ID
+            msg_id: 消息ID
+            broker_name: 代理名称
+
+        Returns:
+            直接消费消息请求命令
+        """
+        header = ConsumeMessageDirectlyHeader(
+            consumer_group=consumer_group,
+            client_id=client_id,
+            msg_id=msg_id,
+            broker_name=broker_name,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.CONSUME_MESSAGE_DIRECTLY,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_create_topic_request(topic: str, **kwargs) -> RemotingCommand:
+        """创建主题请求
+
+        Args:
+            topic: 主题名称
+            **kwargs: 其他参数
+
+        Returns:
+            创建主题请求命令
+        """
+        header = CreateTopicRequestHeader(topic=topic, **kwargs)
+
+        return RemotingCommand(
+            code=RequestCode.CREATE_TOPIC,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_delete_topic_request(topic: str) -> RemotingCommand:
+        """创建删除主题请求
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            删除主题请求命令
+        """
+        header = DeleteTopicRequestHeader(topic=topic)
+
+        return RemotingCommand(
+            code=RequestCode.DELETE_TOPIC_IN_BROKER,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_query_message_request(
+        topic: str,
+        key: str,
+        max_num: int,
+        begin_timestamp: int,
+        end_timestamp: int,
+    ) -> RemotingCommand:
+        """创建查询消息请求
+
+        Args:
+            topic: 主题
+            key: 消息键
+            max_num: 最大数量
+            begin_timestamp: 开始时间戳
+            end_timestamp: 结束时间戳
+
+        Returns:
+            查询消息请求命令
+        """
+        header = QueryMessageRequestHeader(
+            topic=topic,
+            key=key,
+            max_num=max_num,
+            begin_timestamp=begin_timestamp,
+            end_timestamp=end_timestamp,
+        )
+
+        return RemotingCommand(
+            code=RequestCode.QUERY_MESSAGE,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_view_message_request(offset: int) -> RemotingCommand:
+        """创建查看消息请求
+
+        Args:
+            offset: 偏移量
+
+        Returns:
+            查看消息请求命令
+        """
+        header = ViewMessageRequestHeader(offset=offset)
+
+        return RemotingCommand(
+            code=RequestCode.VIEW_MESSAGE_BY_ID,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_reset_offset_request(
+        topic: str, group: str, timestamp: int, is_force: bool = False
+    ) -> RemotingCommand:
+        """创建重置偏移量请求
+
+        Args:
+            topic: 主题
+            group: 消费者组
+            timestamp: 时间戳
+            is_force: 是否强制
+
+        Returns:
+            重置偏移量请求命令
+        """
+        header = ResetOffsetHeader(
+            topic=topic, group=group, timestamp=timestamp, is_force=is_force
+        )
+
+        return RemotingCommand(
+            code=RequestCode.RESET_CONSUMER_OFFSET,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_get_all_topic_list_request() -> RemotingCommand:
+        """创建获取所有主题列表请求
+
+        Returns:
+            获取所有主题列表请求命令
+        """
+        return RemotingCommand(
+            code=RequestCode.GET_ALL_TOPIC_LIST_FROM_NAME_SERVER,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+        )
+
+    @staticmethod
+    def create_send_batch_message_request(
+        producer_group: str, topic: str, body: bytes, **kwargs
+    ) -> RemotingCommand:
+        """创建发送批量消息请求
+
+        Args:
+            producer_group: 生产者组
+            topic: 主题
+            body: 消息体
+            **kwargs: 其他参数
+
+        Returns:
+            发送批量消息请求命令
+        """
+        header = SendMessageRequestHeader(
+            producer_group=producer_group, topic=topic, batch=True, **kwargs
+        )
+
+        return RemotingCommand(
+            code=RequestCode.SEND_BATCH_MESSAGE,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+            body=body,
+        )
+
+    @staticmethod
+    def create_save_msg_no_request(msg_no: str) -> RemotingCommand:
+        """创建保存消息编号请求
+
+        Args:
+            msg_no: 消息编号
+
+        Returns:
+            保存消息编号请求命令
+        """
+        header = SaveOrGetMsgNoHeader(msg_no=msg_no)
+
+        return RemotingCommand(
+            code=RequestCode.PUT_MSG_NO,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_get_msg_no_request(msg_no: str) -> RemotingCommand:
+        """创建获取消息编号请求
+
+        Args:
+            msg_no: 消息编号
+
+        Returns:
+            获取消息编号请求命令
+        """
+        header = SaveOrGetMsgNoHeader(msg_no=msg_no)
+
+        return RemotingCommand(
+            code=RequestCode.GET_MSG_NO,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            ext_fields=header.encode(),
+        )
