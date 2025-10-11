@@ -3,6 +3,7 @@ Broker 模块
 提供 Broker 客户端功能，用于消息发送、拉取和偏移量管理。
 """
 
+from .client import BrokerClient, create_broker_client
 from .models import (
     ConsumeFromWhere,
     ConsumerData,
@@ -29,4 +30,7 @@ __all__ = [
     "ConsumeType",
     "MessageModel",
     "ConsumeFromWhere",
+    # Client
+    "BrokerClient",
+    "create_broker_client",
 ]
