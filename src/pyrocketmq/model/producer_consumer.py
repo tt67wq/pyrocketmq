@@ -70,7 +70,7 @@ class ConsumerData:
     consume_from_where: (
         str  # 消费起始位置 (CONSUME_FROM_LAST_OFFSET/CONSUME_FROM_FIRST_OFFSET)
     )
-    subscription_data: Dict[str, str] = None  # 订阅关系 topic -> expression
+    subscription_data: Dict[str, str] = {}  # 订阅关系 topic -> expression
 
     def __post_init__(self):
         """后处理，确保类型正确"""

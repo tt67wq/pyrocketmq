@@ -5,9 +5,53 @@
 
 import ast
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from .errors import DeserializationError
+
+
+@dataclass
+class SubscriptionData:
+    """
+    订阅数据
+    包含消费者的订阅信息
+    """
+
+    topic: str
+    sub_string: str = "*"
+    sub_version: int = 0
+    expression_type: str = "TAG"
+    tags_set: List[str] = field(default_factory=list)
+    code_set: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, object]:
+        """转换为字典格式"""
+        return {
+            "topic": self.topic,
+            "subString": self.sub_string,
+            "subVersion": self.sub_version,
+            "expressionType": self.expression_type,
+            "tagsSet": self.tags_set,
+            "codeSet": self.code_set,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SubscriptionData":
+        """从字典创建实例"""
+        return cls(
+            topic=data.get("topic", ""),
+            sub_string=data.get("subString", "*"),
+            sub_version=data.get("subVersion", 0),
+            expression_type=data.get("expressionType", "TAG"),
+            tags_set=data.get("tagsSet", []),
+            code_set=data.get("codeSet", []),
+        )
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        return (
+            f"SubscriptionData[topic={self.topic}, subString={self.sub_string}]"
+        )
 
 
 @dataclass
@@ -18,6 +62,10 @@ class ProducerData:
     """
 
     group_name: str  # 生产者组名
+
+    def unique_id(self) -> str:
+        """获取唯一标识符"""
+        return self.group_name
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -70,14 +118,18 @@ class ConsumerData:
     consume_from_where: (
         str  # 消费起始位置 (CONSUME_FROM_LAST_OFFSET/CONSUME_FROM_FIRST_OFFSET)
     )
-    subscription_data: Dict[str, str] = field(
-        default_factory=dict
-    )  # 订阅关系 topic -> expression
+    subscription_data: List[SubscriptionData] = field(
+        default_factory=list
+    )  # 订阅关系
+
+    def unique_id(self) -> str:
+        """获取唯一标识符，对应Go实现的UniqueID()方法"""
+        return self.group_name
 
     def __post_init__(self):
         """后处理，确保subscription_data不为None"""
         if self.subscription_data is None:
-            self.subscription_data = {}
+            self.subscription_data = []
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -123,48 +175,6 @@ class ConsumerData:
             )
         except Exception as e:
             raise DeserializationError(f"Invalid ConsumerData format: {e}")
-
-    def add_subscription(self, topic: str, expression: str) -> None:
-        """添加订阅关系
-
-        Args:
-            topic: 主题名称
-            expression: 订阅表达式
-        """
-        self.subscription_data[topic] = expression
-
-    def remove_subscription(self, topic: str) -> bool:
-        """移除订阅关系
-
-        Args:
-            topic: 主题名称
-
-        Returns:
-            是否成功移除
-        """
-        return self.subscription_data.pop(topic, None) is not None
-
-    def get_subscription(self, topic: str) -> str:
-        """获取主题的订阅表达式
-
-        Args:
-            topic: 主题名称
-
-        Returns:
-            订阅表达式，如果不存在则返回None
-        """
-        return self.subscription_data.get(topic)
-
-    def has_subscription(self, topic: str) -> bool:
-        """检查是否订阅了指定主题
-
-        Args:
-            topic: 主题名称
-
-        Returns:
-            是否订阅了该主题
-        """
-        return topic in self.subscription_data
 
     def __str__(self) -> str:
         """字符串表示"""

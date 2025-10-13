@@ -27,6 +27,7 @@ from .factory import (
     RemotingCommandBuilder,
     RemotingRequestFactory,
 )
+from .heart_beat import HeartbeatData
 from .message import (
     Message,
     MessageProperty,
@@ -73,13 +74,14 @@ from .utils import (
 
 __all__ = [
     # 核心数据结构
+    "ProducerData",
+    "ConsumerData",
+    "HeartbeatData",
     "RemotingCommand",
     "Message",
     "MessageQueue",
     "MessageProperty",
     "MessageExt",
-    "ProducerData",
-    "ConsumerData",
     "SendMessageResult",
     "PullMessageResult",
     "OffsetResult",
