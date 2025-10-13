@@ -1,6 +1,6 @@
 {
-  "host": "d1-dmq-namesrv.shizhuang-inc.net",
-  "port": 31110,
+  "host": "10.88.116.48",
+  "port": 20911,
   "topic": "test_im_015",
   "timeout": 30.0,
   "consumer_group": "GID_POETRY"

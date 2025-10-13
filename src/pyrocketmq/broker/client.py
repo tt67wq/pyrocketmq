@@ -17,6 +17,7 @@ from .errors import (
     BrokerResponseError,
     BrokerTimeoutError,
     MessagePullError,
+    OffsetError,
 )
 
 logger = LoggerFactory.get_logger(__name__)
@@ -215,6 +216,154 @@ class BrokerClient:
             logger.error(f"Unexpected error during pull_message: {e}")
             raise MessagePullError(
                 f"Unexpected error during pull_message: {e}",
+                topic=topic,
+                queue_id=queue_id,
+            )
+
+    def query_consumer_offset(
+        self,
+        consumer_group: str,
+        topic: str,
+        queue_id: int,
+    ) -> int:
+        """查询消费者偏移量
+
+        Args:
+            consumer_group: 消费者组名
+            topic: 主题名称
+            queue_id: 队列ID
+
+        Returns:
+            int: 消费者偏移量
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+            OffsetError: 偏移量查询错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Querying consumer offset: consumerGroup={consumer_group}, "
+                f"topic={topic}, queueId={queue_id}"
+            )
+
+            # 创建查询消费者偏移量请求
+            request = (
+                RemotingRequestFactory.create_query_consumer_offset_request(
+                    consumer_group=consumer_group,
+                    topic=topic,
+                    queue_id=queue_id,
+                )
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            query_rt = time.time() - start_time
+
+            logger.debug(
+                f"Query offset response received: code={response.code}, queryRT={query_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 成功查询到偏移量，从 ext_fields 中获取 offset
+                if response.ext_fields and "offset" in response.ext_fields:
+                    try:
+                        offset_str = response.ext_fields["offset"]
+                        offset = int(offset_str)
+                        logger.info(
+                            f"Successfully queried consumer offset: consumerGroup={consumer_group}, "
+                            f"topic={topic}, queueId={queue_id}, offset={offset}"
+                        )
+                        return offset
+                    except (ValueError, TypeError) as e:
+                        logger.error(
+                            f"Failed to parse offset from ext_fields: {e}"
+                        )
+                        raise OffsetError(
+                            f"Failed to parse offset from ext_fields: {e}",
+                            topic=topic,
+                            queue_id=queue_id,
+                        )
+                else:
+                    # 响应成功但没有offset字段，可能表示偏移量为0或未设置
+                    logger.info(
+                        f"No offset field found for consumerGroup={consumer_group}, "
+                        f"topic={topic}, queueId={queue_id}, returning 0"
+                    )
+                    return 0
+
+            elif response.code == ResponseCode.QUERY_NOT_FOUND:
+                # 没有找到偏移量，通常返回-1或0
+                logger.info(
+                    f"Consumer offset not found for consumerGroup={consumer_group}, "
+                    f"topic={topic}, queueId={queue_id}"
+                )
+                raise OffsetError(
+                    f"Consumer offset not found: consumerGroup={consumer_group}, "
+                    f"topic={topic}, queueId={queue_id}",
+                    topic=topic,
+                    queue_id=queue_id,
+                )
+
+            elif response.code == ResponseCode.TOPIC_NOT_EXIST:
+                # 主题不存在
+                logger.error(f"Topic not exist: {topic}")
+                raise BrokerResponseError(
+                    f"Topic not exist: {topic}",
+                    response_code=response.code,
+                )
+
+            elif response.code == ResponseCode.ERROR:
+                # 通用错误，可能包括消费者组不存在、系统错误、权限错误等
+                error_msg = response.remark or "General error"
+                logger.error(f"Query consumer offset error: {error_msg}")
+                raise BrokerResponseError(
+                    f"Query consumer offset error: {error_msg}",
+                    response_code=response.code,
+                )
+
+            elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
+                # 服务不可用
+                error_msg = response.remark or "Service not available"
+                logger.error(f"Service not available: {error_msg}")
+                raise BrokerResponseError(
+                    f"Service not available: {error_msg}",
+                    response_code=response.code,
+                )
+
+            else:
+                # 其他错误响应
+                error_msg = (
+                    response.remark
+                    or f"Unknown query offset error: {response.code}"
+                )
+                logger.error(f"Query consumer offset failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Query consumer offset failed: {error_msg}",
+                    response_code=response.code,
+                )
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                    OffsetError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during query_consumer_offset: {e}")
+            raise OffsetError(
+                f"Unexpected error during query_consumer_offset: {e}",
                 topic=topic,
                 queue_id=queue_id,
             )
