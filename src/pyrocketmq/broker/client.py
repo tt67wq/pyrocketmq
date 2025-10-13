@@ -368,6 +368,212 @@ class BrokerClient:
                 queue_id=queue_id,
             )
 
+    def update_consumer_offset(
+        self,
+        consumer_group: str,
+        topic: str,
+        queue_id: int,
+        commit_offset: int,
+    ) -> None:
+        """更新消费者偏移量（使用oneway通信，无需等待响应）
+
+        Args:
+            consumer_group: 消费者组名
+            topic: 主题名称
+            queue_id: 队列ID
+            commit_offset: 提交的偏移量
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            OffsetError: 偏移量更新错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Updating consumer offset (oneway): consumerGroup={consumer_group}, "
+                f"topic={topic}, queueId={queue_id}, offset={commit_offset}"
+            )
+
+            # 创建更新消费者偏移量请求（使用oneway模式）
+            request = (
+                RemotingRequestFactory.create_update_consumer_offset_request(
+                    consumer_group=consumer_group,
+                    topic=topic,
+                    queue_id=queue_id,
+                    commit_offset=commit_offset,
+                )
+            )
+
+            # 发送oneway请求，不等待响应
+            start_time = time.time()
+            self.remote.oneway(request)
+            update_rt = time.time() - start_time
+
+            logger.info(
+                f"Successfully sent consumer offset update (oneway): consumerGroup={consumer_group}, "
+                f"topic={topic}, queueId={queue_id}, offset={commit_offset}, updateRT={update_rt:.3f}s"
+            )
+
+        except Exception as e:
+            if isinstance(e, BrokerConnectionError):
+                raise
+
+            logger.error(f"Unexpected error during update_consumer_offset: {e}")
+            raise OffsetError(
+                f"Unexpected error during update_consumer_offset: {e}",
+                topic=topic,
+                queue_id=queue_id,
+            )
+
+    def search_offset_by_timestamp(
+        self,
+        topic: str,
+        queue_id: int,
+        timestamp: int,
+    ) -> int:
+        """根据时间戳搜索偏移量
+
+        Args:
+            topic: 主题名称
+            queue_id: 队列ID
+            timestamp: 时间戳（毫秒）
+
+        Returns:
+            int: 对应的偏移量
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+            OffsetError: 偏移量搜索错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Searching offset by timestamp: topic={topic}, "
+                f"queueId={queue_id}, timestamp={timestamp}"
+            )
+
+            # 创建搜索偏移量请求
+            request = RemotingRequestFactory.create_search_offset_request(
+                topic=topic,
+                queue_id=queue_id,
+                timestamp=timestamp,
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            search_rt = time.time() - start_time
+
+            logger.debug(
+                f"Search offset response received: code={response.code}, searchRT={search_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 成功搜索到偏移量，从 ext_fields 中获取 offset
+                if response.ext_fields and "offset" in response.ext_fields:
+                    try:
+                        offset_str = response.ext_fields["offset"]
+                        offset = int(offset_str)
+                        logger.info(
+                            f"Successfully searched offset by timestamp: topic={topic}, "
+                            f"queueId={queue_id}, timestamp={timestamp}, offset={offset}"
+                        )
+                        return offset
+                    except (ValueError, TypeError) as e:
+                        logger.error(
+                            f"Failed to parse offset from ext_fields: {e}"
+                        )
+                        raise OffsetError(
+                            f"Failed to parse offset from ext_fields: {e}",
+                            topic=topic,
+                            queue_id=queue_id,
+                        )
+                else:
+                    # 响应成功但没有offset字段
+                    logger.error(
+                        f"No offset field found for topic={topic}, "
+                        f"queueId={queue_id}, timestamp={timestamp}"
+                    )
+                    raise OffsetError(
+                        f"No offset field found in response: topic={topic}, "
+                        f"queueId={queue_id}, timestamp={timestamp}",
+                        topic=topic,
+                        queue_id=queue_id,
+                    )
+
+            elif response.code == ResponseCode.QUERY_NOT_FOUND:
+                # 没有找到对应的偏移量
+                logger.info(
+                    f"No offset found for timestamp: topic={topic}, "
+                    f"queueId={queue_id}, timestamp={timestamp}"
+                )
+                return -1
+
+            elif response.code == ResponseCode.TOPIC_NOT_EXIST:
+                # 主题不存在
+                logger.error(f"Topic not exist: {topic}")
+                raise BrokerResponseError(
+                    f"Topic not exist: {topic}",
+                    response_code=response.code,
+                )
+
+            elif response.code == ResponseCode.ERROR:
+                # 通用错误
+                error_msg = response.remark or "General error"
+                logger.error(f"Search offset by timestamp error: {error_msg}")
+                raise BrokerResponseError(
+                    f"Search offset by timestamp error: {error_msg}",
+                    response_code=response.code,
+                )
+
+            elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
+                # 服务不可用
+                error_msg = response.remark or "Service not available"
+                logger.error(f"Service not available: {error_msg}")
+                raise BrokerResponseError(
+                    f"Service not available: {error_msg}",
+                    response_code=response.code,
+                )
+            else:
+                # 其他错误响应
+                error_msg = (
+                    response.remark
+                    or f"Unknown search offset error: {response.code}"
+                )
+                logger.error(f"Search offset by timestamp failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Search offset by timestamp failed: {error_msg}",
+                    response_code=response.code,
+                )
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                    OffsetError,
+                ),
+            ):
+                raise
+
+            logger.error(
+                f"Unexpected error during search_offset_by_timestamp: {e}"
+            )
+            raise OffsetError(
+                f"Unexpected error during search_offset_by_timestamp: {e}",
+                topic=topic,
+                queue_id=queue_id,
+            )
+
 
 def create_broker_client(
     host: str, port: int, timeout: float = 30.0, **kwargs

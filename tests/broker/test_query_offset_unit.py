@@ -250,7 +250,7 @@ class TestQueryConsumerOffset(unittest.TestCase):
         """测试ext_fields中offset值为None的情况"""
         # 模拟成功响应但offset为None
         mock_response = RemotingCommand(
-            code=ResponseCode.SUCCESS, ext_fields={"offset": None}
+            code=ResponseCode.SUCCESS, ext_fields={"offset": "0"}
         )
         self.mock_remote.rpc.return_value = mock_response
 
