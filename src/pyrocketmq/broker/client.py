@@ -6,9 +6,7 @@ Broker 客户端实现
 import time
 
 from ..logging import LoggerFactory
-from ..model import (
-    PullMessageResult,
-)
+from ..model import HeartbeatData, PullMessageResult
 from ..model.enums import ResponseCode
 from ..model.factory import RemotingRequestFactory
 from ..remote.sync_remote import Remote
@@ -701,6 +699,94 @@ class BrokerClient:
                 f"Unexpected error during get_max_offset: {e}",
                 topic=topic,
                 queue_id=queue_id,
+            )
+
+    def send_heartbeat(self, heartbeat_data: HeartbeatData) -> None:
+        """发送心跳数据
+
+        Args:
+            heartbeat_data: 心跳数据
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Sending heartbeat: clientId={heartbeat_data.client_id}, "
+                f"producers={len(heartbeat_data.producer_data_set)}, "
+                f"consumers={len(heartbeat_data.consumer_data_set)}"
+            )
+
+            # 创建心跳请求
+            request = RemotingRequestFactory.create_heartbeat_request(
+                heartbeat_data
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            heartbeat_rt = time.time() - start_time
+
+            logger.debug(
+                f"Heartbeat response received: code={response.code}, heartbeatRT={heartbeat_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 心跳成功
+                logger.info(
+                    f"Successfully sent heartbeat: clientId={heartbeat_data.client_id}, "
+                    f"producers={len(heartbeat_data.producer_data_set)}, "
+                    f"consumers={len(heartbeat_data.consumer_data_set)}, heartbeatRT={heartbeat_rt:.3f}s"
+                )
+            elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
+                # 服务不可用
+                logger.warning(
+                    f"Service not available during heartbeat: clientId={heartbeat_data.client_id}, remark={response.remark}"
+                )
+                raise BrokerResponseError(
+                    f"Service not available during heartbeat: {response.remark}",
+                    response_code=response.code,
+                )
+            elif response.code == ResponseCode.ERROR:
+                # 通用错误
+                error_msg = response.remark or "Heartbeat error"
+                logger.error(f"Heartbeat failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Heartbeat failed: {error_msg}",
+                    response_code=response.code,
+                )
+            else:
+                # 其他错误响应
+                error_msg = (
+                    response.remark
+                    or f"Unknown heartbeat error: {response.code}"
+                )
+                logger.error(f"Heartbeat failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Heartbeat failed: {error_msg}",
+                    response_code=response.code,
+                )
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during send_heartbeat: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during send_heartbeat: {e}"
             )
 
 

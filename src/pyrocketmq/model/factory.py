@@ -2,6 +2,7 @@
 RocketMQ远程命令工厂和构建器
 """
 
+import json
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
@@ -29,6 +30,7 @@ from .headers import (
     UpdateConsumerOffsetRequestHeader,
     ViewMessageRequestHeader,
 )
+from .heart_beat import HeartbeatData
 
 
 @dataclass
@@ -609,16 +611,26 @@ class RemotingRequestFactory:
         )
 
     @staticmethod
-    def create_heartbeat_request() -> RemotingCommand:
+    def create_heartbeat_request(
+        heartbeat_data: HeartbeatData,
+    ) -> RemotingCommand:
         """创建心跳请求
+
+        Args:
+            heartbeat_data: 心跳数据
 
         Returns:
             心跳请求命令
         """
+        # 将HeartbeatData转换为JSON格式的body
+        heartbeat_dict = heartbeat_data.to_dict()
+        body = json.dumps(heartbeat_dict).encode("utf-8")
+
         return RemotingCommand(
             code=RequestCode.HEART_BEAT,
             language=LanguageCode.PYTHON,
             flag=FlagType.RPC_TYPE,
+            body=body,
         )
 
     @staticmethod
