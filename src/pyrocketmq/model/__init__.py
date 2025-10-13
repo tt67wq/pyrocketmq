@@ -29,6 +29,7 @@ from .factory import (
 )
 from .message import (
     Message,
+    MessageProperty,
     create_delay_message,
     create_message,
     create_transaction_message,
@@ -75,6 +76,7 @@ __all__ = [
     "RemotingCommand",
     "Message",
     "MessageQueue",
+    "MessageProperty",
     "MessageExt",
     "ProducerData",
     "ConsumerData",

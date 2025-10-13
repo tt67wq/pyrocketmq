@@ -7,6 +7,13 @@ import time
 from typing import Dict, Optional
 
 from ..logging import LoggerFactory
+from ..model import (
+    MessageProperty,
+    MessageQueue,
+    PullMessageResult,
+    SendMessageResult,
+    SendStatus,
+)
 from ..model.enums import ResponseCode
 from ..model.factory import RemotingRequestFactory
 from ..remote.sync_remote import Remote
@@ -16,13 +23,6 @@ from .errors import (
     BrokerTimeoutError,
     MessagePullError,
     MessageSendError,
-)
-from .models import (
-    MessageProperty,
-    MessageQueue,
-    PullMessageResult,
-    SendMessageResult,
-    SendStatus,
 )
 
 logger = LoggerFactory.get_logger(__name__)
