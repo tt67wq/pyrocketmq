@@ -6,7 +6,7 @@ Broker 客户端实现
 import time
 
 from ..logging import LoggerFactory
-from ..model import HeartbeatData, PullMessageResult
+from ..model import HeartbeatData, MessageExt, PullMessageResult
 from ..model.enums import ResponseCode
 from ..model.factory import RemotingRequestFactory
 from ..remote.sync_remote import Remote
@@ -787,6 +787,110 @@ class BrokerClient:
             logger.error(f"Unexpected error during send_heartbeat: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during send_heartbeat: {e}"
+            )
+
+    def consumer_send_msg_back(
+        self,
+        message_ext: MessageExt,
+        delay_level: int,
+        consumer_group: str,
+        max_reconsume_times: int = 16,
+    ) -> None:
+        """消费者发送消息回退请求
+
+        Args:
+            message_ext: 扩展消息对象
+            delay_level: 延迟级别
+            consumer_group: 消费者组
+            max_reconsume_times: 最大重新消费次数
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Sending consumer send msg back: consumerGroup={consumer_group}, "
+                f"originTopic={message_ext.topic}, originMsgId={message_ext.message_id}, "
+                f"delayLevel={delay_level}"
+            )
+
+            # 创建消费者发送消息回退请求
+            request = (
+                RemotingRequestFactory.create_consumer_send_msg_back_request(
+                    group=consumer_group,
+                    offset=message_ext.commit_log_offset or 0,
+                    delay_level=delay_level,
+                    origin_msg_id=message_ext.message_id or "",
+                    origin_topic=message_ext.topic,
+                    max_reconsume_times=max_reconsume_times,
+                )
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            send_back_rt = time.time() - start_time
+
+            logger.debug(
+                f"Consumer send msg back response received: code={response.code}, sendBackRT={send_back_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 发送回退成功
+                logger.info(
+                    f"Successfully sent consumer send msg back: consumerGroup={consumer_group}, "
+                    f"originTopic={message_ext.topic}, originMsgId={message_ext.message_id}, "
+                    f"delayLevel={delay_level}, sendBackRT={send_back_rt:.3f}s"
+                )
+            elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
+                # 服务不可用
+                logger.warning(
+                    f"Service not available during consumer send msg back: consumerGroup={consumer_group}, remark={response.remark}"
+                )
+                raise BrokerResponseError(
+                    f"Service not available during consumer send msg back: {response.remark}",
+                    response_code=response.code,
+                )
+            elif response.code == ResponseCode.ERROR:
+                # 通用错误
+                error_msg = response.remark or "Consumer send msg back error"
+                logger.error(f"Consumer send msg back failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Consumer send msg back failed: {error_msg}",
+                    response_code=response.code,
+                )
+            else:
+                # 其他错误响应
+                error_msg = (
+                    response.remark
+                    or f"Unknown consumer send msg back error: {response.code}"
+                )
+                logger.error(f"Consumer send msg back failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Consumer send msg back failed: {error_msg}",
+                    response_code=response.code,
+                )
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during consumer_send_msg_back: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during consumer_send_msg_back: {e}"
             )
 
 

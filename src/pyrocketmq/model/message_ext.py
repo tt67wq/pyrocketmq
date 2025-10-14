@@ -26,6 +26,7 @@ class MessageExt:
     message_id: Optional[str] = None  # 消息ID
     queue_id: Optional[int] = None  # 队列ID
     queue_offset: Optional[int] = None  # 队列偏移量
+    commit_log_offset: Optional[int] = None  # 提交日志偏移量
     reconsume_times: int = 0  # 重新消费次数
     born_timestamp: Optional[int] = None  # 消息生产时间戳
     born_host: Optional[str] = None  # 消息生产主机
@@ -88,6 +89,8 @@ class MessageExt:
             result["queueId"] = self.queue_id
         if self.queue_offset is not None:
             result["queueOffset"] = self.queue_offset
+        if self.commit_log_offset is not None:
+            result["commitLogOffset"] = self.commit_log_offset
         if self.born_timestamp:
             result["bornTimestamp"] = self.born_timestamp
         if self.born_host:
@@ -131,6 +134,7 @@ class MessageExt:
             message_id=data.get("msgId"),
             queue_id=data.get("queueId"),
             queue_offset=data.get("queueOffset"),
+            commit_log_offset=data.get("commitLogOffset"),
             reconsume_times=data.get("reconsumeTimes", 0),
             born_timestamp=data.get("bornTimestamp"),
             born_host=data.get("bornHost"),
