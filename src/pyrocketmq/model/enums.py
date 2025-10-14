@@ -99,6 +99,21 @@ class FlagType(IntEnum):
     RESPONSE_TYPE = 1
 
 
+class LocalTransactionState(IntEnum):
+    """本地事务状态枚举"""
+
+    COMMIT_MESSAGE_STATE = 1  # 提交消息状态
+    ROLLBACK_MESSAGE_STATE = 2  # 回滚消息状态
+    UNKNOW_STATE = 3  # 未知状态
+
+
+# 事务类型常量
+TRANSACTION_NOT_TYPE = 0  # 非事务消息
+TRANSACTION_PREPARED_TYPE = 0x1 << 2  # 事务准备状态 (4)
+TRANSACTION_COMMIT_TYPE = 0x2 << 2  # 事务提交状态 (8)
+TRANSACTION_ROLLBACK_TYPE = 0x3 << 2  # 事务回滚状态 (12)
+
+
 class ResponseCode(IntEnum):
     """响应代码枚举"""
 

@@ -6,7 +6,17 @@ pyrocketmq模型层
 
 from .client_data import ConsumerData, ProducerData
 from .command import RemotingCommand
-from .enums import FlagType, LanguageCode, RequestCode, ResponseCode
+from .enums import (
+    TRANSACTION_COMMIT_TYPE,
+    TRANSACTION_NOT_TYPE,
+    TRANSACTION_PREPARED_TYPE,
+    TRANSACTION_ROLLBACK_TYPE,
+    FlagType,
+    LanguageCode,
+    LocalTransactionState,
+    RequestCode,
+    ResponseCode,
+)
 from .errors import (
     ConnectionClosedError,
     DeserializationError,
@@ -69,6 +79,7 @@ from .utils import (
     is_send_message_command,
     is_success_response,
     parse_command_from_json,
+    transaction_state,
     validate_command,
 )
 
@@ -94,10 +105,16 @@ __all__ = [
     "RequestCode",
     "FlagType",
     "ResponseCode",
+    "LocalTransactionState",
     "SendStatus",
     "ConsumeType",
     "MessageModel",
     "ConsumeFromWhere",
+    # 事务常量
+    "TRANSACTION_NOT_TYPE",
+    "TRANSACTION_PREPARED_TYPE",
+    "TRANSACTION_COMMIT_TYPE",
+    "TRANSACTION_ROLLBACK_TYPE",
     # 异常类型
     "RemotingCommandError",
     "SerializationError",
@@ -142,4 +159,5 @@ __all__ = [
     "is_heartbeat_command",
     "is_send_message_command",
     "is_pull_message_command",
+    "transaction_state",
 ]

@@ -6,7 +6,13 @@ Broker 客户端实现
 import time
 
 from ..logging import LoggerFactory
-from ..model import HeartbeatData, MessageExt, PullMessageResult
+from ..model import (
+    HeartbeatData,
+    LocalTransactionState,
+    MessageExt,
+    PullMessageResult,
+    transaction_state,
+)
 from ..model.enums import ResponseCode
 from ..model.factory import RemotingRequestFactory
 from ..remote.sync_remote import Remote
@@ -891,6 +897,90 @@ class BrokerClient:
             logger.error(f"Unexpected error during consumer_send_msg_back: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during consumer_send_msg_back: {e}"
+            )
+
+    def end_transaction(
+        self,
+        producer_group: str,
+        tran_state_table_offset: int,
+        commit_log_offset: int,
+        local_transaction_state: LocalTransactionState,
+        msg_id: str = "",
+        transaction_id: str = "",
+        from_transaction_check: bool = True,
+    ) -> None:
+        """结束事务请求（使用oneway通信，无需等待响应）
+
+        Args:
+            producer_group: 生产者组
+            tran_state_table_offset: 事务状态表偏移量
+            commit_log_offset: 提交日志偏移量
+            local_transaction_state: 本地事务状态
+            msg_id: 消息ID
+            transaction_id: 事务ID
+            from_transaction_check: 是否从事务检查而来
+
+        Raises:
+            BrokerConnectionError: 连接错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            # 将本地事务状态转换为事务类型
+            commit_or_rollback = transaction_state(local_transaction_state)
+
+            action = (
+                "commit"
+                if local_transaction_state
+                == LocalTransactionState.COMMIT_MESSAGE_STATE
+                else "rollback"
+                if local_transaction_state
+                == LocalTransactionState.ROLLBACK_MESSAGE_STATE
+                else "unknown"
+            )
+
+            logger.debug(
+                f"Sending end transaction {action}: producerGroup={producer_group}, "
+                f"tranStateTableOffset={tran_state_table_offset}, "
+                f"commitLogOffset={commit_log_offset}, "
+                f"localTransactionState={local_transaction_state.name}, "
+                f"commitOrRollback={commit_or_rollback}, "
+                f"msgId={msg_id}, transactionId={transaction_id}"
+            )
+
+            # 创建结束事务请求
+            request = RemotingRequestFactory.create_end_transaction_request(
+                producer_group=producer_group,
+                tran_state_table_offset=tran_state_table_offset,
+                commit_log_offset=commit_log_offset,
+                commit_or_rollback=commit_or_rollback,
+                msg_id=msg_id,
+                transaction_id=transaction_id,
+                from_transaction_check=from_transaction_check,
+            )
+
+            # 使用oneway模式发送请求，不等待响应
+            start_time = time.time()
+            self.remote.oneway(request)
+            end_tx_rt = time.time() - start_time
+
+            logger.info(
+                f"Successfully sent end transaction {action}: producerGroup={producer_group}, "
+                f"tranStateTableOffset={tran_state_table_offset}, "
+                f"commitLogOffset={commit_log_offset}, "
+                f"localTransactionState={local_transaction_state.name}, "
+                f"commitOrRollback={commit_or_rollback}, "
+                f"msgId={msg_id}, transactionId={transaction_id}, endTxRT={end_tx_rt:.3f}s"
+            )
+
+        except Exception as e:
+            if isinstance(e, BrokerConnectionError):
+                raise
+
+            logger.error(f"Unexpected error during end_transaction: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during end_transaction: {e}"
             )
 
 

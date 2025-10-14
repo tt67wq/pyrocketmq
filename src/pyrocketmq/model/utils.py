@@ -7,7 +7,13 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .command import RemotingCommand
-from .enums import FlagType, LanguageCode, RequestCode, ResponseCode
+from .enums import (
+    FlagType,
+    LanguageCode,
+    LocalTransactionState,
+    RequestCode,
+    ResponseCode,
+)
 from .errors import ValidationError
 
 
@@ -449,3 +455,29 @@ def is_pull_message_command(command: RemotingCommand) -> bool:
         是否为拉取消息命令
     """
     return command.code == RequestCode.PULL_MESSAGE
+
+
+def transaction_state(state: LocalTransactionState) -> int:
+    """将本地事务状态转换为事务类型
+
+    Args:
+        state: 本地事务状态
+
+    Returns:
+        对应的事务类型常量
+    """
+    from .enums import (
+        TRANSACTION_COMMIT_TYPE,
+        TRANSACTION_NOT_TYPE,
+        TRANSACTION_ROLLBACK_TYPE,
+        LocalTransactionState,
+    )
+
+    if state == LocalTransactionState.COMMIT_MESSAGE_STATE:
+        return TRANSACTION_COMMIT_TYPE
+    elif state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
+        return TRANSACTION_ROLLBACK_TYPE
+    elif state == LocalTransactionState.UNKNOW_STATE:
+        return TRANSACTION_NOT_TYPE
+    else:
+        return TRANSACTION_NOT_TYPE
