@@ -425,6 +425,186 @@ def create_delay_message(
     return msg
 
 
+@dataclass
+class MessageExt(Message):
+    """RocketMQ扩展消息数据结构
+
+    继承自Message，包含消息在Broker端的存储信息和元数据。
+    与Go语言实现的MessageExt结构保持兼容。
+    """
+
+    # 消息ID相关
+    msg_id: str = ""  # 消息唯一ID
+    offset_msg_id: str = ""  # 偏移量消息ID
+
+    # 存储信息
+    store_size: int = 0  # 存储大小（字节）
+    queue_offset: int = 0  # 队列偏移量
+    sys_flag: int = 0  # 系统标志
+    commit_log_offset: int = 0  # 提交日志偏移量
+    body_crc: int = 0  # 消息体CRC校验码
+
+    # 时间戳信息
+    born_timestamp: int = 0  # 消息产生时间戳
+    born_host: str = ""  # 消息产生主机地址
+    store_timestamp: int = 0  # 消息存储时间戳
+    store_host: str = ""  # 消息存储主机地址
+
+    # 消费相关信息
+    reconsume_times: int = 0  # 重新消费次数
+    prepared_transaction_offset: int = 0  # 预提交事务偏移量
+
+    def __post_init__(self):
+        """后处理，调用父类后处理并确保数据类型正确"""
+        super().__post_init__()
+
+        # 确保整数字段类型正确
+        if not isinstance(self.store_size, int):
+            self.store_size = int(self.store_size)
+        if not isinstance(self.queue_offset, int):
+            self.queue_offset = int(self.queue_offset)
+        if not isinstance(self.sys_flag, int):
+            self.sys_flag = int(self.sys_flag)
+        if not isinstance(self.commit_log_offset, int):
+            self.commit_log_offset = int(self.commit_log_offset)
+        if not isinstance(self.body_crc, int):
+            self.body_crc = int(self.body_crc)
+        if not isinstance(self.born_timestamp, int):
+            self.born_timestamp = int(self.born_timestamp)
+        if not isinstance(self.store_timestamp, int):
+            self.store_timestamp = int(self.store_timestamp)
+        if not isinstance(self.reconsume_times, int):
+            self.reconsume_times = int(self.reconsume_times)
+        if not isinstance(self.prepared_transaction_offset, int):
+            self.prepared_transaction_offset = int(
+                self.prepared_transaction_offset
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式，包含扩展字段
+
+        Returns:
+            包含所有字段的字典
+        """
+        result = super().to_dict()
+
+        # 添加MessageExt特有字段
+        result.update(
+            {
+                "msgId": self.msg_id,
+                "offsetMsgId": self.offset_msg_id,
+                "storeSize": self.store_size,
+                "queueOffset": self.queue_offset,
+                "sysFlag": self.sys_flag,
+                "commitLogOffset": self.commit_log_offset,
+                "bodyCRC": self.body_crc,
+                "bornTimestamp": self.born_timestamp,
+                "bornHost": self.born_host,
+                "storeTimestamp": self.store_timestamp,
+                "storeHost": self.store_host,
+                "reconsumeTimes": self.reconsume_times,
+                "preparedTransactionOffset": self.prepared_transaction_offset,
+            }
+        )
+
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MessageExt":
+        """从字典创建MessageExt实例
+
+        Args:
+            data: 包含消息数据的字典
+
+        Returns:
+            MessageExt实例
+        """
+        # 首先创建Message实例来处理基础字段
+        base_msg = Message.from_dict(data)
+
+        return cls(
+            # Message字段
+            topic=base_msg.topic,
+            body=base_msg.body,
+            flag=base_msg.flag,
+            transaction_id=base_msg.transaction_id,
+            batch=base_msg.batch,
+            compress=base_msg.compress,
+            queue=base_msg.queue,
+            properties=base_msg.properties,
+            # MessageExt特有字段
+            msg_id=data.get("msgId", ""),
+            offset_msg_id=data.get("offsetMsgId", ""),
+            store_size=data.get("storeSize", 0),
+            queue_offset=data.get("queueOffset", 0),
+            sys_flag=data.get("sysFlag", 0),
+            commit_log_offset=data.get("commitLogOffset", 0),
+            body_crc=data.get("bodyCRC", 0),
+            born_timestamp=data.get("bornTimestamp", 0),
+            born_host=data.get("bornHost", ""),
+            store_timestamp=data.get("storeTimestamp", 0),
+            store_host=data.get("storeHost", ""),
+            reconsume_times=data.get("reconsumeTimes", 0),
+            prepared_transaction_offset=data.get(
+                "preparedTransactionOffset", 0
+            ),
+        )
+
+    def copy(self) -> "MessageExt":
+        """创建MessageExt的副本
+
+        Returns:
+            MessageExt副本
+        """
+        return MessageExt(
+            # Message字段
+            topic=self.topic,
+            body=self.body,
+            flag=self.flag,
+            transaction_id=self.transaction_id,
+            batch=self.batch,
+            compress=self.compress,
+            queue=self.queue,
+            properties=dict(self.properties),
+            # MessageExt特有字段
+            msg_id=self.msg_id,
+            offset_msg_id=self.offset_msg_id,
+            store_size=self.store_size,
+            queue_offset=self.queue_offset,
+            sys_flag=self.sys_flag,
+            commit_log_offset=self.commit_log_offset,
+            body_crc=self.body_crc,
+            born_timestamp=self.born_timestamp,
+            born_host=self.born_host,
+            store_timestamp=self.store_timestamp,
+            store_host=self.store_host,
+            reconsume_times=self.reconsume_times,
+            prepared_transaction_offset=self.prepared_transaction_offset,
+        )
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        base_str = super().__str__()
+        return (
+            f"MessageExt[{base_str}, "
+            f"msgId='{self.msg_id}', "
+            f"queueOffset={self.queue_offset}, "
+            f"storeSize={self.store_size}]"
+        )
+
+    def __repr__(self) -> str:
+        """详细字符串表示"""
+        return (
+            f"MessageExt(topic='{self.topic}', "
+            f"msgId='{self.msg_id}', "
+            f"queueOffset={self.queue_offset}, "
+            f"storeSize={self.store_size}, "
+            f"bornTimestamp={self.born_timestamp}, "
+            f"storeTimestamp={self.store_timestamp}, "
+            f"reconsumeTimes={self.reconsume_times})"
+        )
+
+
 # 消息属性常量
 class MessageProperty:
     """消息属性常量定义"""
