@@ -4,7 +4,7 @@
 
 import asyncio
 import time
-from typing import Dict, Optional
+from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
@@ -21,6 +21,11 @@ from .errors import (
     SerializationError,
     TransportError,
 )
+
+# 客户端请求处理函数类型（异步版本）
+AsyncClientRequestFunc = Callable[
+    [RemotingCommand, Tuple[str, int]], Awaitable[Optional[RemotingCommand]]
+]
 
 
 class AsyncRemote:
@@ -42,6 +47,10 @@ class AsyncRemote:
         # opaque生成器
         self._opaque_lock = asyncio.Lock()
         self._next_opaque = config.opaque_start
+
+        # 请求处理器映射: code -> handler function
+        self._processors: Dict[int, AsyncClientRequestFunc] = {}
+        self._processors_lock = asyncio.Lock()
 
         # 清理任务
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -91,6 +100,35 @@ class AsyncRemote:
         except Exception as e:
             self._logger.error(f"关闭异步连接失败: {e}")
             raise RemoteError(f"关闭连接失败: {e}") from e
+
+    async def register_request_processor(
+        self, code: int, processor: AsyncClientRequestFunc
+    ) -> None:
+        """注册请求处理器
+
+        Args:
+            code: 请求代码
+            processor: 处理函数
+        """
+        async with self._processors_lock:
+            self._processors[code] = processor
+            self._logger.debug(f"注册异步请求处理器: code={code}")
+
+    async def unregister_request_processor(self, code: int) -> bool:
+        """取消注册请求处理器
+
+        Args:
+            code: 请求代码
+
+        Returns:
+            是否成功取消
+        """
+        async with self._processors_lock:
+            if code in self._processors:
+                del self._processors[code]
+                self._logger.debug(f"取消注册异步请求处理器: code={code}")
+                return True
+            return False
 
     async def rpc(
         self, command: RemotingCommand, timeout: Optional[float] = None
@@ -387,14 +425,17 @@ class AsyncRemote:
 
         self._logger.info("异步消息接收协程结束")
 
-    async def _handle_response(self, response: RemotingCommand) -> None:
-        """处理接收到的响应"""
-        if not response.is_response:
-            self._logger.warning(
-                f"收到的不是响应消息: opaque={response.opaque}"
-            )
-            return
+    async def _handle_response(self, command: RemotingCommand) -> None:
+        """处理接收到的命令（响应或请求）"""
+        if command.is_response:
+            # 处理响应消息
+            await self._handle_response_message(command)
+        else:
+            # 处理请求消息（服务器主动通知）
+            await self._handle_request_message(command)
 
+    async def _handle_response_message(self, response: RemotingCommand) -> None:
+        """处理响应消息"""
         opaque = response.opaque
         if opaque is None:
             self._logger.warning("响应消息缺少opaque字段")
@@ -405,6 +446,65 @@ class AsyncRemote:
             self._logger.debug(f"响应已匹配到等待者: opaque={opaque}")
         else:
             self._logger.warning(f"未找到对应的等待者: opaque={opaque}")
+
+    async def _handle_request_message(self, request: RemotingCommand) -> None:
+        """处理请求消息（服务器主动通知）"""
+        self._logger.debug(
+            f"收到服务器请求: code={request.code}, opaque={request.opaque}"
+        )
+
+        # 查找对应的处理器
+        processor_func = None
+        async with self._processors_lock:
+            processor_func = self._processors.get(request.code)
+
+        if processor_func is None:
+            self._logger.warning(
+                f"收到服务器请求，但没有对应的处理器: code={request.code}"
+            )
+            return
+
+        try:
+            # 获取远程地址信息
+            remote_addr = (
+                self.transport.config.host,
+                self.transport.config.port,
+            )
+
+            # 调用处理器
+            response = await processor_func(request, remote_addr)
+
+            # 如果处理器返回了响应，则发送回服务器
+            if response is not None:
+                await self._send_processor_response(request, response)
+
+        except Exception as e:
+            self._logger.error(
+                f"处理服务器请求时发生错误: code={request.code}, error={e}"
+            )
+
+    async def _send_processor_response(
+        self, request: RemotingCommand, response: RemotingCommand
+    ) -> None:
+        """发送处理器生成的响应"""
+        try:
+            # 设置响应的opaque和flag
+            if request.opaque is not None:
+                response.opaque = request.opaque
+            response.set_response()
+
+            # 序列化并发送响应
+            data = self._serializer.serialize(response)
+            await self.transport.output(data)
+
+            self._logger.debug(
+                f"发送处理器响应: opaque={response.opaque}, code={response.code}"
+            )
+
+        except Exception as e:
+            self._logger.error(
+                f"发送处理器响应失败: opaque={response.opaque}, error={e}"
+            )
 
     async def __aenter__(self):
         """异步上下文管理器入口"""
