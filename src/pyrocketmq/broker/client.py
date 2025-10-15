@@ -5,12 +5,14 @@ Broker 客户端实现
 
 import json
 import time
+from typing import List
 
 from ..logging import LoggerFactory
 from ..model import (
     HeartbeatData,
     LocalTransactionState,
     MessageExt,
+    MessageQueue,
     PullMessageResult,
     transaction_state,
 )
@@ -1083,6 +1085,121 @@ class BrokerClient:
             logger.error(f"Unexpected error during get_consumers_by_group: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during get_consumers_by_group: {e}"
+            )
+
+    def lock_batch_mq(
+        self, consumer_group: str, client_id: str, mqs: List[MessageQueue]
+    ) -> list:
+        """批量锁定消息队列
+
+        Args:
+            consumer_group: 消费者组名称
+            client_id: 客户端ID
+            mqs: 消息队列列表
+
+        Returns:
+            list: 锁定成功的消息队列列表
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Locking batch message queues: consumerGroup={consumer_group}, "
+                f"clientId={client_id}, mqCount={len(mqs)}"
+            )
+
+            # 创建批量锁定消息队列请求
+            request = RemotingRequestFactory.create_lock_batch_mq_request(
+                consumer_group=consumer_group,
+                client_id=client_id,
+                mqs=mqs,
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            lock_rt = time.time() - start_time
+
+            logger.debug(
+                f"Lock batch MQ response received: code={response.code}, lockRT={lock_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 解析响应体中的锁定结果
+                if response.body:
+                    try:
+                        # RocketMQ返回的锁定结果通常是JSON格式
+                        lock_result = json.loads(response.body.decode("utf-8"))
+
+                        # 根据RocketMQ协议，锁定成功的队列列表通常在lockOKMQSet字段中
+                        if (
+                            isinstance(lock_result, dict)
+                            and "lockOKMQSet" in lock_result
+                        ):
+                            locked_mqs = lock_result["lockOKMQSet"]
+                        elif isinstance(lock_result, list):
+                            # 如果直接返回列表
+                            locked_mqs = lock_result
+                        else:
+                            logger.warning(
+                                f"Unexpected lock result format: {lock_result}"
+                            )
+                            locked_mqs = []
+
+                        # 将字典格式的消息队列转换为MessageQueue对象
+
+                        locked_queue_list = [
+                            MessageQueue.from_dict(mq_dict)
+                            for mq_dict in locked_mqs
+                            if isinstance(mq_dict, dict)
+                        ]
+
+                        logger.info(
+                            f"Successfully locked {len(locked_queue_list)} message queues "
+                            f"for consumerGroup={consumer_group}, clientId={client_id}"
+                        )
+                        return locked_queue_list
+
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        logger.error(
+                            f"Failed to parse lock batch response: {e}"
+                        )
+                        raise BrokerResponseError(
+                            f"Failed to parse lock batch response: {e}",
+                            response_code=response.code,
+                        )
+                else:
+                    logger.info(
+                        f"No locked queues returned for consumerGroup={consumer_group}, "
+                        f"clientId={client_id}"
+                    )
+                    return []
+            else:
+                error_msg = f"Failed to lock batch message queues: {response.code}-{response.remark}"
+                logger.error(error_msg)
+                raise BrokerResponseError(error_msg)
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during lock_batch_mq: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during lock_batch_mq: {e}"
             )
 
 

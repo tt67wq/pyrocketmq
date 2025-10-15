@@ -4,7 +4,9 @@ RocketMQ远程命令工厂和构建器
 
 import json
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+
+from pyrocketmq.model.message_queue import MessageQueue
 
 from .command import RemotingCommand
 from .enums import FlagType, LanguageCode, RequestCode
@@ -981,4 +983,35 @@ class RemotingRequestFactory:
             language=LanguageCode.PYTHON,
             flag=FlagType.RPC_TYPE,
             ext_fields=header.encode(),
+        )
+
+    @staticmethod
+    def create_lock_batch_mq_request(
+        consumer_group: str, client_id: str, mqs: List[MessageQueue]
+    ) -> RemotingCommand:
+        """创建批量锁定消息队列请求
+
+        Args:
+            consumer_group: 消费者组名称
+            client_id: 客户端ID
+            mqs: 消息队列列表
+
+        Returns:
+            批量锁定消息队列请求命令
+        """
+        # 构建请求数据结构
+        request_data = {
+            "consumerGroup": consumer_group,
+            "clientId": client_id,
+            "mqSet": [mq.to_dict() for mq in mqs],
+        }
+
+        # 将请求数据序列化为JSON并放入body
+        body = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
+
+        return RemotingCommand(
+            code=RequestCode.LOCK_BATCH_MQ,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            body=body,
         )
