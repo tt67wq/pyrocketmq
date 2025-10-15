@@ -1015,3 +1015,34 @@ class RemotingRequestFactory:
             flag=FlagType.RPC_TYPE,
             body=body,
         )
+
+    @staticmethod
+    def create_unlock_batch_mq_request(
+        consumer_group: str, client_id: str, mqs: List[MessageQueue]
+    ) -> RemotingCommand:
+        """创建批量解锁消息队列请求
+
+        Args:
+            consumer_group: 消费者组名称
+            client_id: 客户端ID
+            mqs: 消息队列列表
+
+        Returns:
+            批量解锁消息队列请求命令
+        """
+        # 构建请求数据结构
+        request_data = {
+            "consumerGroup": consumer_group,
+            "clientId": client_id,
+            "mqSet": [mq.to_dict() for mq in mqs],
+        }
+
+        # 将请求数据序列化为JSON并放入body
+        body = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
+
+        return RemotingCommand(
+            code=RequestCode.UNLOCK_BATCH_MQ,
+            language=LanguageCode.PYTHON,
+            flag=FlagType.RPC_TYPE,
+            body=body,
+        )

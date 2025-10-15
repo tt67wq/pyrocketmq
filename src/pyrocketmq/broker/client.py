@@ -1202,6 +1202,74 @@ class BrokerClient:
                 f"Unexpected error during lock_batch_mq: {e}"
             )
 
+    def unlock_batch_mq(
+        self, consumer_group: str, client_id: str, mqs: list
+    ) -> None:
+        """批量解锁消息队列
+
+        Args:
+            consumer_group: 消费者组名称
+            client_id: 客户端ID
+            mqs: 消息队列列表
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Unlocking batch message queues: consumerGroup={consumer_group}, "
+                f"clientId={client_id}, mqCount={len(mqs)}"
+            )
+
+            # 创建批量解锁消息队列请求
+            request = RemotingRequestFactory.create_unlock_batch_mq_request(
+                consumer_group=consumer_group,
+                client_id=client_id,
+                mqs=mqs,
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            unlock_rt = time.time() - start_time
+
+            logger.debug(
+                f"Unlock batch MQ response received: code={response.code}, unlockRT={unlock_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 解锁成功
+                logger.info(
+                    f"Successfully unlocked {len(mqs)} message queues "
+                    f"for consumerGroup={consumer_group}, clientId={client_id}, unlockRT={unlock_rt:.3f}s"
+                )
+            else:
+                error_msg = f"Failed to unlock batch message queues: {response.code}-{response.remark}"
+                logger.error(error_msg)
+                raise BrokerResponseError(error_msg)
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during unlock_batch_mq: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during unlock_batch_mq: {e}"
+            )
+
 
 def create_broker_client(
     host: str, port: int, timeout: float = 30.0, **kwargs
