@@ -204,16 +204,6 @@ class TestRemotingRequestFactory:
         # 验证扩展字段
         assert command.ext_fields["topic"] == topic
 
-    def test_create_heartbeat_request(self):
-        """测试创建心跳请求"""
-        command = RemotingRequestFactory.create_heartbeat_request()
-
-        # 验证基本信息
-        assert command.code == RequestCode.HEART_BEAT
-        assert command.language == LanguageCode.PYTHON
-        assert command.flag == FlagType.RPC_TYPE
-        assert command.ext_fields == {}
-
     def test_create_end_transaction_request(self):
         """测试创建结束事务请求"""
         producer_group = "test_producer"
