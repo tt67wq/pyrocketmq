@@ -3,6 +3,6 @@
   "port": 20911,
   "topic": "test_im_015",
   "timeout": 30.0,
-  "consumer_group": "GID_POETRY",
+  "consumer_group": "GID_TEST",
   "queue_id": 1
 }

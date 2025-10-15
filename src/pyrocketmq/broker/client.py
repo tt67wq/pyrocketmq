@@ -3,6 +3,7 @@ Broker 客户端实现
 提供同步和异步两种方式与 RocketMQ Broker 进行通信。
 """
 
+import json
 import time
 
 from ..logging import LoggerFactory
@@ -981,6 +982,107 @@ class BrokerClient:
             logger.error(f"Unexpected error during end_transaction: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during end_transaction: {e}"
+            )
+
+    def get_consumers_by_group(self, consumer_group: str) -> list:
+        """获取指定消费者组的消费者列表
+
+        Args:
+            consumer_group: 消费者组名称
+
+        Returns:
+            list: 消费者ID列表
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(f"Getting consumer list for group: {consumer_group}")
+
+            # 创建获取消费者列表请求
+            request = RemotingRequestFactory.create_get_consumer_list_request(
+                consumer_group
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            get_consumers_rt = time.time() - start_time
+
+            logger.debug(
+                f"Get consumer list response received: code={response.code}, "
+                f"getConsumersRT={get_consumers_rt:.3f}s"
+            )
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 解析响应体中的消费者列表
+                if response.body:
+                    try:
+                        # RocketMQ返回的消费者列表通常是JSON格式
+                        consumer_data = json.loads(
+                            response.body.decode("utf-8")
+                        )
+
+                        # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
+                        if (
+                            isinstance(consumer_data, dict)
+                            and "consumerIdList" in consumer_data
+                        ):
+                            consumer_list = consumer_data["consumerIdList"]
+                        elif isinstance(consumer_data, list):
+                            # 如果直接返回列表
+                            consumer_list = consumer_data
+                        else:
+                            logger.warning(
+                                f"Unexpected consumer data format: {consumer_data}"
+                            )
+                            consumer_list = []
+
+                        logger.info(
+                            f"Successfully got consumer list for group '{consumer_group}': "
+                            f"{len(consumer_list)} consumers"
+                        )
+                        return consumer_list
+
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                        logger.error(
+                            f"Failed to parse consumer list response: {e}"
+                        )
+                        # 如果解析失败，返回空列表而不是抛出异常
+                        logger.warning(
+                            "Returning empty consumer list due to parsing failure"
+                        )
+                        return []
+                else:
+                    logger.info(
+                        f"No consumer data returned for group '{consumer_group}'"
+                    )
+                    return []
+            else:
+                error_msg = f"Failed to get consumer list for group '{consumer_group}': {response.code}-{response.remark}"
+                logger.error(error_msg)
+                raise BrokerResponseError(error_msg)
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during get_consumers_by_group: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during get_consumers_by_group: {e}"
             )
 
 
