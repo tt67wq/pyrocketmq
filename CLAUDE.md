@@ -9,16 +9,17 @@ pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协�
 ### 项目状态
 - **协议模型层**: ✅ 完整实现，包含所有核心数据结构
 - **请求工厂**: ✅ RemotingRequestFactory实现，支持所有RocketMQ请求类型
-- **网络传输层**: 🚧 基本完成，支持TCP连接状态机
+- **网络传输层**: ✅ 基于状态机的TCP连接实现
 - **远程通信层**: ✅ 异步/同步通信实现
 - **连接池**: ✅ 连接池管理功能
-- **NameServer支持**: 🚧 开发中
+- **NameServer支持**: ✅ 基础客户端实现
+- **Broker支持**: ✅ 基础客户端实现
 
 ## 开发环境配置
 
 ### 环境设置
 ```bash
-# 激活虚拟环境
+# 激活虚拟环境（如果使用uv）
 source .venv/bin/activate
 
 # 设置PYTHONPATH（必需）
@@ -26,6 +27,8 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 
 # 安装依赖
 pip install -e .
+# 或使用uv
+uv sync
 ```
 
 ### 测试运行
@@ -33,17 +36,21 @@ pip install -e .
 # 运行所有测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/
 
-# 运行模型层测试
+# 运行特定模块测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/ -v
-
-# 运行传输层测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/ -v
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/remote/ -v
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/broker/ -v
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/nameserver/ -v
 
 # 运行单个测试文件
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/test_serializer.py -v
 
 # 运行单个测试方法
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::test_serialize_basic_command -v
+
+# 运行异步测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/ -v --asyncio-mode=auto
 ```
 
 ### 开发工具
@@ -69,12 +76,19 @@ src/pyrocketmq/
 │   ├── factory.py      # 工厂方法和构建器
 │   ├── headers.py      # 请求Header数据结构定义
 │   ├── utils.py        # 工具函数
-│   └── errors.py       # 模型层异常定义
-├── transport/          # 网络传输层 🚧
+│   ├── errors.py       # 模型层异常定义
+│   ├── message.py      # 消息数据结构
+│   ├── message_ext.py  # 扩展消息数据结构
+│   ├── message_queue.py # 消息队列数据结构
+│   ├── message_results.py # 消息处理结果
+│   ├── producer_consumer.py # 生产者消费者模型
+│   ├── heart_beat.py   # 心跳数据结构
+│   ├── client_data.py  # 客户端数据
+│   └── result_data.py  # 结果数据结构
+├── transport/          # 网络传输层 ✅
 │   ├── abc.py          # 传输层抽象接口
 │   ├── tcp.py          # TCP连接实现（基于状态机）
 │   ├── config.py       # 传输配置管理
-│   ├── states.py       # 连接状态机定义
 │   └── errors.py       # 传输层异常定义
 ├── remote/             # 远程通信层 ✅
 │   ├── async_remote.py # 异步远程通信实现
@@ -86,8 +100,13 @@ src/pyrocketmq/
 ├── logging/           # 日志模块 ✅
 │   ├── logger.py       # 日志记录器
 │   └── config.py       # 日志配置
-└── nameserver/        # NameServer支持 🚧
-    └── ns.md           # NameServer协议文档
+├── nameserver/        # NameServer客户端 ✅
+│   ├── client.py       # NameServer客户端实现
+│   ├── models.py       # NameServer数据模型
+│   └── errors.py       # NameServer异常定义
+└── broker/            # Broker客户端 ✅
+    ├── client.py       # Broker客户端实现
+    └── errors.py       # Broker异常定义
 ```
 
 ### 核心设计原则
@@ -107,6 +126,11 @@ src/pyrocketmq/
 - 严格的数据验证
 - 丰富的异常处理层次
 
+#### 4. 异步优先
+- 基于asyncio的异步网络通信
+- 同步接口作为异步接口的封装
+- 状态机驱动的连接管理
+
 ## 核心模块详解
 
 ### Model层 (`src/pyrocketmq/model/`)
@@ -118,6 +142,12 @@ src/pyrocketmq/
   - 支持扩展字段管理
   - 内置flag类型判断（is_request, is_response, is_oneway）
   - 自动header序列化/反序列化
+
+#### 消息数据结构
+- **Message**: `model/message.py` - 基础消息结构
+- **MessageExt**: `model/message_ext.py` - 扩展消息结构，包含事务状态、偏移量等信息
+- **MessageQueue**: `model/message_queue.py` - 消息队列信息
+- **MessageResults**: `model/message_results.py` - 消息处理结果
 
 #### RemotingCommandSerializer序列化器
 - **位置**: `model/serializer.py`
@@ -195,6 +225,20 @@ src/pyrocketmq/
   - 状态机驱动的连接管理
   - 自动重连机制
   - 心跳检测支持
+
+### NameServer客户端 (`src/pyrocketmq/nameserver/`)
+
+#### 客户端实现
+- **位置**: `nameserver/client.py`
+- **功能**: NameServer通信客户端
+- **特性**: 支持路由信息查询、主题管理等
+
+### Broker客户端 (`src/pyrocketmq/broker/`)
+
+#### 客户端实现
+- **位置**: `broker/client.py`
+- **功能**: Broker通信客户端
+- **特性**: 支持消息发送、拉取、偏移量管理等
 
 ## 开发模式
 
@@ -386,13 +430,17 @@ async with pool.get_connection() as conn:
 - **Model层**: `RemotingCommandError`, `SerializationError`, `DeserializationError`, `ProtocolError`
 - **Transport层**: `TransportError`, `ConnectionError`, `ConnectionClosedError`
 - **Remote层**: `RemoteError`, `RpcTimeoutError`, `ConfigurationError`, `MaxWaitersExceededError`
+- **NameServer层**: `NameServerError`
+- **Broker层**: `BrokerError`
 
 ## 测试策略
 
 ### 测试覆盖
-- **模型层测试**: 协议序列化/反序列化、数据结构验证
-- **传输层测试**: 连接状态机、TCP通信
-- **远程通信测试**: 异步/同步RPC调用
+- **模型层测试**: 协议序列化/反序列化、数据结构验证、请求工厂测试
+- **传输层测试**: 连接状态机、TCP通信、异步连接测试
+- **远程通信测试**: 异步/同步RPC调用、连接池测试
+- **Broker测试**: 偏移量查询、消息拉取、搜索功能测试
+- **NameServer测试**: 路由信息、客户端通信测试
 - **边界条件测试**: 大小限制、空数据、无效数据
 - **性能测试**: 大消息体处理、并发连接
 
@@ -400,6 +448,13 @@ async with pool.get_connection() as conn:
 必须设置`PYTHONPATH`环境变量以确保能正确导入模块：
 ```bash
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
+```
+
+### 异步测试配置
+项目使用pytest-asyncio进行异步测试，配置在`pyproject.toml`中：
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 ```
 
 ## 常见任务
@@ -496,6 +551,34 @@ print(f"连接状态: {async_remote.transport.current_state_name}")
 print(f"是否已连接: {async_remote.transport.is_connected}")
 ```
 
+### 运行特定测试
+```bash
+# 运行异步传输测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/test_async_connection.py -v
+
+# 运行状态机测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/test_state_transitions.py -v
+
+# 运行远程通信测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/remote/test_async_remote.py -v
+```
+
+## 依赖管理
+
+项目使用uv作为依赖管理工具：
+- `pyproject.toml`: 项目配置和依赖声明
+- `uv.lock`: 锁定的依赖版本
+- `.python-version`: 指定Python 3.11
+
+### 安装依赖
+```bash
+# 使用pip
+pip install -e .
+
+# 使用uv（推荐）
+uv sync
+```
+
 ## 注意事项
 
 1. **环境变量**: 开发时必须设置`PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src`
@@ -505,3 +588,5 @@ print(f"是否已连接: {async_remote.transport.is_connected}")
 5. **类型安全**: 所有代码都使用类型注解，确保编译时类型检查
 6. **异步模式**: 远程通信主要基于asyncio，同步模式是其封装
 7. **连接管理**: 使用连接池可以提高性能，避免频繁创建连接
+8. **测试模式**: 异步测试需要设置`--asyncio-mode=auto`参数
+9. **依赖管理**: 推荐使用uv进行依赖管理，确保版本一致性
