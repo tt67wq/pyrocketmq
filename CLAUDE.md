@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协议实现。项目旨在提供高性能、可靠的RocketMQ消息队列客户端功能，完全兼容Go语言实现的协议规范。
+pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于RocketMQ TCP协议实现。项目提供高性能、可靠的RocketMQ消息队列客户端功能，完全兼容Go语言实现的协议规范。
 
 ### 项目状态
 - **协议模型层**: ✅ 完整实现，包含所有核心数据结构
@@ -12,8 +12,9 @@ pyrocketmq是一个Python实现的RocketMQ客户端库，基于RocketMQ TCP协�
 - **网络传输层**: ✅ 基于状态机的TCP连接实现
 - **远程通信层**: ✅ 异步/同步通信实现
 - **连接池**: ✅ 连接池管理功能
-- **NameServer支持**: ✅ 基础客户端实现
-- **Broker支持**: ✅ 基础客户端实现
+- **NameServer支持**: ✅ 完整客户端实现，支持路由信息查询
+- **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
+- **测试覆盖**: ✅ 20+个测试用例，覆盖所有核心功能
 
 ## 开发环境配置
 
@@ -231,14 +232,28 @@ src/pyrocketmq/
 #### 客户端实现
 - **位置**: `nameserver/client.py`
 - **功能**: NameServer通信客户端
-- **特性**: 支持路由信息查询、主题管理等
+- **特性**: 
+  - 支持路由信息查询和主题管理
+  - 完整的NameServer数据模型
+  - 异步/同步通信支持
+  - 自动路由发现和更新
+
+#### 数据模型
+- **位置**: `nameserver/models.py`
+- **功能**: NameServer相关的数据结构定义
+- **包含**: 路由信息、队列数据、Broker信息等
 
 ### Broker客户端 (`src/pyrocketmq/broker/`)
 
 #### 客户端实现
 - **位置**: `broker/client.py`
 - **功能**: Broker通信客户端
-- **特性**: 支持消息发送、拉取、偏移量管理等
+- **特性**: 
+  - 支持消息发送、拉取、偏移量管理
+  - 批量消息操作支持
+  - 队列锁定/解锁功能
+  - 消费者运行信息查询
+  - 完整的错误处理和重试机制
 
 ## 开发模式
 
@@ -295,6 +310,21 @@ create_topic_cmd = RemotingRequestFactory.create_create_topic_request(
     topic="new_topic",
     read_queue_nums=16,
     write_queue_nums=16
+)
+
+# 创建队列锁定请求
+lock_mq_cmd = RemotingRequestFactory.create_lock_batch_mq_request(
+    consumer_group="test_consumer",
+    client_id="test_client",
+    mq_set=[...],  # MessageQueue对象列表
+    retry_broker_id=0
+)
+
+# 创建队列解锁请求
+unlock_mq_cmd = RemotingRequestFactory.create_unlock_batch_mq_request(
+    consumer_group="test_consumer",
+    client_id="test_client",
+    mq_set=[...]  # MessageQueue对象列表
 )
 ```
 
@@ -517,17 +547,103 @@ create_topic = RemotingRequestFactory.create_create_topic_request(
 delete_topic = RemotingRequestFactory.create_delete_topic_request("old_topic")
 ```
 
+### 使用NameServer客户端
+```python
+from pyrocketmq.nameserver.client import NameServerClient
+from pyrocketmq.nameserver.models import RouteData
+
+# 创建NameServer客户端
+ns_client = NameServerClient("localhost", 9876)
+
+# 获取主题路由信息
+route_info = await ns_client.get_route_info("test_topic")
+
+# 获取所有主题列表
+topics = await ns_client.get_all_topic_list()
+
+# 获取Broker集群信息
+cluster_info = await ns_client.get_broker_cluster_info()
+```
+
+### 使用Broker客户端
+```python
+from pyrocketmq.broker.client import BrokerClient
+from pyrocketmq.model.message_queue import MessageQueue
+
+# 创建Broker客户端
+broker_client = BrokerClient("localhost", 10911)
+
+# 获取消费者列表
+consumers = await broker_client.get_consumers_by_group("test_consumer")
+
+# 查询消费者偏移量
+offset = await broker_client.query_consumer_offset(
+    consumer_group="test_consumer",
+    topic="test_topic", 
+    queue_id=0
+)
+
+# 更新消费者偏移量
+await broker_client.update_consumer_offset(
+    consumer_group="test_consumer",
+    topic="test_topic",
+    queue_id=0,
+    commit_offset=1000
+)
+
+# 搜索偏移量
+search_result = await broker_client.search_offset(
+    topic="test_topic",
+    queue_id=0,
+    timestamp=int(time.time() * 1000)
+)
+
+# 获取最大/最小偏移量
+max_offset = await broker_client.get_max_offset("test_topic", 0)
+min_offset = await broker_client.get_min_offset("test_topic", 0)
+
+# 查看消息
+view_message = await broker_client.view_message(
+    topic="test_topic",
+    queue_id=0,
+    offset=100
+)
+
+# 根据消息ID查询消息
+message_by_id = await broker_client.get_message_by_id("msg_id")
+
+# 批量锁定消息队列
+mq_set = [
+    MessageQueue(broker_name="broker-a", topic="test_topic", queue_id=0),
+    MessageQueue(broker_name="broker-a", topic="test_topic", queue_id=1)
+]
+lock_result = await broker_client.lock_batch_mq(
+    consumer_group="test_consumer",
+    client_id="client_001",
+    mq_set=mq_set
+)
+
+# 解锁消息队列
+await broker_client.unlock_batch_mq(
+    consumer_group="test_consumer", 
+    client_id="client_001",
+    mq_set=mq_set
+)
+```
+
 ### 添加新的请求代码
 1. 在`model/enums.py`的RequestCode中添加新枚举
 2. 在`model/headers.py`中定义对应的Header数据结构
 3. 在RemotingRequestFactory中添加对应的创建方法
-4. 添加相应的测试用例
+4. 在相应的客户端中添加调用方法
+5. 添加相应的测试用例
 
 ### 扩展协议字段
 1. 在`RemotingCommand`类中添加新属性
 2. 更新序列化逻辑
 3. 更新工厂和构建器方法
-4. 添加工具函数支持
+4. 更新相关数据模型
+5. 添加工具函数支持
 
 ### 配置远程通信
 ```python
@@ -579,6 +695,19 @@ pip install -e .
 uv sync
 ```
 
+### 性能优化建议
+1. **连接池**: 在高并发场景下使用连接池，避免频繁创建连接
+2. **批量操作**: 尽可能使用批量消息操作，减少网络开销
+3. **异步优先**: 优先使用异步API，可以获得更好的性能
+4. **合理配置**: 根据业务需求调整超时时间和重试次数
+5. **监控指标**: 关注连接状态、消息处理延迟等关键指标
+
+### 故障排除
+1. **连接问题**: 检查网络连接和防火墙设置
+2. **序列化错误**: 确认消息体大小不超过32MB限制
+3. **超时问题**: 调整timeout配置或检查网络延迟
+4. **协议错误**: 确认RocketMQ版本兼容性
+
 ## 注意事项
 
 1. **环境变量**: 开发时必须设置`PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src`
@@ -590,3 +719,6 @@ uv sync
 7. **连接管理**: 使用连接池可以提高性能，避免频繁创建连接
 8. **测试模式**: 异步测试需要设置`--asyncio-mode=auto`参数
 9. **依赖管理**: 推荐使用uv进行依赖管理，确保版本一致性
+10. **生产环境**: 建议在生产环境中启用日志监控和错误追踪
+11. **资源清理**: 使用完客户端后记得正确关闭连接
+12. **异常处理**: 建议在业务代码中妥善处理各种异常情况

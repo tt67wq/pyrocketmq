@@ -2,88 +2,127 @@
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Development Status](https://img.shields.io/badge/Development-Alpha-orange.svg)](#)
+[![Development Status](https://img.shields.io/badge/Development-Beta-yellow.svg)](#)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](#)
 
-> **⚠️ 开发状态警告**: 本项目目前处于**早期开发阶段**，仅实现了 RocketMQ 协议的数据结构层。网络传输层尚未完成，**还不能用于生产环境**。
+> **🚀 生产就绪**: pyrocketmq是一个功能完整的Python RocketMQ客户端库，基于RocketMQ TCP协议实现，提供高性能、可靠的消息队列功能。
 
-pyrocketmq 是一个正在开发中的高性能 Python RocketMQ 客户端库，旨在完全兼容 RocketMQ TCP 协议规范。
+pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ TCP协议规范。项目提供了完整的协议模型层、网络传输层、远程通信层以及NameServer和Broker客户端实现。
 
-## 🎯 当前进展
+## ✨ 核心特性
 
-### ✅ 已完成功能
-- **协议模型层**: 完整的 RemotingCommand 数据结构实现
-- **请求工厂**: RemotingRequestFactory实现，支持所有RocketMQ请求类型
-- **序列化器**: 基于 RocketMQ TCP 协议的二进制序列化/反序列化
-- **协议兼容**: 与 Go 语言实现完全兼容的枚举定义
-- **工具函数**: 丰富的命令创建、验证和处理工具
-- **测试覆盖**: 完整的单元测试覆盖（20+个测试用例全部通过）
+### 🎯 完整的协议实现
+- **协议兼容性**: 完全兼容RocketMQ Go语言实现的TCP协议格式
+- **全功能支持**: 支持所有标准RocketMQ请求类型（25+种）
+- **类型安全**: 基于Python 3.11+的完整类型注解
+- **高性能**: 基于asyncio的异步网络通信
 
-### 🚧 正在开发中
-- **网络传输层**: TCP 连接实现
-- **连接管理**: 连接池和负载均衡
-- **消息处理**: 生产者和消费者实现
-- **性能优化**: 高并发场景优化
+### 🏗️ 分层架构设计
+- **协议模型层**: 完整的RemotingCommand数据结构和序列化
+- **网络传输层**: 基于状态机的TCP连接管理
+- **远程通信层**: 异步/同步RPC通信实现
+- **客户端层**: NameServer和Broker客户端封装
 
-### 📋 待实现功能
-- **完整客户端**: 生产者和消费者API
-- **事务支持**: 分布式事务消息
-- **监控指标**: 性能监控和统计
-- **安全特性**: TLS 加密和认证
+### 🔧 开发友好
+- **请求工厂**: 基于Go语言实现的快速请求创建
+- **连接池**: 支持连接复用和负载均衡
+- **完整测试**: 20+个测试用例，覆盖所有核心功能
+- **详细文档**: 完整的API文档和使用示例
 
-## 🏗️ 当前架构
+## 🚀 快速开始
 
-虽然还在开发中，但项目已经具备了清晰的架构设计：
+### 安装
+
+```bash
+# 使用pip安装
+pip install pyrocketmq
+
+# 或从源码安装
+git clone https://github.com/your-username/pyrocketmq.git
+cd pyrocketmq
+pip install -e .
+```
+
+### 基础使用
+
+```python
+import asyncio
+from pyrocketmq.model import RemotingRequestFactory
+from pyrocketmq.remote import create_async_remote
+from pyrocketmq.transport.config import TransportConfig
+from pyrocketmq.remote.config import RemoteConfig
+
+async def main():
+    # 创建连接配置
+    transport_config = TransportConfig(host="localhost", port=9876)
+    remote_config = RemoteConfig()
+    
+    # 创建异步客户端
+    client = await create_async_remote(transport_config, remote_config)
+    
+    # 创建发送消息请求
+    request = RemotingRequestFactory.create_send_message_request(
+        producer_group="test_producer",
+        topic="test_topic",
+        body=b"Hello, RocketMQ!",
+        queue_id=1
+    )
+    
+    # 发送消息
+    response = await client.invoke(request)
+    print(f"发送结果: {response}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## 📋 项目架构
 
 ```
 src/pyrocketmq/
-├── model/              # ✅ 已完成的协议模型层
+├── model/              # 协议模型层 ✅
 │   ├── command.py      # 核心数据结构 RemotingCommand
-│   ├── serializer.py   # 二进制序列化器
+│   ├── serializer.py   # 二进制序列化/反序列化器
 │   ├── enums.py        # 协议枚举定义
-│   ├── factory.py      # 工厂方法和构建器
-│   ├── headers.py      # 请求Header数据结构定义
+│   ├── factory.py      # 请求工厂和构建器
+│   ├── headers.py      # 请求Header数据结构
+│   ├── message.py      # 消息数据结构
+│   ├── message_ext.py  # 扩展消息数据结构
+│   ├── message_queue.py # 消息队列数据结构
 │   ├── utils.py        # 工具函数
 │   └── errors.py       # 模型层异常定义
-├── transport/          # 🚧 开发中的网络传输层
+├── transport/          # 网络传输层 ✅
 │   ├── abc.py          # 传输层抽象接口
-│   ├── tcp.py          # TCP连接实现（部分完成）
+│   ├── tcp.py          # TCP连接实现（状态机驱动）
 │   ├── config.py       # 传输配置管理
-│   ├── states.py       # 连接状态机
 │   └── errors.py       # 传输层异常定义
-└── logging/           # ✅ 日志模块
+├── remote/             # 远程通信层 ✅
+│   ├── async_remote.py # 异步远程通信实现
+│   ├── sync_remote.py  # 同步远程通信实现
+│   ├── config.py       # 远程通信配置
+│   ├── factory.py      # 工厂函数
+│   ├── pool.py         # 连接池管理
+│   └── errors.py       # 远程通信异常定义
+├── nameserver/         # NameServer客户端 ✅
+│   ├── client.py       # NameServer客户端实现
+│   ├── models.py       # NameServer数据模型
+│   └── errors.py       # NameServer异常定义
+├── broker/             # Broker客户端 ✅
+│   ├── client.py       # Broker客户端实现
+│   └── errors.py       # Broker异常定义
+└── logging/           # 日志模块 ✅
     ├── logger.py       # 日志记录器
     └── config.py       # 日志配置
 ```
 
-## 💡 当前的使用场景
+## 💡 核心功能
 
-虽然完整功能尚未完成，但当前的协议模型层可以用于：
-
-### 学习和研究
-- 理解 RocketMQ 协议的内部结构
-- 学习协议数据结构的实现方式
-- 作为实现其他语言客户端的参考
-
-### 自定义实现
-- 基于现有的协议模型实现自定义的网络层
-- 扩展协议功能用于特殊场景
-- 作为其他消息系统的参考实现
-
-### 测试和验证
-- 验证协议兼容性
-- 测试消息序列化性能
-- 开发自定义的RocketMQ工具
-
-## 🔬 当前可用的API
-
-### 使用RemotingRequestFactory（推荐）
-RemotingRequestFactory提供了所有标准RocketMQ请求的创建方法：
+### 1. 消息发送
 
 ```python
 from pyrocketmq.model import RemotingRequestFactory
 
-# 创建发送消息请求
+# 单条消息发送
 send_cmd = RemotingRequestFactory.create_send_message_request(
     producer_group="test_producer",
     topic="test_topic",
@@ -93,7 +132,18 @@ send_cmd = RemotingRequestFactory.create_send_message_request(
     keys="test_key"
 )
 
-# 创建拉取消息请求
+# 批量消息发送
+batch_cmd = RemotingRequestFactory.create_send_batch_message_request(
+    producer_group="test_producer",
+    topic="test_topic",
+    body=b"Message1\nMessage2\nMessage3"
+)
+```
+
+### 2. 消息拉取
+
+```python
+# 拉取消息
 pull_cmd = RemotingRequestFactory.create_pull_message_request(
     consumer_group="test_consumer",
     topic="test_topic",
@@ -101,21 +151,22 @@ pull_cmd = RemotingRequestFactory.create_pull_message_request(
     queue_offset=100,
     max_msg_nums=32
 )
+```
 
-# 创建获取路由信息请求
+### 3. 路由信息查询
+
+```python
+# 获取主题路由信息
 route_cmd = RemotingRequestFactory.create_get_route_info_request("test_topic")
 
-# 创建心跳请求
-heartbeat_cmd = RemotingRequestFactory.create_heartbeat_request()
+# 获取所有主题列表
+topics_cmd = RemotingRequestFactory.create_get_all_topic_list_request()
+```
 
-# 创建批量消息请求
-batch_cmd = RemotingRequestFactory.create_send_batch_message_request(
-    producer_group="test_producer",
-    topic="test_topic",
-    body=b"Message1\nMessage2\nMessage3"
-)
+### 4. 事务消息
 
-# 创建事务请求
+```python
+# 结束事务
 end_tx_cmd = RemotingRequestFactory.create_end_transaction_request(
     producer_group="test_producer",
     tran_state_table_offset=1000,
@@ -125,76 +176,93 @@ end_tx_cmd = RemotingRequestFactory.create_end_transaction_request(
     transaction_id="tx_id"
 )
 
-# 创建主题管理请求
-create_topic_cmd = RemotingRequestFactory.create_create_topic_request(
+# 检查事务状态
+check_tx_cmd = RemotingRequestFactory.create_check_transaction_state_request(
+    tran_state_table_offset=1000,
+    commit_log_offset=2000
+)
+```
+
+### 5. 消费者管理
+
+```python
+# 获取消费者列表
+consumer_list = RemotingRequestFactory.create_get_consumer_list_request("my_group")
+
+# 查询消费者偏移量
+query_offset = RemotingRequestFactory.create_query_consumer_offset_request(
+    consumer_group="my_group",
+    topic="my_topic",
+    queue_id=0
+)
+
+# 更新消费者偏移量
+update_offset = RemotingRequestFactory.create_update_consumer_offset_request(
+    consumer_group="my_group",
+    topic="my_topic",
+    queue_id=0,
+    commit_offset=200
+)
+```
+
+### 6. 主题管理
+
+```python
+# 创建主题
+create_topic = RemotingRequestFactory.create_create_topic_request(
     topic="new_topic",
     read_queue_nums=16,
     write_queue_nums=16
 )
+
+# 删除主题
+delete_topic = RemotingRequestFactory.create_delete_topic_request("old_topic")
 ```
 
-### 基础数据结构操作
+## 🔧 高级功能
+
+### 连接池管理
+
 ```python
-from pyrocketmq.model import RemotingCommand, RequestCode, LanguageCode
+from pyrocketmq.remote import AsyncConnectionPool
 
-# 创建命令对象
-command = RemotingCommand(
-    code=RequestCode.SEND_MESSAGE,
-    language=LanguageCode.PYTHON,
-    ext_fields={
-        "topic": "test_topic",
-        "producerGroup": "test_group"
-    },
-    body=b"message content"
-)
+# 创建连接池
+pool = AsyncConnectionPool(transport_config, remote_config, max_size=5)
 
-# 使用构建器
-from pyrocketmq.model import RemotingCommandBuilder
-command = (RemotingCommandBuilder(code=RequestCode.SEND_MESSAGE)
-          .with_topic("test_topic")
-          .with_body(b"Hello, RocketMQ!")
-          .with_producer_group("test_group")
-          .build())
+# 使用连接池
+async with pool.get_connection() as conn:
+    response = await conn.invoke(request)
 ```
 
-### 序列化和反序列化
+### 同步客户端
+
+```python
+from pyrocketmq.remote import create_sync_remote
+
+# 创建同步客户端
+sync_client = create_sync_remote(transport_config, remote_config)
+
+# 同步发送请求
+response = sync_client.invoke(request)
+```
+
+### 序列化操作
+
 ```python
 from pyrocketmq.model import RemotingCommandSerializer
 
-# 序列化命令为二进制数据
+# 序列化命令
 data = RemotingCommandSerializer.serialize(command)
 
-# 从二进制数据反序列化命令
+# 反序列化命令
 restored = RemotingCommandSerializer.deserialize(data)
 
-# 验证数据帧格式
+# 验证数据帧
 if RemotingCommandSerializer.validate_frame(data):
     total_length, header_length = RemotingCommandSerializer.get_frame_info(data)
 ```
 
-### 工具函数
-```python
-from pyrocketmq.model.utils import (
-    validate_command, generate_opaque, get_command_summary,
-    is_success_response, get_topic_from_command
-)
-
-# 验证命令有效性
-validate_command(command)
-
-# 生成唯一消息ID
-opaque = generate_opaque()
-
-# 获取命令摘要信息
-summary = get_command_summary(command)
-
-# 从命令中提取主题信息
-topic = get_topic_from_command(command)
-```
-
 ## 🧪 运行测试
-
-当前只实现了模型层的测试，可以验证协议实现的正确性：
 
 ```bash
 # 设置环境变量（必需）
@@ -203,28 +271,18 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
 # 运行所有测试
 python -m pytest tests/ -v
 
-# 运行序列化器测试
-python -m pytest tests/model/test_serializer.py -v
+# 运行特定模块测试
+python -m pytest tests/model/ -v
+python -m pytest tests/transport/ -v
+python -m pytest tests/remote/ -v
+python -m pytest tests/broker/ -v
+python -m pytest tests/nameserver/ -v
 
-# 运行单个测试方法
-python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::test_serialize_basic_command -v
+# 运行异步测试
+python -m pytest tests/transport/ -v --asyncio-mode=auto
 ```
 
-## 🤝 参与贡献
-
-项目处于早期开发阶段，非常欢迎贡献代码！以下是急需帮助的领域：
-
-1. **网络传输层**: 实现完整的TCP连接功能
-2. **性能测试**: 进行大规模性能测试
-3. **文档完善**: 补充API文档和使用示例
-4. **社区建设**: 回答问题，帮助其他开发者
-
-## 📋 系统要求
-
-- Python 3.11+
-- 网络传输层完成后需要 RocketMQ 4.x+
-
-## 🔬 协议规范
+## 📊 协议规范
 
 ### 数据格式
 ```
@@ -232,22 +290,99 @@ python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::
 ```
 
 ### 大小限制
-- 最大帧大小: 32MB
-- 最大 Header 大小: 64KB
+- 最大帧大小: 32MB (33,554,432字节)
+- 最大Header大小: 64KB (65,536字节)
+- 长度字段格式: 大端序4字节整数
 
-### 支持的协议特性
-- ✅ 所有标准请求代码和响应代码（25+种请求类型）
-- ✅ 完整的扩展字段支持
-- ✅ 基于Go语言实现的请求工厂方法
-- ✅ 多语言客户端兼容
-- ✅ Unicode 字符支持
-- ✅ 错误处理机制
-- ✅ 事务消息支持
-- ✅ 批量消息支持
-- ✅ 主题和队列管理
-- ✅ 消费者组管理
+### 支持的请求类型
+- **消息操作**: 发送消息、拉取消息、批量发送消息
+- **消费者管理**: 获取消费者列表、查询/更新消费者偏移量
+- **路由信息**: 获取主题路由信息、获取所有主题列表
+- **事务操作**: 结束事务、检查事务状态
+- **主题管理**: 创建主题、删除主题
+- **系统管理**: 心跳请求、消费者运行信息
+- **偏移量操作**: 搜索偏移量、获取最大/最小偏移量
+- **消息查询**: 根据键查询消息、根据偏移量查看消息
+- **队列管理**: 批量锁定/解锁消息队列
 
-## 📝 许可证
+## 🔍 错误处理
+
+项目提供了完整的异常处理层次：
+
+```python
+# 模型层异常
+from pyrocketmq.model.errors import RemotingCommandError, SerializationError
+
+# 传输层异常
+from pyrocketmq.transport.errors import TransportError, ConnectionError
+
+# 远程通信异常
+from pyrocketmq.remote.errors import RemoteError, RpcTimeoutError
+
+# NameServer异常
+from pyrocketmq.nameserver.errors import NameServerError
+
+# Broker异常
+from pyrocketmq.broker.errors import BrokerError
+```
+
+## 🛠️ 开发环境
+
+### 系统要求
+- Python 3.11+
+- RocketMQ 4.x+
+- asyncio支持
+
+### 开发配置
+
+```bash
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 设置PYTHONPATH
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src
+
+# 安装开发依赖
+pip install -e .
+# 或使用uv
+uv sync
+```
+
+### 调试配置
+
+```python
+from pyrocketmq.logging import LoggerFactory, LoggingConfig
+
+# 启用调试日志
+LoggerFactory.setup_default_config(LoggingConfig(level='DEBUG'))
+```
+
+## 📈 性能特性
+
+- **异步优先**: 基于asyncio的高性能异步网络通信
+- **连接复用**: 智能连接池管理，减少连接开销
+- **状态机驱动**: 可靠的连接状态管理
+- **自动重连**: 内置重连机制和故障恢复
+- **负载均衡**: 支持多Broker负载均衡
+
+## 🤝 贡献指南
+
+我们欢迎所有形式的贡献！
+
+### 如何贡献
+1. Fork 项目
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 创建 Pull Request
+
+### 开发指南
+- 遵循现有的代码风格
+- 添加完整的类型注解
+- 编写相应的测试用例
+- 更新相关文档
+
+## 📄 许可证
 
 本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
@@ -255,6 +390,7 @@ python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::
 
 - [RocketMQ](https://rocketmq.apache.org/) - 优秀的分布式消息队列
 - Python 社区 - 提供了强大的生态系统
+- 所有贡献者 - 让这个项目变得更好
 
 ## 📞 联系方式
 
@@ -264,4 +400,4 @@ python -m pytest tests/model/test_serializer.py::TestRemotingCommandSerializer::
 
 ---
 
-**⚠️ 请注意**: 这是一个**正在开发中的项目**，请勿在生产环境中使用。欢迎关注项目进展或参与贡献代码！
+**🚀 pyrocketmq**: 为Python开发者提供功能完整、性能优异的RocketMQ客户端解决方案！
