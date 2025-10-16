@@ -5,7 +5,7 @@ Broker 客户端实现
 
 import json
 import time
-from typing import List
+from typing import List, Optional
 
 from ..logging import LoggerFactory
 from ..model import (
@@ -14,6 +14,7 @@ from ..model import (
     MessageExt,
     MessageQueue,
     PullMessageResult,
+    SendMessageResult,
     transaction_state,
 )
 from ..model.enums import ResponseCode
@@ -80,6 +81,110 @@ class BrokerClient:
     def client_id(self) -> str:
         """获取客户端ID"""
         return self._client_id
+
+    def sync_send_message(
+        self,
+        producer_group: str,
+        topic: str,
+        body: bytes,
+        queue_id: int = 0,
+        properties: str = "",
+        tags: Optional[str] = None,
+        keys: Optional[str] = None,
+        **kwargs,
+    ) -> SendMessageResult:
+        """发送消息
+
+        Args:
+            producer_group: 生产者组名
+            topic: 主题名称
+            body: 消息体内容
+            queue_id: 队列ID，默认0
+            properties: 消息属性，默认为空字符串
+            tags: 消息标签，可选
+            keys: 消息键，可选
+            **kwargs: 其他参数
+
+        Returns:
+            SendMessageResult: 发送消息结果
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Sending message: producerGroup={producer_group}, "
+                f"topic={topic}, queueId={queue_id}, bodyLength={len(body)}, "
+                f"tags={tags}, keys={keys}"
+            )
+
+            # 创建发送消息请求
+            request = RemotingRequestFactory.create_send_message_request(
+                producer_group=producer_group,
+                topic=topic,
+                body=body,
+                queue_id=queue_id,
+                properties=properties,
+                tags=tags,
+                keys=keys,
+                **kwargs,
+            )
+
+            # 发送请求并获取响应
+            start_time = time.time()
+            response = self.remote.rpc(request, timeout=self.timeout)
+            send_msg_rt = time.time() - start_time
+
+            # 检查响应状态
+            if response.code != ResponseCode.SUCCESS:
+                error_msg = f"Send message failed with code {response.code}"
+                if response.language and response.body:
+                    error_msg += (
+                        f": {response.body.decode('utf-8', errors='ignore')}"
+                    )
+                logger.error(error_msg)
+                raise BrokerResponseError(error_msg)
+
+            # 解析响应体为SendMessageResult
+            if not response.body:
+                raise BrokerResponseError(
+                    "Empty response body for send message"
+                )
+
+            try:
+                result = SendMessageResult.from_bytes(response.body)
+            except Exception as e:
+                logger.error(f"Failed to parse SendMessageResult: {e}")
+                raise BrokerResponseError(f"Invalid response format: {e}")
+
+            logger.info(
+                f"Successfully sent message: producerGroup={producer_group}, "
+                f"topic={topic}, queueId={queue_id}, msgId={result.msg_id}, "
+                f"queueOffset={result.queue_offset}, sendMsgRT={send_msg_rt:.3f}s"
+            )
+
+            return result
+
+        except Exception as e:
+            if isinstance(
+                e,
+                (
+                    BrokerConnectionError,
+                    BrokerTimeoutError,
+                    BrokerResponseError,
+                ),
+            ):
+                raise
+
+            logger.error(f"Unexpected error during send_message: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during send_message: {e}"
+            )
 
     def pull_message(
         self,

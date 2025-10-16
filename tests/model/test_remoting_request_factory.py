@@ -17,7 +17,7 @@ class TestRemotingRequestFactory:
         topic = "test_topic"
         body = b"Hello, RocketMQ!"
         queue_id = 1
-        properties = "key1=value1;key2=value2"
+        properties = {"key1": "value1", "key2": "value2"}
         tags = "test_tag"
         keys = "test_key"
 
@@ -41,7 +41,12 @@ class TestRemotingRequestFactory:
         assert command.ext_fields["producerGroup"] == producer_group
         assert command.ext_fields["topic"] == topic
         assert command.ext_fields["queueId"] == str(queue_id)
-        assert command.ext_fields["properties"] == properties
+        # 验证properties已被序列化（包含key1和key2）
+        serialized_properties = command.ext_fields["properties"]
+        assert "key1" in serialized_properties
+        assert "value1" in serialized_properties
+        assert "key2" in serialized_properties
+        assert "value2" in serialized_properties
         assert command.ext_fields["tags"] == tags
         assert command.ext_fields["keys"] == keys
 
@@ -50,9 +55,13 @@ class TestRemotingRequestFactory:
         producer_group = "test_producer"
         topic = "test_topic"
         body = b"Hello, RocketMQ V2!"
+        properties = {"test_key": "test_value"}
 
         command = RemotingRequestFactory.create_send_message_v2_request(
-            producer_group=producer_group, topic=topic, body=body
+            producer_group=producer_group,
+            topic=topic,
+            body=body,
+            properties=properties,
         )
 
         # 验证基本信息
@@ -65,6 +74,12 @@ class TestRemotingRequestFactory:
         assert command.ext_fields["a"] == producer_group  # producerGroup
         assert command.ext_fields["b"] == topic  # topic
         assert command.ext_fields["c"] == "TBW102"  # defaultTopic
+        # 验证batch参数为true
+        assert command.ext_fields["batch"] == "true"
+        # 验证properties已被序列化
+        serialized_properties = command.ext_fields["properties"]
+        assert "test_key" in serialized_properties
+        assert "test_value" in serialized_properties
 
     def test_create_pull_message_request(self):
         """测试创建拉取消息请求"""

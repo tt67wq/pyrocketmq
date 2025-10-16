@@ -3,13 +3,19 @@ RocketMQ远程命令工厂和构建器
 """
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from pyrocketmq.model.message_queue import MessageQueue
 
 from .command import RemotingCommand
-from .enums import FlagType, LanguageCode, RequestCode
+from .enums import (
+    TRANSACTION_PREPARED_TYPE,
+    FlagType,
+    LanguageCode,
+    RequestCode,
+)
 from .headers import (
     CheckTransactionStateRequestHeader,
     ConsumeMessageDirectlyHeader,
@@ -33,6 +39,7 @@ from .headers import (
     ViewMessageRequestHeader,
 )
 from .heart_beat import HeartbeatData
+from .message import Message, MessageProperty
 
 
 @dataclass
@@ -353,7 +360,7 @@ class RemotingRequestFactory:
         topic: str,
         body: bytes,
         queue_id: int = 0,
-        properties: str = "",
+        properties: Optional[Dict[str, str]] = None,
         tags: Optional[str] = None,
         keys: Optional[str] = None,
         **kwargs,
@@ -365,7 +372,7 @@ class RemotingRequestFactory:
             topic: 主题
             body: 消息体
             queue_id: 队列ID
-            properties: 消息属性
+            properties: 消息属性字典
             tags: 消息标签
             keys: 消息键
             **kwargs: 其他参数
@@ -373,11 +380,31 @@ class RemotingRequestFactory:
         Returns:
             发送消息请求命令
         """
+        # 创建临时Message对象来使用marshall_properties方法
+        temp_message = Message(topic=topic, body=body)
+        if properties:
+            temp_message.properties = properties
+
+        # 使用Message的marshall_properties方法序列化properties
+        properties_str = temp_message.marshall_properties()
+
+        # 处理事务消息的sys_flag
+        sys_flag = 0
+        if properties and MessageProperty.TRANSACTION_PREPARED in properties:
+            # 检查事务准备标志
+            tran_msg_value = properties.get(
+                MessageProperty.TRANSACTION_PREPARED, ""
+            )
+            if tran_msg_value.lower() == "true":
+                sys_flag |= TRANSACTION_PREPARED_TYPE
+
         header = SendMessageRequestHeader(
             producer_group=producer_group,
             topic=topic,
             queue_id=queue_id,
-            properties=properties,
+            sys_flag=sys_flag,
+            properties=properties_str,
+            born_timestamp=int(time.time() * 1000),
             **kwargs,
         )
 
@@ -401,7 +428,7 @@ class RemotingRequestFactory:
         topic: str,
         body: bytes,
         queue_id: int = 0,
-        properties: str = "",
+        properties: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> RemotingCommand:
         """创建发送消息V2请求（使用单字母字段名）
@@ -411,17 +438,37 @@ class RemotingRequestFactory:
             topic: 主题
             body: 消息体
             queue_id: 队列ID
-            properties: 消息属性
+            properties: 消息属性字典
             **kwargs: 其他参数
 
         Returns:
             发送消息V2请求命令
         """
+        # 创建临时Message对象来使用marshall_properties方法
+        temp_message = Message(topic=topic, body=body)
+        if properties:
+            temp_message.properties = properties
+
+        # 使用Message的marshall_properties方法序列化properties
+        properties_str = temp_message.marshall_properties()
+
+        # 处理事务消息的sys_flag
+        sys_flag = 0
+        if properties and MessageProperty.TRANSACTION_PREPARED in properties:
+            # 检查事务准备标志
+            tran_msg_value = properties.get(
+                MessageProperty.TRANSACTION_PREPARED, ""
+            )
+            if tran_msg_value.lower() == "true":
+                sys_flag |= TRANSACTION_PREPARED_TYPE
+
         header = SendMessageRequestV2Header(
             producer_group=producer_group,
             topic=topic,
+            sys_flag=sys_flag,
             queue_id=queue_id,
-            properties=properties,
+            properties=properties_str,
+            batch=True,  # V2请求中batch参数固定为true
             **kwargs,
         )
 
