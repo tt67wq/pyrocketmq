@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional
 
 from .message_queue import MessageQueue
 
+# Properties序列化分隔符常量（与Go实现保持一致）
+PROPERTY_SEPARATOR = "\002"  # 属性分隔符
+NAME_VALUE_SEPARATOR = "\001"  # 名称-值分隔符
+
 
 @dataclass
 class Message:
@@ -100,6 +104,63 @@ class Message:
             属性键列表
         """
         return list(self.properties.keys())
+
+    def marshall_properties(self) -> str:
+        """将properties序列化为字符串（与Go实现保持一致）
+
+        Returns:
+            序列化后的properties字符串
+
+        Examples:
+            >>> msg = Message(topic="test", body=b"hello")
+            >>> msg.set_property("key1", "value1")
+            >>> msg.set_property("key2", "value2")
+            >>> serialized = msg.marshall_properties()
+            >>> print(serialized)  # "key1\u0001value1\u0002key2\u0001value2\u0002"
+        """
+        if not self.properties:
+            return ""
+
+        parts = []
+        for key, value in self.properties.items():
+            # 添加键值对，格式为 key + 分隔符 + value + 属性分隔符
+            parts.append(
+                f"{key}{NAME_VALUE_SEPARATOR}{value}{PROPERTY_SEPARATOR}"
+            )
+
+        # 将所有部分连接成字符串
+        return "".join(parts)
+
+    def unmarshal_properties(self, properties_str: str) -> None:
+        """从序列化字符串反序列化properties（与Go实现保持一致）
+
+        Args:
+            properties_str: 序列化的properties字符串
+
+        Examples:
+            >>> msg = Message(topic="test", body=b"hello")
+            >>> properties_str = "key1\u0001value1\u0002key2\u0001value2\u0002"
+            >>> msg.unmarshal_properties(properties_str)
+            >>> msg.get_property("key1")  # "value1"
+            >>> msg.get_property("key2")  # "value2"
+        """
+        # 清空现有properties
+        self.properties.clear()
+
+        if not properties_str:
+            return
+
+        # 按属性分隔符分割
+        parts = properties_str.split(PROPERTY_SEPARATOR)
+
+        for part in parts:
+            if not part:
+                continue
+
+            # 按名称-值分隔符分割键值对
+            if NAME_VALUE_SEPARATOR in part:
+                key, value = part.split(NAME_VALUE_SEPARATOR, 1)
+                self.properties[key] = value
 
     # 标签和键的便利方法
     def get_tags(self) -> Optional[str]:
