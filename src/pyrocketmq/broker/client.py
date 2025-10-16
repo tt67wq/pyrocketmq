@@ -5,7 +5,10 @@ Broker 客户端实现
 
 import json
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+from pyrocketmq.model.message import MessageProperty
+from pyrocketmq.model.result_data import SendStatus
 
 from ..logging import LoggerFactory
 from ..model import (
@@ -82,27 +85,103 @@ class BrokerClient:
         """获取客户端ID"""
         return self._client_id
 
+    def _process_send_response(
+        self,
+        response,
+        mq: MessageQueue,
+        properties: Optional[Dict[str, str]] = None,
+    ) -> SendMessageResult:
+        """处理发送消息的响应结果（参考Go语言实现）
+
+        Args:
+            response: 远程命令响应
+            mq: 消息队列
+            properties: 消息属性
+
+        Returns:
+            SendMessageResult: 发送结果
+
+        Raises:
+            BrokerResponseError: 响应错误时抛出异常
+        """
+        # 根据响应代码确定发送状态（参考Go语言实现）
+        if response.code == ResponseCode.SUCCESS:
+            status = SendStatus.SEND_OK
+        elif response.code == ResponseCode.FLUSH_DISK_TIMEOUT:
+            status = SendStatus.SEND_FLUSH_DISK_TIMEOUT
+        elif response.code == ResponseCode.FLUSH_SLAVE_TIMEOUT:
+            status = SendStatus.SEND_FLUSH_SLAVE_TIMEOUT
+        elif response.code == ResponseCode.SLAVE_NOT_AVAILABLE:
+            status = SendStatus.SEND_SLAVE_NOT_AVAILABLE
+        else:
+            status = SendStatus.SEND_UNKNOWN_ERROR
+            error_msg = response.ext_fields.get("remark", "Unknown error")
+            logger.error(f"Send message failed: {response.code} - {error_msg}")
+            raise BrokerResponseError(error_msg)
+
+        # 从响应扩展字段中提取信息
+        ext_fields = response.ext_fields or {}
+
+        # 获取消息ID（从UNIQ_KEY属性或msgId字段）
+        msg_id = ""
+        if (
+            properties
+            and MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX in properties
+        ):
+            msg_id = properties[
+                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
+            ]
+
+        # 获取区域ID和Trace开关
+        region_id = ext_fields.get(MessageProperty.MSG_REGION, "DefaultRegion")
+        trace_switch = ext_fields.get(MessageProperty.TRACE_SWITCH, "")
+        trace_on = trace_switch != "" and trace_switch.lower() != "false"
+
+        # 解析队列ID和偏移量
+        queue_id = int(ext_fields.get("queueId", "0"))
+        queue_offset = int(ext_fields.get("queueOffset", "0"))
+
+        # 创建消息队列对象
+        message_queue = MessageQueue(
+            topic=mq.topic,
+            broker_name=mq.broker_name,
+            queue_id=queue_id,
+        )
+
+        # 创建发送结果对象
+        result = SendMessageResult(
+            status=status,
+            msg_id=msg_id,
+            message_queue=message_queue,
+            queue_offset=queue_offset,
+            transaction_id=ext_fields.get("transactionId"),
+            offset_msg_id=ext_fields.get("msgId"),
+            region_id=region_id,
+            trace_on=trace_on,
+        )
+
+        logger.debug(
+            f"Process send response: msgId={result.msg_id}, "
+            f"status={result.status_name}, queueOffset={result.queue_offset}"
+        )
+
+        return result
+
     def sync_send_message(
         self,
         producer_group: str,
-        topic: str,
         body: bytes,
-        queue_id: int = 0,
-        properties: str = "",
-        tags: Optional[str] = None,
-        keys: Optional[str] = None,
+        mq: MessageQueue,
+        properties: Optional[Dict[str, str]] = None,
         **kwargs,
     ) -> SendMessageResult:
         """发送消息
 
         Args:
             producer_group: 生产者组名
-            topic: 主题名称
+            mq: 消息队列
             body: 消息体内容
-            queue_id: 队列ID，默认0
-            properties: 消息属性，默认为空字符串
-            tags: 消息标签，可选
-            keys: 消息键，可选
+            properties: 消息属性字典，默认为None
             **kwargs: 其他参数
 
         Returns:
@@ -119,19 +198,16 @@ class BrokerClient:
         try:
             logger.debug(
                 f"Sending message: producerGroup={producer_group}, "
-                f"topic={topic}, queueId={queue_id}, bodyLength={len(body)}, "
-                f"tags={tags}, keys={keys}"
+                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}, "
             )
 
             # 创建发送消息请求
             request = RemotingRequestFactory.create_send_message_request(
                 producer_group=producer_group,
-                topic=topic,
+                topic=mq.topic,
                 body=body,
-                queue_id=queue_id,
+                queue_id=mq.queue_id,
                 properties=properties,
-                tags=tags,
-                keys=keys,
                 **kwargs,
             )
 
@@ -157,14 +233,14 @@ class BrokerClient:
                 )
 
             try:
-                result = SendMessageResult.from_bytes(response.body)
+                result = self._process_send_response(response, mq, properties)
             except Exception as e:
                 logger.error(f"Failed to parse SendMessageResult: {e}")
                 raise BrokerResponseError(f"Invalid response format: {e}")
 
             logger.info(
                 f"Successfully sent message: producerGroup={producer_group}, "
-                f"topic={topic}, queueId={queue_id}, msgId={result.msg_id}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, msgId={result.msg_id}, "
                 f"queueOffset={result.queue_offset}, sendMsgRT={send_msg_rt:.3f}s"
             )
 
@@ -184,6 +260,97 @@ class BrokerClient:
             logger.error(f"Unexpected error during send_message: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during send_message: {e}"
+            )
+
+    def sync_batch_send_message(
+        self,
+        producer_group: str,
+        body: bytes,
+        mq: MessageQueue,
+        properties: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> SendMessageResult:
+        """批量发送消息
+
+        Args:
+            producer_group: 生产者组名
+            body: 批量消息体内容
+            mq: 消息队列
+            properties: 消息属性字典，默认为None
+            **kwargs: 其他参数
+
+        Returns:
+            SendMessageResult: 发送消息结果
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+            BrokerResponseError: 响应错误
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Sending batch message: producerGroup={producer_group}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}, "
+            )
+
+            # 创建发送批量消息请求
+            request = RemotingRequestFactory.create_send_batch_message_request(
+                producer_group=producer_group,
+                topic=mq.topic,
+                body=body,
+                queue_id=mq.queue_id,
+                properties=properties,
+                **kwargs,
+            )
+
+            # 发送请求
+            response = self.remote.rpc(request)
+
+            # 处理响应
+            if response.code == ResponseCode.SUCCESS:
+                # 创建发送结果
+                result = self._process_send_response(response, mq, properties)
+
+                logger.debug(
+                    f"Batch message sent successfully: msgId={result.msg_id}, "
+                    f"queueId={result.queue_id}, queueOffset={result.queue_offset}"
+                )
+
+                return result
+            else:
+                error_msg = response.ext_fields.get("remark", "Unknown error")
+                raise BrokerResponseError(
+                    f"Send batch message failed: {response.code} - {error_msg}"
+                )
+
+        except BrokerConnectionError:
+            raise
+        except BrokerTimeoutError:
+            raise
+        except BrokerResponseError:
+            raise
+        except Exception as e:
+            # 检查是否是已知的网络异常
+            if any(
+                str(e).startswith(error_type)
+                for error_type in [
+                    "ConnectionError",
+                    "TimeoutError",
+                    "OSError",
+                    "ConnectionAbortedError",
+                    "ConnectionResetError",
+                    "ConnectionRefusedError",
+                ]
+            ):
+                logger.error(f"Network error during send_batch_message: {e}")
+                raise BrokerConnectionError(f"Network error: {e}")
+
+            logger.error(f"Unexpected error during send_batch_message: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during send_batch_message: {e}"
             )
 
     def pull_message(
