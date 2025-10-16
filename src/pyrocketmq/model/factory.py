@@ -361,8 +361,6 @@ class RemotingRequestFactory:
         body: bytes,
         queue_id: int = 0,
         properties: Optional[Dict[str, str]] = None,
-        tags: Optional[str] = None,
-        keys: Optional[str] = None,
         **kwargs,
     ) -> RemotingCommand:
         """创建发送消息请求
@@ -372,9 +370,7 @@ class RemotingRequestFactory:
             topic: 主题
             body: 消息体
             queue_id: 队列ID
-            properties: 消息属性字典
-            tags: 消息标签
-            keys: 消息键
+            properties: 消息属性字典（包含tags、keys等）
             **kwargs: 其他参数
 
         Returns:
@@ -408,17 +404,11 @@ class RemotingRequestFactory:
             **kwargs,
         )
 
-        ext_fields = header.encode()
-        if tags:
-            ext_fields["tags"] = tags
-        if keys:
-            ext_fields["keys"] = keys
-
         return RemotingCommand(
             code=RequestCode.SEND_MESSAGE,
             language=LanguageCode.PYTHON,
             flag=FlagType.RPC_TYPE,
-            ext_fields=ext_fields,
+            ext_fields=header.encode(),
             body=body,
         )
 
@@ -969,21 +959,41 @@ class RemotingRequestFactory:
 
     @staticmethod
     def create_send_batch_message_request(
-        producer_group: str, topic: str, body: bytes, **kwargs
+        producer_group: str,
+        topic: str,
+        body: bytes,
+        queue_id: int = 0,
+        properties: Optional[Dict[str, str]] = None,
+        **kwargs,
     ) -> RemotingCommand:
         """创建发送批量消息请求
 
         Args:
             producer_group: 生产者组
             topic: 主题
-            body: 消息体
+            body: 批量消息体
+            queue_id: 队列ID，默认0
+            properties: 消息属性字典（包含tags、keys等），默认为None
             **kwargs: 其他参数
 
         Returns:
             发送批量消息请求命令
         """
+        # 创建临时Message对象来使用marshall_properties方法
+        temp_message = Message(topic=topic, body=body)
+        if properties:
+            temp_message.properties = properties
+
+        # 使用Message的marshall_properties方法序列化properties
+        properties_str = temp_message.marshall_properties()
+
         header = SendMessageRequestHeader(
-            producer_group=producer_group, topic=topic, batch=True, **kwargs
+            producer_group=producer_group,
+            topic=topic,
+            queue_id=queue_id,
+            properties=properties_str,
+            batch=True,
+            **kwargs,
         )
 
         return RemotingCommand(
