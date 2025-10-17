@@ -1096,7 +1096,7 @@ class BrokerClient:
         try:
             logger.debug(
                 f"Sending consumer send msg back: consumerGroup={consumer_group}, "
-                f"originTopic={message_ext.topic}, originMsgId={message_ext.message_id}, "
+                f"originTopic={message_ext.topic}, originMsgId={message_ext.msg_id}, "
                 f"delayLevel={delay_level}"
             )
 
@@ -1106,7 +1106,7 @@ class BrokerClient:
                     group=consumer_group,
                     offset=message_ext.commit_log_offset or 0,
                     delay_level=delay_level,
-                    origin_msg_id=message_ext.message_id or "",
+                    origin_msg_id=message_ext.msg_id or "",
                     origin_topic=message_ext.topic,
                     max_reconsume_times=max_reconsume_times,
                 )
@@ -1126,7 +1126,7 @@ class BrokerClient:
                 # 发送回退成功
                 logger.info(
                     f"Successfully sent consumer send msg back: consumerGroup={consumer_group}, "
-                    f"originTopic={message_ext.topic}, originMsgId={message_ext.message_id}, "
+                    f"originTopic={message_ext.topic}, originMsgId={message_ext.msg_id}, "
                     f"delayLevel={delay_level}, sendBackRT={send_back_rt:.3f}s"
                 )
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
