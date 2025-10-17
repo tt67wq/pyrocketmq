@@ -3,50 +3,48 @@
 定义RocketMQ扩展消息的核心数据结构，包含完整的消息信息。
 """
 
-import json
+import struct
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import List, Optional
+
+from pyrocketmq.model.message_queue import MessageQueue
+
+from .message import Message, MessageProperty
+
+
+class MessageSysFlag:
+    """消息系统标志常量"""
+
+    COMPRESSED = 0x1
+    BORN_HOST_V6 = 0x1 << 4
+    STORE_HOST_V6 = 0x1 << 5
 
 
 @dataclass
-class MessageExt:
+class MessageExt(Message):
     """扩展消息信息
 
     包含消息的完整信息，包括系统属性和用户属性
     """
 
-    # 基础消息信息
-    topic: str  # 主题名称
-    body: bytes  # 消息体
-    tags: Optional[str] = None  # 消息标签
-    keys: Optional[List[str]] = None  # 消息key列表
-
     # 系统属性
-    message_id: Optional[str] = None  # 消息ID
-    queue_id: Optional[int] = None  # 队列ID
+    msg_id: Optional[str] = None  # 消息ID
+    offset_msg_id: Optional[str] = None  # 偏移消息ID
+    store_size: Optional[int] = None  # 存储大小
     queue_offset: Optional[int] = None  # 队列偏移量
+    sys_flag: int = 0  # 系统标志
+    born_timestamp: Optional[int] = None  # 生产时间戳
+    born_host: Optional[str] = None  # 生产主机
+    store_timestamp: Optional[int] = None  # 存储时间戳
+    store_host: Optional[str] = None  # 存储主机
     commit_log_offset: Optional[int] = None  # 提交日志偏移量
+    body_crc: Optional[int] = None  # 消息体CRC32校验码
     reconsume_times: int = 0  # 重新消费次数
-    born_timestamp: Optional[int] = None  # 消息生产时间戳
-    born_host: Optional[str] = None  # 消息生产主机
-    store_timestamp: Optional[int] = None  # 消息存储时间戳
-    store_host: Optional[str] = None  # 消息存储主机
-    msg_flag: int = 0  # 消息标志
-    delay_time_level: int = 0  # 延时级别
-    wait_store_msg_ok: bool = True  # 是否等待存储完成
-
-    # 事务相关
-    transaction_id: Optional[str] = None  # 事务ID
-    prepare_transaction_offset: Optional[int] = None  # 预提交事务偏移量
-
-    # 用户属性
-    properties: Dict[str, str] = field(default_factory=dict)  # 用户属性
+    prepared_transaction_offset: Optional[int] = None  # 预提交事务偏移量
 
     def __post_init__(self):
         """后处理，确保类型正确"""
-        if self.keys is None:
-            self.keys = []
         if self.born_timestamp is None:
             self.born_timestamp = int(time.time() * 1000)
 
@@ -64,101 +62,232 @@ class MessageExt:
         """检查是否包含指定属性"""
         return key in self.properties
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        result = {
-            "topic": self.topic,
-            "body": self.body.decode("utf-8")
-            if isinstance(self.body, bytes) and self.body
-            else "",
-            "properties": self.properties,
-            "reconsumeTimes": self.reconsume_times,
-            "msgFlag": self.msg_flag,
-            "delayTimeLevel": self.delay_time_level,
-            "waitStoreMsgOK": self.wait_store_msg_ok,
-        }
+    @classmethod
+    def from_bytes(cls, data: bytes, offset: int = 0) -> "MessageExt":
+        """从字节数组中解析出MessageExt对象
 
-        # 添加可选字段
-        if self.tags:
-            result["tags"] = self.tags
-        if self.keys:
-            result["keys"] = self.keys
-        if self.message_id:
-            result["msgId"] = self.message_id
-        if self.queue_id is not None:
-            result["queueId"] = self.queue_id
-        if self.queue_offset is not None:
-            result["queueOffset"] = self.queue_offset
-        if self.commit_log_offset is not None:
-            result["commitLogOffset"] = self.commit_log_offset
-        if self.born_timestamp:
-            result["bornTimestamp"] = self.born_timestamp
-        if self.born_host:
-            result["bornHost"] = self.born_host
-        if self.store_timestamp:
-            result["storeTimestamp"] = self.store_timestamp
-        if self.store_host:
-            result["storeHost"] = self.store_host
-        if self.transaction_id:
-            result["transactionId"] = self.transaction_id
-        if self.prepare_transaction_offset is not None:
-            result["prepareTransactionOffset"] = self.prepare_transaction_offset
+        Args:
+            data: 字节数组
+            offset: 起始偏移量，默认为0
 
-        return result
+        Returns:
+            MessageExt对象和新的偏移量
+
+        Raises:
+            ValueError: 数据格式不正确时抛出
+        """
+        if len(data) < offset + 4:
+            raise ValueError("Data too short to contain message size")
+
+        pos = offset
+        buf = data[pos:]
+
+        # 1. total size (4 bytes)
+        store_size = struct.unpack(">I", buf[0:4])[0]
+        pos += 4
+        if len(data) < pos + store_size:
+            raise ValueError(
+                f"Data too short to contain complete message: expected {store_size}, available {len(data) - pos}"
+            )
+
+        # 2. magic code (4 bytes) - 跳过
+        pos += 4
+
+        # 3. body CRC32 (4 bytes)
+        body_crc = struct.unpack(">I", data[pos : pos + 4])[0]
+        pos += 4
+
+        # 4. queueID (4 bytes)
+        queue_id = struct.unpack(">i", data[pos : pos + 4])[0]
+        pos += 4
+
+        # 5. Flag (4 bytes)
+        flag = struct.unpack(">I", data[pos : pos + 4])[0]
+        pos += 4
+
+        # 6. QueueOffset (8 bytes)
+        queue_offset = struct.unpack(">q", data[pos : pos + 8])[0]
+        pos += 8
+
+        # 7. physical offset (8 bytes)
+        commit_log_offset = struct.unpack(">q", data[pos : pos + 8])[0]
+        pos += 8
+
+        # 8. SysFlag (4 bytes)
+        sys_flag = struct.unpack(">I", data[pos : pos + 4])[0]
+        pos += 4
+
+        # 9. BornTimestamp (8 bytes)
+        born_timestamp = struct.unpack(">q", data[pos : pos + 8])[0]
+        pos += 8
+
+        # 10. born host
+        if sys_flag & MessageSysFlag.BORN_HOST_V6:
+            # IPv6 address (16 bytes) + port (4 bytes)
+            host_bytes = data[pos : pos + 16]
+            port = struct.unpack(">I", data[pos + 16 : pos + 20])[0]
+            pos += 20
+        else:
+            # IPv4 address (4 bytes) + port (4 bytes)
+            host_bytes = data[pos : pos + 4]
+            port = struct.unpack(">I", data[pos + 4 : pos + 8])[0]
+            pos += 8
+
+        # 转换IP地址为字符串
+        if sys_flag & MessageSysFlag.BORN_HOST_V6:
+            ip_parts = [
+                str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)
+            ]
+            born_host = ":".join(
+                [
+                    ip_parts[0] + ip_parts[1],
+                    ip_parts[2] + ip_parts[3],
+                    ip_parts[4] + ip_parts[5],
+                    ip_parts[6] + ip_parts[7],
+                ]
+            )
+        else:
+            ip_parts = struct.unpack(">BBBB", host_bytes)
+            born_host = (
+                f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+            )
+        born_host += f":{port}"
+
+        # 11. store timestamp (8 bytes)
+        store_timestamp = struct.unpack(">q", data[pos : pos + 8])[0]
+        pos += 8
+
+        # 12. store host
+        if sys_flag & MessageSysFlag.STORE_HOST_V6:
+            # IPv6 address (16 bytes) + port (4 bytes)
+            host_bytes = data[pos : pos + 16]
+            port = struct.unpack(">I", data[pos + 16 : pos + 20])[0]
+            pos += 20
+        else:
+            # IPv4 address (4 bytes) + port (4 bytes)
+            host_bytes = data[pos : pos + 4]
+            port = struct.unpack(">I", data[pos + 4 : pos + 8])[0]
+            pos += 8
+
+        # 转换IP地址为字符串
+        if sys_flag & MessageSysFlag.STORE_HOST_V6:
+            ip_parts = [
+                str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)
+            ]
+            store_host = ":".join(
+                [
+                    ip_parts[0] + ip_parts[1],
+                    ip_parts[2] + ip_parts[3],
+                    ip_parts[4] + ip_parts[5],
+                    ip_parts[6] + ip_parts[7],
+                ]
+            )
+        else:
+            ip_parts = struct.unpack(">BBBB", host_bytes)
+            store_host = (
+                f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+            )
+        store_host += f":{port}"
+
+        # 13. reconsume times (4 bytes)
+        reconsume_times = struct.unpack(">i", data[pos : pos + 4])[0]
+        pos += 4
+
+        # 14. prepared transaction offset (8 bytes)
+        prepared_transaction_offset = struct.unpack(">q", data[pos : pos + 8])[
+            0
+        ]
+        pos += 8
+
+        # 15. body (4 bytes length + body bytes)
+        body_length = struct.unpack(">i", data[pos : pos + 4])[0]
+        pos += 4
+        body = data[pos : pos + body_length]
+        pos += body_length
+
+        # 16. topic (1 byte length + topic bytes)
+        topic_length = data[pos]
+        pos += 1
+        topic = data[pos : pos + topic_length].decode("utf-8")
+        pos += topic_length
+
+        # 17. properties (2 bytes length + properties bytes)
+        properties_length = struct.unpack(">H", data[pos : pos + 2])[0]
+        pos += 2
+        properties = {}
+        tmp_msg = Message(topic="", body=b"")
+        if properties_length > 0:
+            properties_bytes = data[pos : pos + properties_length]
+            pos += properties_length
+            # 使用unmarshal_properties方法解析properties
+            tmp_msg.unmarshal_properties(properties_bytes.decode("utf-8"))
+            properties = tmp_msg.properties
+
+        # 生成消息ID（基于存储偏移量）
+        offset_msg_id = f"{commit_log_offset:016x}"
+
+        msg_id = tmp_msg.get_property(
+            MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ""
+        )
+        if not msg_id:
+            msg_id = offset_msg_id
+
+        # 创建MessageExt对象
+        return cls(
+            topic=topic,
+            body=body,
+            flag=flag,
+            queue=MessageQueue(topic=topic, queue_id=queue_id, broker_name=""),
+            properties=properties,
+            #
+            msg_id=msg_id,
+            offset_msg_id=offset_msg_id,
+            store_size=store_size,
+            queue_offset=queue_offset,
+            sys_flag=sys_flag,
+            born_timestamp=born_timestamp,
+            born_host=born_host,
+            store_timestamp=store_timestamp,
+            store_host=store_host,
+            commit_log_offset=commit_log_offset,
+            body_crc=body_crc,
+            reconsume_times=reconsume_times,
+            prepared_transaction_offset=prepared_transaction_offset,
+        )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MessageExt":
-        """从字典创建实例"""
-        # 处理body字段
-        body = b""
-        if "body" in data:
-            body_str = data["body"]
-            if isinstance(body_str, str):
-                body = body_str.encode("utf-8")
-            elif isinstance(body_str, bytes):
-                body = body_str
+    def decode_messages(cls, data: bytes) -> List["MessageExt"]:
+        """从字节数组中解析出多个MessageExt对象
 
-        # 提取属性
-        properties = data.get("properties", {})
-        if isinstance(properties, str):
+        Args:
+            data: 包含多个消息的字节数组
+
+        Returns:
+            MessageExt对象列表
+        """
+        messages = []
+        pos = 0
+        total_length = len(data)
+
+        while pos < total_length:
+            # 检查剩余数据是否足够读取消息大小
+            if pos + 4 > total_length:
+                break
+
+            # 读取消息总大小
+            store_size = struct.unpack(">I", data[pos : pos + 4])[0]
+
+            # 检查数据是否完整
+            if pos + store_size > total_length:
+                break
+
             try:
-                properties = json.loads(properties)
-            except json.JSONDecodeError:
-                properties = {}
+                # 解析单个消息
+                message = cls.from_bytes(data, pos)
+                messages.append(message)
+                pos += store_size
+            except ValueError:
+                # 如果解析失败，停止解析
+                break
 
-        return cls(
-            topic=data["topic"],
-            body=body,
-            tags=data.get("tags"),
-            keys=data.get("keys", []),
-            message_id=data.get("msgId"),
-            queue_id=data.get("queueId"),
-            queue_offset=data.get("queueOffset"),
-            commit_log_offset=data.get("commitLogOffset"),
-            reconsume_times=data.get("reconsumeTimes", 0),
-            born_timestamp=data.get("bornTimestamp"),
-            born_host=data.get("bornHost"),
-            store_timestamp=data.get("storeTimestamp"),
-            store_host=data.get("storeHost"),
-            msg_flag=data.get("msgFlag", 0),
-            delay_time_level=data.get("delayTimeLevel", 0),
-            wait_store_msg_ok=data.get("waitStoreMsgOK", True),
-            transaction_id=data.get("transactionId"),
-            prepare_transaction_offset=data.get("prepareTransactionOffset"),
-            properties=properties,
-        )
-
-    def __str__(self) -> str:
-        """字符串表示"""
-        body_preview = self.body[:50].decode("utf-8", errors="ignore")
-        if len(self.body) > 50:
-            body_preview += "..."
-
-        return (
-            f"MessageExt[topic={self.topic}, "
-            f"msgId={self.message_id}, "
-            f"queueId={self.queue_id}, "
-            f"offset={self.queue_offset}, "
-            f"bodySize={len(self.body)}, "
-            f"bodyPreview='{body_preview}']"
-        )
+        return messages
