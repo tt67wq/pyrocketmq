@@ -63,6 +63,33 @@ class MessageExt(Message):
         return key in self.properties
 
     @classmethod
+    def from_dict(cls, data: dict) -> "MessageExt":
+        """从字典创建MessageExt对象"""
+        return cls(
+            topic=data.get("topic", ""),
+            body=data.get("body", b""),
+            flag=data.get("flag", 0),
+            transaction_id=data.get("transaction_id"),
+            batch=data.get("batch", False),
+            compress=data.get("compress", False),
+            queue=MessageQueue.from_dict(data.get("queue", {})),
+            properties=data.get("properties", {}),
+            msg_id=data.get("msg_id"),
+            offset_msg_id=data.get("offset_msg_id"),
+            store_size=data.get("store_size"),
+            queue_offset=data.get("queue_offset"),
+            sys_flag=data.get("sys_flag", 0),
+            born_timestamp=data.get("born_timestamp"),
+            born_host=data.get("born_host"),
+            store_timestamp=data.get("store_timestamp"),
+            store_host=data.get("store_host"),
+            commit_log_offset=data.get("commit_log_offset"),
+            body_crc=data.get("body_crc"),
+            reconsume_times=data.get("reconsume_times", 0),
+            prepared_transaction_offset=data.get("prepared_transaction_offset"),
+        )
+
+    @classmethod
     def from_bytes(cls, data: bytes, offset: int = 0) -> "MessageExt":
         """从字节数组中解析出MessageExt对象
 
