@@ -54,7 +54,9 @@ class BrokerState(Enum):
 
     UNKNOWN = "unknown"  # 未知状态
     HEALTHY = "healthy"  # 健康状态
+    DEGRADED = "degraded"  # 性能下降状态
     UNHEALTHY = "unhealthy"  # 不健康状态
+    SUSPENDED = "suspended"  # 暂停使用状态
     FAILED = "failed"  # 故障状态
     RECOVERING = "recovering"  # 恢复中状态
 
