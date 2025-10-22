@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from pyrocketmq.producer.broker_manager import (
+from pyrocketmq.broker.broker_manager import (
     BrokerConnectionInfo,
     BrokerManager,
     BrokerState,
@@ -213,7 +213,7 @@ class TestBrokerManager:
     async def test_get_connection(self, broker_manager):
         """测试获取连接"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = AsyncMock()
             mock_connection = AsyncMock()
@@ -253,7 +253,7 @@ class TestBrokerManager:
     async def test_release_connection(self, broker_manager):
         """测试释放连接"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = AsyncMock()
             mock_connection = AsyncMock()
@@ -318,7 +318,7 @@ class TestBrokerManager:
     def test_get_broker_stats(self, broker_manager):
         """测试获取Broker统计信息"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_pool.get_stats.return_value = {
@@ -358,7 +358,7 @@ class TestBrokerManager:
     def test_get_all_brokers_stats(self, broker_manager):
         """测试获取所有Broker统计信息"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_pool.get_stats.return_value = {"total_connections": 1}
@@ -385,7 +385,7 @@ class TestBrokerManager:
     async def test_health_check_integration(self, broker_manager):
         """测试健康检查集成"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = AsyncMock()
             mock_pool.health_check.return_value = True
@@ -409,7 +409,7 @@ class TestBrokerManager:
     async def test_health_check_failure_mark_as_failed(self, broker_manager):
         """测试健康检查失败并标记为故障"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = AsyncMock()
             mock_pool.health_check.return_value = False
@@ -436,7 +436,7 @@ class TestBrokerManager:
     async def test_connection_failure_detection(self, broker_manager):
         """测试连接失败检测"""
         with patch(
-            "pyrocketmq.producer.broker_manager.BrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.BrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = AsyncMock()
             mock_pool.get_connection.side_effect = Exception("连接失败")
@@ -540,7 +540,7 @@ class TestSyncBrokerManager:
     def test_get_connection(self, sync_broker_manager):
         """测试获取连接"""
         with patch(
-            "pyrocketmq.producer.broker_manager.SyncBrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.SyncBrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_connection = MagicMock()
@@ -577,7 +577,7 @@ class TestSyncBrokerManager:
     def test_release_connection(self, sync_broker_manager):
         """测试释放连接"""
         with patch(
-            "pyrocketmq.producer.broker_manager.SyncBrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.SyncBrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_connection = MagicMock()
@@ -642,7 +642,7 @@ class TestSyncBrokerManager:
     def test_get_broker_stats(self, sync_broker_manager):
         """测试获取Broker统计信息"""
         with patch(
-            "pyrocketmq.producer.broker_manager.SyncBrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.SyncBrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_pool.get_stats.return_value = {
@@ -682,7 +682,7 @@ class TestSyncBrokerManager:
     def test_get_all_brokers_stats(self, sync_broker_manager):
         """测试获取所有Broker统计信息"""
         with patch(
-            "pyrocketmq.producer.broker_manager.SyncBrokerConnectionPool"
+            "pyrocketmq.broker.broker_manager.SyncBrokerConnectionPool"
         ) as mock_pool_class:
             mock_pool = MagicMock()
             mock_pool.get_stats.return_value = {"total_connections": 1}

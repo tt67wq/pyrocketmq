@@ -22,11 +22,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
+from pyrocketmq.broker.broker_manager import BrokerState
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message
 from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.model.nameserver_models import BrokerData
-from pyrocketmq.producer.broker_manager import BrokerState
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
     QueueNotAvailableError,

@@ -12,6 +12,7 @@ broker/
 ├── __init__.py          # 模块入口，导出主要类
 ├── client.py            # 同步Broker客户端实现
 ├── async_client.py      # 异步Broker客户端实现
+├── broker_manager.py    # Broker连接管理器（从producer模块移动而来）
 └── errors.py            # Broker模块异常定义
 ```
 
@@ -24,6 +25,28 @@ broker/
 5. **线程安全**: 所有操作都是线程安全的，支持高并发场景
 
 ## 核心数据结构
+
+### BrokerManager
+Broker连接管理器，提供高级的Broker连接管理和健康检查功能。
+
+**核心组件**:
+- `BrokerConnectionPool` - 管理单个Broker的连接池
+- `BrokerManager` - 管理多个Broker的连接和路由
+- `HealthChecker` - 执行健康检查任务
+- `BrokerState` - Broker状态枚举（HEALTHY, DEGRADED, UNHEALTHY, SUSPENDED）
+
+**主要功能**:
+- **连接池管理**: 为每个Broker维护独立的连接池，支持连接复用
+- **健康检查**: 定期检查Broker连接的健康状态，自动故障检测
+- **故障转移**: 自动检测Broker故障并转移流量到健康节点
+- **负载均衡**: 在多个可用Broker间分配连接负载
+- **统计监控**: 提供详细的连接统计和性能指标
+
+**核心类**:
+- `BrokerManager` - 异步Broker管理器
+- `SyncBrokerManager` - 同步Broker管理器
+- `BrokerConnectionInfo` - Broker连接信息和统计数据
+- `BrokerConnectionPool` - 连接池实现
 
 ### BrokerClient
 同步Broker客户端，提供完整的同步API接口。
@@ -58,7 +81,56 @@ broker/
 
 ## 主要功能模块
 
-### 1. 消息发送模块
+### 1. Broker连接管理模块
+
+#### 连接池管理
+- **功能**: 为每个Broker维护独立的连接池，支持连接复用和负载均衡
+- **特性**:
+  - 自动连接创建和销毁
+  - 连接数限制和超时控制
+  - 连接健康状态监控
+  - 支持同步和异步两种模式
+
+#### 健康检查机制
+- **定期检查**: 后台定期检查Broker连接状态
+- **故障检测**: 自动检测连接异常和Broker故障
+- **状态管理**: 维护Broker的健康状态（HEALTHY/DEGRADED/UNHEALTHY/SUSPENDED）
+- **自动恢复**: 支持故障Broker的自动恢复检测
+
+#### 统计监控
+- **连接统计**: 活跃连接数、可用连接数、总连接数
+- **性能指标**: 成功率、失败率、平均延迟等
+- **请求统计**: 请求总数、成功数、失败数等详细信息
+
+#### 使用示例
+```python
+from pyrocketmq.broker.broker_manager import BrokerManager
+
+# 创建异步Broker管理器
+broker_manager = BrokerManager()
+await broker_manager.start()
+
+# 添加Broker
+await broker_manager.add_broker("broker-a", "127.0.0.1:10911")
+
+# 获取连接
+connection = await broker_manager.get_connection("broker-a")
+
+# 使用连接
+# ... 执行业务逻辑 ...
+
+# 释放连接
+await broker_manager.release_connection("broker-a", connection)
+
+# 获取统计信息
+stats = await broker_manager.get_all_brokers_stats()
+print(f"Broker统计: {stats}")
+
+# 关闭管理器
+await broker_manager.shutdown()
+```
+
+### 2. 消息发送模块
 
 #### 单条消息发送
 - **功能**: 发送单条消息到指定队列
@@ -190,12 +262,65 @@ BrokerError (基础异常)
 
 ## 使用示例
 
-### 同步客户端使用
+### Broker连接管理器使用
+```python
+from pyrocketmq.broker.broker_manager import BrokerManager, SyncBrokerManager
+
+# 异步Broker管理器
+async def async_example():
+    # 创建管理器
+    broker_manager = BrokerManager()
+    await broker_manager.start()
+    
+    # 添加多个Broker
+    await broker_manager.add_broker("broker-a", "127.0.0.1:10911")
+    await broker_manager.add_broker("broker-b", "127.0.0.1:10921")
+    
+    # 获取连接
+    connection = await broker_manager.get_connection("broker-a")
+    
+    # 使用连接执行业务逻辑
+    # response = await connection.send_request(request)
+    
+    # 释放连接
+    await broker_manager.release_connection("broker-a", connection)
+    
+    # 获取统计信息
+    stats = await broker_manager.get_all_brokers_stats()
+    print(f"总连接数: {stats['total_connections']}")
+    print(f"健康Broker数: {len(broker_manager.get_healthy_brokers())}")
+    
+    # 关闭管理器
+    await broker_manager.shutdown()
+
+# 同步Broker管理器
+def sync_example():
+    # 创建同步管理器
+    broker_manager = SyncBrokerManager()
+    broker_manager.start()
+    
+    # 添加Broker
+    broker_manager.add_broker("broker-a", "127.0.0.1:10911")
+    
+    # 获取连接
+    connection = broker_manager.get_connection("broker-a")
+    
+    # 使用连接
+    # response = connection.send_request(request)
+    
+    # 释放连接
+    broker_manager.release_connection("broker-a", connection)
+    
+    # 关闭管理器
+    broker_manager.shutdown()
+```
+
+### 基础客户端使用
 ```python
 from pyrocketmq.broker import create_broker_client
 from pyrocketmq.model import Message
 
-# 创建客户端
+# 创建同步客户端
 client = create_broker_client("localhost", 10911)
 
 # 连接并发送消息
@@ -236,4 +361,10 @@ result = await client.async_send_message(
 - **行为一致**: 错误处理、状态转换等行为与Go实现一致
 - **性能匹配**: 在Python环境下提供与Go实现相近的性能表现
 
-该模块是pyrocketmq实现RocketMQ客户端功能的核心基础，为上层生产者和消费者模块提供稳定、高效的Broker通信能力。
+### BrokerManager高级特性
+- **故障检测**: 实现了与Go语言版本相同的健康检查机制
+- **负载均衡**: 支持多Broker间的智能负载分配
+- **连接复用**: 高效的连接池管理，提升整体性能
+- **状态同步**: 与RocketMQ Broker状态保持同步
+
+该模块是pyrocketmq实现RocketMQ客户端功能的核心基础，为上层生产者和消费者模块提供稳定、高效的Broker通信能力和连接管理能力。BrokerManager的加入使得该模块具备了企业级的连接管理和故障处理能力。
