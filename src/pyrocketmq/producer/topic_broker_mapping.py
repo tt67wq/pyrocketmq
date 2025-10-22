@@ -615,3 +615,537 @@ class TopicBrokerMapping:
     def __repr__(self) -> str:
         """详细字符串表示"""
         return self.__str__()
+
+
+# ============================================================================
+# 异步版本的TopicBrokerMapping
+# ============================================================================
+
+
+class AsyncQueueSelector(abc.ABC):
+    """异步队列选择器抽象基类
+
+    定义异步队列选择的接口，支持不同的负载均衡策略。
+    """
+
+    @abc.abstractmethod
+    async def select(
+        self,
+        topic: str,
+        available_queues: List[Tuple[MessageQueue, BrokerData]],
+        message: Optional[Message] = None,
+    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        """
+        从可用队列中选择一个队列（异步版本）
+
+        Args:
+            topic: 主题名称
+            available_queues: 可用队列列表
+            message: 消息对象（某些策略可能会使用）
+
+        Returns:
+            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
+        """
+        pass
+
+
+class AsyncRoundRobinSelector(AsyncQueueSelector):
+    """异步轮询队列选择器
+
+    按顺序依次选择队列，实现负载均衡。
+    """
+
+    def __init__(self):
+        # 负载均衡计数器: topic -> counter
+        self._counters: Dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def select(
+        self,
+        topic: str,
+        available_queues: List[Tuple[MessageQueue, BrokerData]],
+        message: Optional[Message] = None,
+    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        """使用轮询算法选择队列（异步版本）"""
+        if not available_queues:
+            return None
+
+        async with self._lock:
+            # 获取当前计数器值
+            counter = self._counters.get(topic, 0)
+
+            # 使用轮询算法选择队列
+            queue_index = counter % len(available_queues)
+            selected_queue, selected_broker = available_queues[queue_index]
+
+            # 更新计数器
+            self._counters[topic] = counter + 1
+
+            logger.debug(
+                f"AsyncRoundRobin selected queue for topic {topic}: {selected_queue.full_name} "
+                f"(broker: {selected_broker.broker_name}, index: {queue_index}, counter: {counter})"
+            )
+
+            return selected_queue, selected_broker
+
+    async def reset_counter(self, topic: str):
+        """重置指定topic的计数器（异步版本）"""
+        async with self._lock:
+            if topic in self._counters:
+                del self._counters[topic]
+
+    async def reset_all_counters(self):
+        """重置所有计数器（异步版本）"""
+        async with self._lock:
+            self._counters.clear()
+
+
+class AsyncRandomSelector(AsyncQueueSelector):
+    """异步随机队列选择器
+
+    随机选择一个可用的队列。
+    """
+
+    async def select(
+        self,
+        topic: str,
+        available_queues: List[Tuple[MessageQueue, BrokerData]],
+        message: Optional[Message] = None,
+    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        """随机选择队列（异步版本）"""
+        if not available_queues:
+            return None
+
+        # 在事件循环中执行随机选择
+        loop = asyncio.get_event_loop()
+        selected_queue, selected_broker = await loop.run_in_executor(
+            None, random.choice, available_queues
+        )
+
+        logger.debug(
+            f"AsyncRandom selected queue for topic {topic}: {selected_queue.full_name} "
+            f"(broker: {selected_broker.broker_name})"
+        )
+
+        return selected_queue, selected_broker
+
+
+class AsyncMessageHashSelector(AsyncQueueSelector):
+    """异步基于消息哈希的队列选择器
+
+    根据消息的key进行哈希计算，确保相同key的消息总是发送到同一个队列。
+    适用于需要顺序消息的场景。
+    """
+
+    async def select(
+        self,
+        topic: str,
+        available_queues: List[Tuple[MessageQueue, BrokerData]],
+        message: Optional[Message] = None,
+    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        """基于消息哈希选择队列（异步版本）"""
+        if not available_queues:
+            return None
+
+        # 如果没有消息，则使用随机选择
+        if not message:
+            return await AsyncRandomSelector().select(
+                topic, available_queues, message
+            )
+
+        # 优先使用分片键，其次使用消息键
+        sharding_key = message.get_property(MessageProperty.SHARDING_KEY)
+        if not sharding_key:
+            keys = message.get_keys()
+            if keys:
+                # 使用第一个key（KEYS可能包含多个，用空格分隔）
+                sharding_key = keys.split()[0]
+
+        # 如果没有找到任何key，则使用随机选择
+        if not sharding_key:
+            logger.debug(
+                "No sharding key found for message, using random selection"
+            )
+            return await AsyncRandomSelector().select(
+                topic, available_queues, message
+            )
+
+        # 在事件循环中执行哈希计算
+        loop = asyncio.get_event_loop()
+        hash_value = await loop.run_in_executor(None, hash, sharding_key)
+        queue_index = abs(hash_value) % len(available_queues)
+        selected_queue, selected_broker = available_queues[queue_index]
+
+        logger.debug(
+            f"AsyncMessageHash selected queue for topic {topic}: {selected_queue.full_name} "
+            f"(broker: {selected_broker.broker_name}, sharding_key: {sharding_key}, hash: {hash_value}, index: {queue_index})"
+        )
+
+        return selected_queue, selected_broker
+
+
+class AsyncTopicBrokerMapping:
+    """
+    异步版本的Topic-Broker映射管理器
+
+    功能:
+    1. 缓存Topic路由信息
+    2. 提供异步队列选择策略
+    3. 管理路由信息更新
+    4. 支持负载均衡
+    5. 异步安全的并发访问
+    """
+
+    def __init__(self, default_selector: Optional[AsyncQueueSelector] = None):
+        # 路由信息缓存: topic -> RouteInfo
+        self._route_cache: Dict[str, RouteInfo] = {}
+
+        # 异步锁
+        self._lock = asyncio.Lock()
+
+        # 默认路由过期时间 (秒)
+        self._default_route_timeout = 30.0
+
+        # 默认队列选择器
+        self._default_selector = default_selector or AsyncRoundRobinSelector()
+
+        logger.info(
+            f"AsyncTopicBrokerMapping initialized with selector: {type(self._default_selector).__name__}"
+        )
+
+    async def get_route_info(self, topic: str) -> Optional[TopicRouteData]:
+        """
+        获取Topic的路由信息（异步版本）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            TopicRouteData: 路由信息，如果不存在则返回None
+        """
+        async with self._lock:
+            route_info = self._route_cache.get(topic)
+
+            if route_info is None:
+                logger.debug(f"No route info found for topic: {topic}")
+                return None
+
+            # 检查路由信息是否过期
+            if route_info.is_expired(self._default_route_timeout):
+                logger.debug(f"Route info expired for topic: {topic}")
+                return None
+
+            logger.debug(f"Found route info for topic: {topic}")
+            return route_info.topic_route_data
+
+    async def update_route_info(
+        self, topic: str, topic_route_data: TopicRouteData
+    ) -> bool:
+        """
+        更新Topic的路由信息（异步版本）
+
+        Args:
+            topic: 主题名称
+            topic_route_data: 新的路由信息
+
+        Returns:
+            bool: 更新是否成功
+        """
+        if not topic_route_data:
+            logger.warning(f"Empty route data provided for topic: {topic}")
+            return False
+
+        async with self._lock:
+            try:
+                # 创建新的路由信息并预先构建队列列表
+                new_route_info = RouteInfo.create_with_queues(
+                    topic_route_data, topic
+                )
+
+                # 更新缓存
+                self._route_cache[topic] = new_route_info
+
+                # 如果默认选择器是轮询选择器，重置其计数器
+                if isinstance(self._default_selector, AsyncRoundRobinSelector):
+                    await self._default_selector.reset_counter(topic)
+
+                logger.info(
+                    f"Route info updated for topic: {topic}, "
+                    f"brokers: {len(topic_route_data.broker_data_list)}, "
+                    f"queue_data: {len(topic_route_data.queue_data_list)}, "
+                    f"available_queues: {len(new_route_info.available_queues)}"
+                )
+                return True
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to update route info for topic {topic}: {e}"
+                )
+                return False
+
+    async def remove_route_info(self, topic: str) -> bool:
+        """
+        移除Topic的路由信息（异步版本）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            bool: 移除是否成功
+        """
+        async with self._lock:
+            removed = False
+
+            if topic in self._route_cache:
+                del self._route_cache[topic]
+                removed = True
+
+            # 如果默认选择器是轮询选择器，重置其计数器
+            if isinstance(self._default_selector, AsyncRoundRobinSelector):
+                await self._default_selector.reset_counter(topic)
+
+            if removed:
+                logger.info(f"Route info removed for topic: {topic}")
+
+            return removed
+
+    async def select_queue(
+        self,
+        topic: str,
+        message: Optional[Message] = None,
+        selector: Optional[AsyncQueueSelector] = None,
+    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        """
+        为消息选择合适的队列和对应的Broker（异步版本）
+
+        使用指定的队列选择器，如果没有指定则使用默认选择器
+
+        Args:
+            topic: 主题名称
+            message: 消息对象（某些选择器会使用）
+            selector: 队列选择器，如果为None则使用默认选择器
+
+        Returns:
+            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
+        """
+        async with self._lock:
+            route_info = self._route_cache.get(topic)
+            if route_info is None:
+                logger.debug(f"No route info available for topic: {topic}")
+                return None
+
+            # 检查路由信息是否过期
+            if route_info.is_expired(self._default_route_timeout):
+                logger.debug(f"Route info expired for topic: {topic}")
+                return None
+
+            # 直接使用预构建的队列列表
+            available_queues = route_info.available_queues
+            if not available_queues:
+                logger.debug(f"No available queues found for topic: {topic}")
+                return None
+
+            # 使用指定的选择器或默认选择器
+            queue_selector = selector or self._default_selector
+
+            logger.debug(
+                f"Using selector {type(queue_selector).__name__} for topic {topic}"
+            )
+
+            return await queue_selector.select(topic, available_queues, message)
+
+    async def get_available_queues(
+        self, topic: str
+    ) -> List[Tuple[MessageQueue, BrokerData]]:
+        """
+        获取Topic的所有可用队列和对应的Broker（异步版本）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            List[Tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
+        """
+        async with self._lock:
+            route_info = self._route_cache.get(topic)
+            if route_info is None:
+                return []
+
+            # 检查路由信息是否过期
+            if route_info.is_expired(self._default_route_timeout):
+                return []
+
+            # 直接返回预构建队列列表的副本
+            return route_info.available_queues.copy()
+
+    async def get_available_brokers(self, topic: str) -> List[BrokerData]:
+        """
+        获取Topic的所有可用Broker（异步版本）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            List[BrokerData]: Broker列表
+        """
+        route_info = await self.get_route_info(topic)
+        if not route_info:
+            return []
+
+        return route_info.broker_data_list.copy()
+
+    async def get_queue_data(self, topic: str) -> List[QueueData]:
+        """
+        获取Topic的队列数据（异步版本）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            List[QueueData]: 队列数据列表
+        """
+        route_info = await self.get_route_info(topic)
+        if not route_info:
+            return []
+
+        return route_info.queue_data_list.copy()
+
+    async def get_all_topics(self) -> Set[str]:
+        """
+        获取所有已缓存的Topic（异步版本）
+
+        Returns:
+            Set[str]: Topic集合
+        """
+        async with self._lock:
+            return set(self._route_cache.keys())
+
+    async def clear_expired_routes(
+        self, timeout: Optional[float] = None
+    ) -> int:
+        """
+        清理过期的路由信息（异步版本）
+
+        Args:
+            timeout: 过期时间，如果为None则使用默认值
+
+        Returns:
+            int: 清理的Topic数量
+        """
+        if timeout is None:
+            timeout = self._default_route_timeout
+
+        current_time = time.time()
+        expired_topics = []
+
+        async with self._lock:
+            for topic, route_info in self._route_cache.items():
+                if current_time - route_info.last_update_time > timeout:
+                    expired_topics.append(topic)
+
+            # 移除过期的路由信息
+            for topic in expired_topics:
+                del self._route_cache[topic]
+
+        if expired_topics:
+            logger.info(
+                f"Cleared {len(expired_topics)} expired routes: {expired_topics}"
+            )
+
+        return len(expired_topics)
+
+    async def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        获取缓存统计信息（异步版本）
+
+        Returns:
+            Dict[str, any]: 统计信息
+        """
+        async with self._lock:
+            total_topics = len(self._route_cache)
+            total_brokers = sum(
+                len(route.topic_route_data.broker_data_list)
+                for route in self._route_cache.values()
+            )
+            total_queue_data = sum(
+                len(route.topic_route_data.queue_data_list)
+                for route in self._route_cache.values()
+            )
+
+            # 使用预构建的队列列表统计实际可用的写队列总数
+            total_available_queues = sum(
+                len(route.available_queues)
+                for route in self._route_cache.values()
+            )
+
+            return {
+                "total_topics": total_topics,
+                "total_brokers": total_brokers,
+                "total_queue_data": total_queue_data,
+                "total_available_queues": total_available_queues,
+                "topics": list(self._route_cache.keys()),
+            }
+
+    def set_route_timeout(self, timeout: float):
+        """
+        设置路由过期时间
+
+        Args:
+            timeout: 过期时间（秒）
+        """
+        if timeout <= 0:
+            raise ValueError("Route timeout must be positive")
+
+        self._default_route_timeout = timeout
+        logger.info(f"Route timeout updated to {timeout}s")
+
+    async def force_refresh(self, topic: str) -> bool:
+        """
+        强制刷新Topic的路由信息（异步版本）
+
+        实际上是移除缓存，下次访问时会触发重新获取
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            bool: 刷新是否成功
+        """
+        return await self.remove_route_info(topic)
+
+    async def start_background_cleanup(self, interval: float = 60.0):
+        """
+        启动后台清理任务（异步版本）
+
+        Args:
+            interval: 清理间隔（秒）
+        """
+        logger.info(
+            f"Starting async background cleanup task with interval {interval}s"
+        )
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                cleared_count = await self.clear_expired_routes()
+                if cleared_count > 0:
+                    logger.debug(
+                        f"Async background cleanup cleared {cleared_count} expired routes"
+                    )
+            except asyncio.CancelledError:
+                logger.info("Async background cleanup task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Async background cleanup error: {e}")
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        # 注意：这里使用同步方法获取基本信息，避免在__str__中使用await
+        return (
+            f"AsyncTopicBrokerMapping(topics={len(self._route_cache)}, "
+            f"selector={type(self._default_selector).__name__})"
+        )
+
+    def __repr__(self) -> str:
+        """详细字符串表示"""
+        return self.__str__()
