@@ -1,29 +1,26 @@
 """
 主题-Broker映射管理模块
 
-负责管理Topic到Broker的路由信息，包括路由缓存、更新机制和负载均衡。
-这是Producer的核心组件之一，为消息发送提供路由决策支持。
+负责管理Topic到Broker的路由信息缓存，为MessageRouter提供基础路由数据支持。
+这是Producer的基础组件，专注于路由信息的存储和管理，不涉及路由决策逻辑。
 
 MVP版本功能:
 - 基础的路由信息缓存
-- 简单的轮询负载均衡
 - 路由更新机制
 - 线程安全保证
+- 路由过期管理
 
 作者: pyrocketmq团队
 版本: MVP 1.0
 """
 
-import abc
 import asyncio
-import random
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model.message import Message, MessageProperty
 from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.model.nameserver_models import (
     BrokerData,
@@ -32,157 +29,6 @@ from pyrocketmq.model.nameserver_models import (
 )
 
 logger = get_logger(__name__)
-
-
-class QueueSelector(abc.ABC):
-    """队列选择器抽象基类
-
-    定义队列选择的接口，支持不同的负载均衡策略。
-    """
-
-    @abc.abstractmethod
-    def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """
-        从可用队列中选择一个队列
-
-        Args:
-            topic: 主题名称
-            available_queues: 可用队列列表
-            message: 消息对象（某些策略可能会使用）
-
-        Returns:
-            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
-        """
-        pass
-
-
-class RoundRobinSelector(QueueSelector):
-    """轮询队列选择器
-
-    按顺序依次选择队列，实现负载均衡。
-    """
-
-    def __init__(self):
-        # 负载均衡计数器: topic -> counter
-        self._counters: Dict[str, int] = {}
-        self._lock = threading.RLock()
-
-    def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """使用轮询算法选择队列"""
-        if not available_queues:
-            return None
-
-        with self._lock:
-            # 获取当前计数器值
-            counter = self._counters.get(topic, 0)
-
-            # 使用轮询算法选择队列
-            queue_index = counter % len(available_queues)
-            selected_queue, selected_broker = available_queues[queue_index]
-
-            # 更新计数器
-            self._counters[topic] = counter + 1
-
-            logger.debug(
-                f"RoundRobin selected queue for topic {topic}: {selected_queue.full_name} "
-                f"(broker: {selected_broker.broker_name}, index: {queue_index}, counter: {counter})"
-            )
-
-            return selected_queue, selected_broker
-
-    def reset_counter(self, topic: str):
-        """重置指定topic的计数器"""
-        with self._lock:
-            if topic in self._counters:
-                del self._counters[topic]
-
-    def reset_all_counters(self):
-        """重置所有计数器"""
-        with self._lock:
-            self._counters.clear()
-
-
-class RandomSelector(QueueSelector):
-    """随机队列选择器
-
-    随机选择一个可用的队列。
-    """
-
-    def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """随机选择队列"""
-        if not available_queues:
-            return None
-
-        selected_queue, selected_broker = random.choice(available_queues)
-
-        logger.debug(
-            f"Random selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name})"
-        )
-
-        return selected_queue, selected_broker
-
-
-class MessageHashSelector(QueueSelector):
-    """基于消息哈希的队列选择器
-
-    根据消息的key进行哈希计算，确保相同key的消息总是发送到同一个队列。
-    适用于需要顺序消息的场景。
-    """
-
-    def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """基于消息哈希选择队列"""
-        if not available_queues:
-            return None
-
-        # 如果没有消息，则使用随机选择
-        if not message:
-            return RandomSelector().select(topic, available_queues, message)
-
-        # 优先使用分片键，其次使用消息键
-        sharding_key = message.get_property(MessageProperty.SHARDING_KEY)
-        if not sharding_key:
-            keys = message.get_keys()
-            if keys:
-                # 使用第一个key（KEYS可能包含多个，用空格分隔）
-                sharding_key = keys.split()[0]
-
-        # 如果没有找到任何key，则使用随机选择
-        if not sharding_key:
-            logger.debug(
-                "No sharding key found for message, using random selection"
-            )
-            return RandomSelector().select(topic, available_queues, message)
-        hash_value = hash(sharding_key)
-        queue_index = abs(hash_value) % len(available_queues)
-        selected_queue, selected_broker = available_queues[queue_index]
-
-        logger.debug(
-            f"MessageHash selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name}, sharding_key: {sharding_key}, hash: {hash_value}, index: {queue_index})"
-        )
-
-        return selected_queue, selected_broker
 
 
 @dataclass
@@ -255,14 +101,16 @@ class TopicBrokerMapping:
     """
     Topic-Broker映射管理器
 
+    专注于路由信息的缓存和管理，为MessageRouter提供基础数据支持。
+
     功能:
     1. 缓存Topic路由信息
-    2. 提供队列选择策略
-    3. 管理路由信息更新
-    4. 支持负载均衡
+    2. 管理路由信息更新
+    3. 路由过期管理
+    4. 提供可用队列列表（不涉及选择逻辑）
     """
 
-    def __init__(self, default_selector: Optional[QueueSelector] = None):
+    def __init__(self, route_timeout: float = 30.0):
         # 路由信息缓存: topic -> RouteInfo
         self._route_cache: Dict[str, RouteInfo] = {}
 
@@ -270,13 +118,10 @@ class TopicBrokerMapping:
         self._lock = threading.RLock()
 
         # 默认路由过期时间 (秒)
-        self._default_route_timeout = 30.0
-
-        # 默认队列选择器
-        self._default_selector = default_selector or RoundRobinSelector()
+        self._default_route_timeout = route_timeout
 
         logger.info(
-            f"TopicBrokerMapping initialized with selector: {type(self._default_selector).__name__}"
+            f"TopicBrokerMapping initialized with timeout={route_timeout}s"
         )
 
     def get_route_info(self, topic: str) -> Optional[TopicRouteData]:
@@ -331,10 +176,6 @@ class TopicBrokerMapping:
                 # 更新缓存
                 self._route_cache[topic] = new_route_info
 
-                # 如果默认选择器是轮询选择器，重置其计数器
-                if isinstance(self._default_selector, RoundRobinSelector):
-                    self._default_selector.reset_counter(topic)
-
                 logger.info(
                     f"Route info updated for topic: {topic}, "
                     f"brokers: {len(topic_route_data.broker_data_list)}, "
@@ -366,59 +207,10 @@ class TopicBrokerMapping:
                 del self._route_cache[topic]
                 removed = True
 
-            # 如果默认选择器是轮询选择器，重置其计数器
-            if isinstance(self._default_selector, RoundRobinSelector):
-                self._default_selector.reset_counter(topic)
-
             if removed:
                 logger.info(f"Route info removed for topic: {topic}")
 
             return removed
-
-    def select_queue(
-        self,
-        topic: str,
-        message: Optional[Message] = None,
-        selector: Optional[QueueSelector] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """
-        为消息选择合适的队列和对应的Broker
-
-        使用指定的队列选择器，如果没有指定则使用默认选择器
-
-        Args:
-            topic: 主题名称
-            message: 消息对象（某些选择器会使用）
-            selector: 队列选择器，如果为None则使用默认选择器
-
-        Returns:
-            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
-        """
-        with self._lock:
-            route_info = self._route_cache.get(topic)
-            if route_info is None:
-                logger.debug(f"No route info available for topic: {topic}")
-                return None
-
-            # 检查路由信息是否过期
-            if route_info.is_expired(self._default_route_timeout):
-                logger.debug(f"Route info expired for topic: {topic}")
-                return None
-
-            # 直接使用预构建的队列列表
-            available_queues = route_info.available_queues
-            if not available_queues:
-                logger.debug(f"No available queues found for topic: {topic}")
-                return None
-
-            # 使用指定的选择器或默认选择器
-            queue_selector = selector or self._default_selector
-
-            logger.debug(
-                f"Using selector {type(queue_selector).__name__} for topic {topic}"
-            )
-
-            return queue_selector.select(topic, available_queues, message)
 
     def get_available_queues(
         self, topic: str
@@ -622,181 +414,21 @@ class TopicBrokerMapping:
 # ============================================================================
 
 
-class AsyncQueueSelector(abc.ABC):
-    """异步队列选择器抽象基类
-
-    定义异步队列选择的接口，支持不同的负载均衡策略。
-    """
-
-    @abc.abstractmethod
-    async def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """
-        从可用队列中选择一个队列（异步版本）
-
-        Args:
-            topic: 主题名称
-            available_queues: 可用队列列表
-            message: 消息对象（某些策略可能会使用）
-
-        Returns:
-            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
-        """
-        pass
-
-
-class AsyncRoundRobinSelector(AsyncQueueSelector):
-    """异步轮询队列选择器
-
-    按顺序依次选择队列，实现负载均衡。
-    """
-
-    def __init__(self):
-        # 负载均衡计数器: topic -> counter
-        self._counters: Dict[str, int] = {}
-        self._lock = asyncio.Lock()
-
-    async def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """使用轮询算法选择队列（异步版本）"""
-        if not available_queues:
-            return None
-
-        async with self._lock:
-            # 获取当前计数器值
-            counter = self._counters.get(topic, 0)
-
-            # 使用轮询算法选择队列
-            queue_index = counter % len(available_queues)
-            selected_queue, selected_broker = available_queues[queue_index]
-
-            # 更新计数器
-            self._counters[topic] = counter + 1
-
-            logger.debug(
-                f"AsyncRoundRobin selected queue for topic {topic}: {selected_queue.full_name} "
-                f"(broker: {selected_broker.broker_name}, index: {queue_index}, counter: {counter})"
-            )
-
-            return selected_queue, selected_broker
-
-    async def reset_counter(self, topic: str):
-        """重置指定topic的计数器（异步版本）"""
-        async with self._lock:
-            if topic in self._counters:
-                del self._counters[topic]
-
-    async def reset_all_counters(self):
-        """重置所有计数器（异步版本）"""
-        async with self._lock:
-            self._counters.clear()
-
-
-class AsyncRandomSelector(AsyncQueueSelector):
-    """异步随机队列选择器
-
-    随机选择一个可用的队列。
-    """
-
-    async def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """随机选择队列（异步版本）"""
-        if not available_queues:
-            return None
-
-        # 在事件循环中执行随机选择
-        loop = asyncio.get_event_loop()
-        selected_queue, selected_broker = await loop.run_in_executor(
-            None, random.choice, available_queues
-        )
-
-        logger.debug(
-            f"AsyncRandom selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name})"
-        )
-
-        return selected_queue, selected_broker
-
-
-class AsyncMessageHashSelector(AsyncQueueSelector):
-    """异步基于消息哈希的队列选择器
-
-    根据消息的key进行哈希计算，确保相同key的消息总是发送到同一个队列。
-    适用于需要顺序消息的场景。
-    """
-
-    async def select(
-        self,
-        topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """基于消息哈希选择队列（异步版本）"""
-        if not available_queues:
-            return None
-
-        # 如果没有消息，则使用随机选择
-        if not message:
-            return await AsyncRandomSelector().select(
-                topic, available_queues, message
-            )
-
-        # 优先使用分片键，其次使用消息键
-        sharding_key = message.get_property(MessageProperty.SHARDING_KEY)
-        if not sharding_key:
-            keys = message.get_keys()
-            if keys:
-                # 使用第一个key（KEYS可能包含多个，用空格分隔）
-                sharding_key = keys.split()[0]
-
-        # 如果没有找到任何key，则使用随机选择
-        if not sharding_key:
-            logger.debug(
-                "No sharding key found for message, using random selection"
-            )
-            return await AsyncRandomSelector().select(
-                topic, available_queues, message
-            )
-
-        # 在事件循环中执行哈希计算
-        loop = asyncio.get_event_loop()
-        hash_value = await loop.run_in_executor(None, hash, sharding_key)
-        queue_index = abs(hash_value) % len(available_queues)
-        selected_queue, selected_broker = available_queues[queue_index]
-
-        logger.debug(
-            f"AsyncMessageHash selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name}, sharding_key: {sharding_key}, hash: {hash_value}, index: {queue_index})"
-        )
-
-        return selected_queue, selected_broker
-
-
 class AsyncTopicBrokerMapping:
     """
     异步版本的Topic-Broker映射管理器
 
+    专注于路由信息的异步缓存和管理，为AsyncMessageRouter提供基础数据支持。
+
     功能:
-    1. 缓存Topic路由信息
-    2. 提供异步队列选择策略
-    3. 管理路由信息更新
-    4. 支持负载均衡
+    1. 异步缓存Topic路由信息
+    2. 异步管理路由信息更新
+    3. 路由过期管理
+    4. 提供可用队列列表（不涉及选择逻辑）
     5. 异步安全的并发访问
     """
 
-    def __init__(self, default_selector: Optional[AsyncQueueSelector] = None):
+    def __init__(self, route_timeout: float = 30.0):
         # 路由信息缓存: topic -> RouteInfo
         self._route_cache: Dict[str, RouteInfo] = {}
 
@@ -804,13 +436,10 @@ class AsyncTopicBrokerMapping:
         self._lock = asyncio.Lock()
 
         # 默认路由过期时间 (秒)
-        self._default_route_timeout = 30.0
-
-        # 默认队列选择器
-        self._default_selector = default_selector or AsyncRoundRobinSelector()
+        self._default_route_timeout = route_timeout
 
         logger.info(
-            f"AsyncTopicBrokerMapping initialized with selector: {type(self._default_selector).__name__}"
+            f"AsyncTopicBrokerMapping initialized with timeout={route_timeout}s"
         )
 
     async def get_route_info(self, topic: str) -> Optional[TopicRouteData]:
@@ -865,10 +494,6 @@ class AsyncTopicBrokerMapping:
                 # 更新缓存
                 self._route_cache[topic] = new_route_info
 
-                # 如果默认选择器是轮询选择器，重置其计数器
-                if isinstance(self._default_selector, AsyncRoundRobinSelector):
-                    await self._default_selector.reset_counter(topic)
-
                 logger.info(
                     f"Route info updated for topic: {topic}, "
                     f"brokers: {len(topic_route_data.broker_data_list)}, "
@@ -900,59 +525,10 @@ class AsyncTopicBrokerMapping:
                 del self._route_cache[topic]
                 removed = True
 
-            # 如果默认选择器是轮询选择器，重置其计数器
-            if isinstance(self._default_selector, AsyncRoundRobinSelector):
-                await self._default_selector.reset_counter(topic)
-
             if removed:
                 logger.info(f"Route info removed for topic: {topic}")
 
             return removed
-
-    async def select_queue(
-        self,
-        topic: str,
-        message: Optional[Message] = None,
-        selector: Optional[AsyncQueueSelector] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
-        """
-        为消息选择合适的队列和对应的Broker（异步版本）
-
-        使用指定的队列选择器，如果没有指定则使用默认选择器
-
-        Args:
-            topic: 主题名称
-            message: 消息对象（某些选择器会使用）
-            selector: 队列选择器，如果为None则使用默认选择器
-
-        Returns:
-            Tuple[MessageQueue, BrokerData]: 选中的队列和Broker，如果无可用队列则返回None
-        """
-        async with self._lock:
-            route_info = self._route_cache.get(topic)
-            if route_info is None:
-                logger.debug(f"No route info available for topic: {topic}")
-                return None
-
-            # 检查路由信息是否过期
-            if route_info.is_expired(self._default_route_timeout):
-                logger.debug(f"Route info expired for topic: {topic}")
-                return None
-
-            # 直接使用预构建的队列列表
-            available_queues = route_info.available_queues
-            if not available_queues:
-                logger.debug(f"No available queues found for topic: {topic}")
-                return None
-
-            # 使用指定的选择器或默认选择器
-            queue_selector = selector or self._default_selector
-
-            logger.debug(
-                f"Using selector {type(queue_selector).__name__} for topic {topic}"
-            )
-
-            return await queue_selector.select(topic, available_queues, message)
 
     async def get_available_queues(
         self, topic: str
@@ -1141,10 +717,7 @@ class AsyncTopicBrokerMapping:
     def __str__(self) -> str:
         """字符串表示"""
         # 注意：这里使用同步方法获取基本信息，避免在__str__中使用await
-        return (
-            f"AsyncTopicBrokerMapping(topics={len(self._route_cache)}, "
-            f"selector={type(self._default_selector).__name__})"
-        )
+        return f"AsyncTopicBrokerMapping(topics={len(self._route_cache)})"
 
     def __repr__(self) -> str:
         """详细字符串表示"""

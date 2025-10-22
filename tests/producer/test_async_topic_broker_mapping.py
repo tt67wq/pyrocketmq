@@ -22,12 +22,12 @@ from pyrocketmq.model.nameserver_models import (
     QueueData,
     TopicRouteData,
 )
-from pyrocketmq.producer.topic_broker_mapping import (
+from pyrocketmq.producer.queue_selectors import (
     AsyncMessageHashSelector,
     AsyncRandomSelector,
     AsyncRoundRobinSelector,
-    AsyncTopicBrokerMapping,
 )
+from pyrocketmq.producer.topic_broker_mapping import AsyncTopicBrokerMapping
 
 
 class TestAsyncQueueSelectors:
@@ -175,16 +175,13 @@ class TestAsyncTopicBrokerMapping:
     @pytest.mark.asyncio
     async def test_async_mapping_initialization(self):
         """测试异步映射初始化"""
-        # 使用默认轮询选择器
+        # 使用默认配置
         mapping = AsyncTopicBrokerMapping()
-        assert isinstance(mapping._default_selector, AsyncRoundRobinSelector)
+        assert mapping._default_route_timeout == 30.0
 
-        # 使用自定义选择器
-        random_selector = AsyncRandomSelector()
-        mapping_custom = AsyncTopicBrokerMapping(
-            default_selector=random_selector
-        )
-        assert mapping_custom._default_selector == random_selector
+        # 使用自定义超时时间
+        mapping_custom = AsyncTopicBrokerMapping(route_timeout=60.0)
+        assert mapping_custom._default_route_timeout == 60.0
 
     @pytest.mark.asyncio
     async def test_async_route_info_management(self, sample_topic_route_data):
@@ -219,33 +216,32 @@ class TestAsyncTopicBrokerMapping:
         assert topic in all_topics
 
     @pytest.mark.asyncio
-    async def test_async_queue_selection(self, sample_topic_route_data):
-        """测试异步队列选择"""
+    async def test_async_queue_access(self, sample_topic_route_data):
+        """测试异步队列访问"""
         mapping = AsyncTopicBrokerMapping()
         topic = "test_topic"
 
         # 更新路由信息
         await mapping.update_route_info(topic, sample_topic_route_data)
 
-        # 测试默认选择器选择队列
+        # 测试获取可用队列
+        available_queues = await mapping.get_available_queues(topic)
+        assert len(available_queues) == 4  # 1 broker * 4 queues
+
+        # 测试队列选择器与可用队列的集成
+        hash_selector = AsyncMessageHashSelector()
         message = Message(topic=topic, body=b"test_message")
-        selected = await mapping.select_queue(topic, message)
+        message.set_property("SHARDING_KEY", "user_123")
+
+        selected = await hash_selector.select(topic, available_queues, message)
         assert selected is not None
         assert selected[0].topic == topic
 
-        # 测试使用自定义选择器
-        hash_selector = AsyncMessageHashSelector()
-        message.set_property("SHARDING_KEY", "user_123")
-        selected_hash = await mapping.select_queue(
-            topic, message, hash_selector
-        )
-        assert selected_hash is not None
-
         # 测试无路由信息的情况
-        result_no_route = await mapping.select_queue(
-            "non_existent_topic", message
+        available_queues_no_route = await mapping.get_available_queues(
+            "non_existent_topic"
         )
-        assert result_no_route is None
+        assert len(available_queues_no_route) == 0
 
     @pytest.mark.asyncio
     async def test_async_route_expiration(self, sample_topic_route_data):
@@ -330,17 +326,16 @@ class TestAsyncTopicBrokerMapping:
         results = await asyncio.gather(*update_tasks)
         assert all(results)  # 所有更新都应该成功
 
-        # 并发选择队列
-        message = Message(topic=topic, body=b"test")
-        select_tasks = []
+        # 并发访问队列信息
+        access_tasks = []
         for i in range(20):
-            task = asyncio.create_task(mapping.select_queue(topic, message))
-            select_tasks.append(task)
+            task = asyncio.create_task(mapping.get_available_queues(topic))
+            access_tasks.append(task)
 
-        selected_results = await asyncio.gather(*select_tasks)
+        access_results = await asyncio.gather(*access_tasks)
         assert all(
-            result is not None for result in selected_results
-        )  # 所有选择都应该成功
+            len(result) == 4 for result in access_results
+        )  # 所有访问都应该成功，返回4个队列
 
     @pytest.mark.asyncio
     async def test_async_background_cleanup(self, sample_topic_route_data):
