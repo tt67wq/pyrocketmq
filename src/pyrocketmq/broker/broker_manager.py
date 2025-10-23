@@ -576,8 +576,33 @@ class BrokerManager:
                 self._broker_pools[broker_addr] = pool
                 self._logger.debug(f"连接池创建成功: {broker_addr}")
 
+                # 立即尝试建立连接
+                self._logger.info(f"正在建立与Broker的初始连接: {broker_addr}")
+                try:
+                    # 执行健康检查来建立初始连接
+                    connection_success = await pool.health_check()
+                    if connection_success:
+                        broker_info.state = BrokerState.HEALTHY
+                        broker_info.consecutive_failures = 0
+                        self._logger.info(
+                            f"与Broker建立初始连接成功: {broker_addr}"
+                        )
+                    else:
+                        broker_info.state = BrokerState.UNHEALTHY
+                        broker_info.consecutive_failures = 1
+                        self._logger.warning(
+                            f"与Broker建立初始连接失败: {broker_addr}"
+                        )
+                except Exception as e:
+                    broker_info.state = BrokerState.FAILED
+                    broker_info.consecutive_failures = 1
+                    self._logger.error(
+                        f"与Broker建立初始连接时发生异常: {broker_addr}, error={e}"
+                    )
+
                 self._logger.info(
                     f"Broker添加完成: {broker_addr} ({broker_name}), "
+                    f"状态={broker_info.state.name}, "
                     f"总Broker数={len(self._brokers)}, 总连接池数={len(self._broker_pools)}"
                 )
 
@@ -1357,8 +1382,35 @@ class SyncBrokerManager:
                 self._broker_pools[broker_addr] = pool
                 self._logger.debug(f"同步连接池创建成功: {broker_addr}")
 
+                # 立即尝试建立连接
+                self._logger.info(
+                    f"正在建立与同步Broker的初始连接: {broker_addr}"
+                )
+                try:
+                    # 执行健康检查来建立初始连接
+                    connection_success = pool.health_check()
+                    if connection_success:
+                        broker_info.state = BrokerState.HEALTHY
+                        broker_info.consecutive_failures = 0
+                        self._logger.info(
+                            f"与同步Broker建立初始连接成功: {broker_addr}"
+                        )
+                    else:
+                        broker_info.state = BrokerState.UNHEALTHY
+                        broker_info.consecutive_failures = 1
+                        self._logger.warning(
+                            f"与同步Broker建立初始连接失败: {broker_addr}"
+                        )
+                except Exception as e:
+                    broker_info.state = BrokerState.FAILED
+                    broker_info.consecutive_failures = 1
+                    self._logger.error(
+                        f"与同步Broker建立初始连接时发生异常: {broker_addr}, error={e}"
+                    )
+
                 self._logger.info(
                     f"同步Broker添加完成: {broker_addr} ({broker_name}), "
+                    f"状态={broker_info.state.name}, "
                     f"总Broker数={len(self._brokers)}, 总连接池数={len(self._broker_pools)}"
                 )
 

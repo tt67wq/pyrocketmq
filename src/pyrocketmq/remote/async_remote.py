@@ -65,8 +65,6 @@ class AsyncRemote:
         """建立连接"""
         try:
             await self.transport.start()
-            self._logger.info("异步连接建立成功")
-
             # 启动清理任务
             self._start_cleanup_task()
 

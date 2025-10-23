@@ -67,8 +67,6 @@ class Remote:
         """建立连接"""
         try:
             self.transport.start()
-            self._logger.info("连接建立成功")
-
             # 启动清理线程
             self._start_cleanup_thread()
 
@@ -391,8 +389,6 @@ class Remote:
 
     def _recv_worker(self) -> None:
         """消息接收工作线程"""
-        self._logger.info("消息接收线程开始工作")
-
         while not self._recv_stop_event.is_set():
             try:
                 if not self.transport.is_connected:
@@ -432,8 +428,6 @@ class Remote:
             except Exception as e:
                 self._logger.error(f"接收消息时发生错误: {e}")
                 time.sleep(1.0)
-
-        self._logger.info("消息接收线程结束")
 
     def _handle_response(self, command: RemotingCommand) -> None:
         """处理接收到的命令（响应或请求）"""

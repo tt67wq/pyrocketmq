@@ -42,7 +42,7 @@ class ConnectionStateMachine(StateMachine):
     def stop(self):
         """关闭连接"""
         if not self.is_disconnected:
-            self.disconnect()
+            self.close()
         else:
             self._logger.warning("当前状态不允许断开操作")
 
@@ -58,12 +58,10 @@ class ConnectionStateMachine(StateMachine):
             self._logger.error(f"连接失败: {e}")
             self.disconnect()
         else:
-            self._logger.info("连接成功")
             self.connect_success()
 
     def on_connect_success(self):
         """进入已连接状态"""
-        self._logger.info(f"连接已建立到 {self.config.address}")
         # 设置socket选项
         if self._socket:
             # 基础选项
@@ -379,7 +377,7 @@ class AsyncConnectionStateMachine(StateMachine):
     async def stop(self) -> None:
         """关闭连接"""
         if not self.is_disconnected:
-            await self.disconnect()
+            await self.close()
         else:
             self._logger.warning("当前状态不允许断开操作")
 
