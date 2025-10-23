@@ -4,9 +4,6 @@
 
 import os
 from dataclasses import dataclass
-from typing import Optional
-
-from pyrocketmq.transport.config import TransportConfig
 
 
 @dataclass
@@ -30,7 +27,7 @@ class RemoteConfig:
     connection_pool_timeout: float = 10.0  # 连接池获取超时时间
 
     # 传输层配置
-    transport_config: Optional[TransportConfig] = None
+    # transport_config: Optional[TransportConfig] = None
 
     def __post_init__(self):
         """后初始化处理"""
@@ -54,8 +51,8 @@ class RemoteConfig:
             raise ValueError("connection_pool_timeout must be greater than 0")
 
         # 创建默认传输层配置
-        if self.transport_config is None:
-            self.transport_config = TransportConfig()
+        # if self.transport_config is None:
+        #     self.transport_config = TransportConfig()
 
     @classmethod
     def from_env(cls) -> "RemoteConfig":
@@ -131,13 +128,13 @@ class RemoteConfig:
         config.connection_pool_size = pool_size
         return config
 
-    def with_transport_config(
-        self, transport_config: TransportConfig
-    ) -> "RemoteConfig":
-        """设置传输层配置"""
-        config = self._copy()
-        config.transport_config = transport_config
-        return config
+    # def with_transport_config(
+    #     self, transport_config: TransportConfig
+    # ) -> "RemoteConfig":
+    #     """设置传输层配置"""
+    #     config = self._copy()
+    #     config.transport_config = transport_config
+    #     return config
 
     def with_metrics_enabled(self, enabled: bool) -> "RemoteConfig":
         """设置是否启用性能指标"""
@@ -156,7 +153,7 @@ class RemoteConfig:
             enable_metrics=self.enable_metrics,
             connection_pool_size=self.connection_pool_size,
             connection_pool_timeout=self.connection_pool_timeout,
-            transport_config=self.transport_config,
+            # transport_config=self.transport_config,
         )
 
     def validate(self) -> None:
