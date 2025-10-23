@@ -221,10 +221,7 @@ class Producer:
             # 2. 启动Broker管理器
             self._broker_manager.start()
 
-            # 3. 初始化基础路由信息
-            self._init_default_topic_route()
-
-            # 4. 启动后台任务（路由更新等）
+            # 3. 启动后台任务（路由更新等）
             self._start_background_tasks()
 
             # 设置运行状态
@@ -449,18 +446,6 @@ class Producer:
 
         if not self._nameserver_connections:
             raise ProducerStartError("No NameServer connections available")
-
-    def _init_default_topic_route(self) -> None:
-        """初始化默认Topic路由信息"""
-        # 尝试获取一些默认Topic的路由信息
-        default_topics = ["TBW102", "SELF_TEST_TOPIC"]
-
-        for topic in default_topics:
-            try:
-                self.update_route_info(topic)
-                logger.debug(f"Initialized route for default topic: {topic}")
-            except Exception as e:
-                logger.debug(f"Failed to initialize route for {topic}: {e}")
 
     def _start_background_tasks(self) -> None:
         """启动后台任务"""
