@@ -21,13 +21,18 @@ MVP版本功能:
 版本: MVP 1.0
 """
 
+import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
+from pyrocketmq.broker.broker_manager import SyncBrokerManager
 from pyrocketmq.logging import get_logger
+from pyrocketmq.model.enums import ResponseCode
+from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message
-from pyrocketmq.model.nameserver_models import BrokerData
+from pyrocketmq.model.message_queue import MessageQueue
+from pyrocketmq.model.nameserver_models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
@@ -39,6 +44,9 @@ from pyrocketmq.producer.errors import (
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
+from pyrocketmq.remote.config import RemoteConfig
+from pyrocketmq.remote.sync_remote import Remote
+from pyrocketmq.transport.config import TransportConfig
 
 logger = get_logger(__name__)
 
@@ -157,14 +165,38 @@ class Producer:
         )
 
         # 消息路由器
-        self._message_router = MessageRouter(self._topic_mapping)
+        self._message_router = MessageRouter(topic_mapping=self._topic_mapping)
 
         # 基础状态统计
         self._total_sent = 0
         self._total_failed = 0
 
+        # NameServer连接管理（仅用于路由查询）
+        self._nameserver_connections: Dict[str, Remote] = {}
+        self._nameserver_addrs = self._parse_nameserver_addrs(
+            self._config.namesrv_addr
+        )
+
+        # Broker管理器（使用现有的连接池管理）
+        transport_config = TransportConfig(
+            host="localhost",  # 默认值，会被Broker覆盖
+            port=10911,  # 默认值，会被Broker覆盖
+        )
+        remote_config = RemoteConfig(
+            rpc_timeout=self._config.send_msg_timeout / 1000.0,
+        )
+        self._broker_manager = SyncBrokerManager(
+            remote_config=remote_config,
+            transport_config=transport_config,
+        )
+
+        # 后台任务线程
+        self._background_thread: Optional[threading.Thread] = None
+        self._shutdown_event = threading.Event()
+
         logger.info(
-            f"Producer initialized with config: {self._config.producer_group}"
+            f"Producer initialized with config: {self._config.producer_group}, "
+            f"NameServer addrs: {self._nameserver_addrs}"
         )
 
     def start(self) -> None:
@@ -183,9 +215,17 @@ class Producer:
         try:
             logger.info("Starting producer...")
 
-            # TODO: 初始化NameServer连接
-            # TODO: 初始化Broker连接池
-            # TODO: 启动后台任务（路由更新、心跳等）
+            # 1. 初始化NameServer连接（仅用于路由查询）
+            self._init_nameserver_connections()
+
+            # 2. 启动Broker管理器
+            self._broker_manager.start()
+
+            # 3. 初始化基础路由信息
+            self._init_default_topic_route()
+
+            # 4. 启动后台任务（路由更新等）
+            self._start_background_tasks()
 
             # 设置运行状态
             self._running = True
@@ -215,9 +255,14 @@ class Producer:
             # 设置停止状态
             self._running = False
 
-            # TODO: 停止后台任务
-            # TODO: 关闭Broker连接
-            # TODO: 清理资源
+            # 1. 停止后台任务
+            self._stop_background_tasks()
+
+            # 2. 关闭Broker管理器
+            self._broker_manager.shutdown()
+
+            # 3. 关闭NameServer连接
+            self._close_nameserver_connections()
 
             logger.info(
                 f"Producer shutdown completed. Total sent: {self._total_sent}, "
@@ -269,31 +314,26 @@ class Producer:
                     f"No available broker data for topic: {message.topic}"
                 )
 
-            # 3. 获取Broker地址（优先选择Master）
-            broker_addr = self._get_broker_address(broker_data)
-            if not broker_addr:
+            target_broker_addr = routing_result.broker_address
+            if not target_broker_addr:
                 raise BrokerNotAvailableError(
-                    f"No available broker address for: {broker_data.broker_name}"
+                    f"No available broker address for topic: {message.topic}"
                 )
-
             logger.debug(
-                f"Sending message to {broker_addr}, queue: {message_queue.full_name}"
+                f"Sending message to {target_broker_addr}, queue: {message_queue.full_name}"
             )
 
-            # TODO: 4. 发送消息到Broker
-            # 这里需要实现实际的网络发送逻辑
-            # 暂时返回模拟结果
-            message_id = f"MSG_{int(time.time() * 1000000)}"
-
-            # 更新统计
-            self._total_sent += 1
-
-            return SendResult.success_result(
-                message_id=message_id,
-                topic=message.topic,
-                broker_name=broker_data.broker_name,
-                queue_id=message_queue.queue_id,
+            # 4. 发送消息到Broker
+            send_result = self._send_message_to_broker(
+                message, target_broker_addr, message_queue
             )
+
+            if send_result.success:
+                self._total_sent += 1
+                return send_result
+            else:
+                self._total_failed += 1
+                return send_result
 
         except Exception as e:
             self._total_failed += 1
@@ -345,18 +385,20 @@ class Producer:
                 )
 
             # 3. 获取Broker地址
-            broker_addr = self._get_broker_address(broker_data)
-            if not broker_addr:
+            target_broker_addr = routing_result.broker_address
+            if not target_broker_addr:
                 raise BrokerNotAvailableError(
                     f"No available broker address for: {broker_data.broker_name}"
                 )
 
             logger.debug(
-                f"Sending oneway message to {broker_addr}, queue: {message_queue.full_name}"
+                f"Sending oneway message to {target_broker_addr}, queue: {message_queue.full_name}"
             )
 
-            # TODO: 4. 发送消息到Broker（单向）
-            # 这里需要实现实际的网络发送逻辑
+            # 4. 发送消息到Broker
+            self._send_message_to_broker_oneway(
+                message, target_broker_addr, message_queue
+            )
 
             # 更新统计（单向发送不计入成功/失败）
             logger.debug("Oneway message sent successfully")
@@ -369,6 +411,183 @@ class Producer:
 
             raise MessageSendError(f"Oneway message send failed: {e}") from e
 
+    def _parse_nameserver_addrs(self, namesrv_addr: str) -> Dict[str, str]:
+        """解析NameServer地址列表
+
+        Args:
+            namesrv_addr: NameServer地址，格式为"host1:port1;host2:port2"
+
+        Returns:
+            Dict[str, str]: 地址字典 {addr: host:port}
+        """
+        addrs = {}
+        for addr in namesrv_addr.split(";"):
+            addr = addr.strip()
+            if addr:
+                addrs[addr] = addr
+        return addrs
+
+    def _init_nameserver_connections(self) -> None:
+        """初始化NameServer连接"""
+        logger.info("Initializing NameServer connections...")
+
+        for addr in self._nameserver_addrs:
+            try:
+                host, port = addr.split(":")
+                transport_config = TransportConfig(host=host, port=int(port))
+                remote_config = RemoteConfig().with_rpc_timeout(
+                    self._config.send_msg_timeout
+                )
+                remote = Remote(transport_config, remote_config)
+
+                remote.connect()
+                self._nameserver_connections[addr] = remote
+                logger.info(f"Connected to NameServer: {addr}")
+
+            except Exception as e:
+                logger.error(f"Failed to connect to NameServer {addr}: {e}")
+
+        if not self._nameserver_connections:
+            raise ProducerStartError("No NameServer connections available")
+
+    def _init_default_topic_route(self) -> None:
+        """初始化默认Topic路由信息"""
+        # 尝试获取一些默认Topic的路由信息
+        default_topics = ["TBW102", "SELF_TEST_TOPIC"]
+
+        for topic in default_topics:
+            try:
+                self.update_route_info(topic)
+                logger.debug(f"Initialized route for default topic: {topic}")
+            except Exception as e:
+                logger.debug(f"Failed to initialize route for {topic}: {e}")
+
+    def _start_background_tasks(self) -> None:
+        """启动后台任务"""
+        self._background_thread = threading.Thread(
+            target=self._background_task_loop,
+            name="ProducerBackgroundTask",
+            daemon=True,
+        )
+        self._background_thread.start()
+        logger.info("Background tasks started")
+
+    def _background_task_loop(self) -> None:
+        """后台任务循环"""
+        logger.info("Background task loop started")
+
+        while not self._shutdown_event.wait(
+            self._config.update_topic_route_info_interval / 1000.0
+        ):
+            try:
+                # 定期更新路由信息
+                self._refresh_all_routes()
+
+            except Exception as e:
+                logger.error(f"Background task error: {e}")
+
+        logger.info("Background task loop stopped")
+
+    def _refresh_all_routes(self) -> None:
+        """刷新所有Topic的路由信息"""
+        topics = list(self._topic_mapping.get_all_topics())
+
+        for topic in topics:
+            try:
+                if self._topic_mapping.get_route_info(topic) is None:
+                    self.update_route_info(topic)
+            except Exception as e:
+                logger.debug(f"Failed to refresh route for {topic}: {e}")
+
+    def _send_message_to_broker(
+        self, message: Message, broker_addr: str, message_queue: MessageQueue
+    ) -> SendResult:
+        """发送消息到Broker
+
+        Args:
+            message: 消息对象
+            broker_addr: Broker地址
+            message_queue: 消息队列
+
+        Returns:
+            SendResult: 发送结果
+        """
+
+        try:
+            # 获取或创建Broker连接
+            broker_remote = self._broker_manager.get_connection(broker_addr)
+
+            # 创建发送请求
+            request = RemotingRequestFactory.create_send_message_request(
+                producer_group=self._config.producer_group,
+                topic=message.topic,
+                body=message.body,
+                queue_id=message_queue.queue_id,
+                properties=message.properties,
+            )
+
+            # 发送请求
+            response = broker_remote.rpc(
+                request, self._config.send_msg_timeout / 1000.0
+            )
+
+            if response and response.code == 0:
+                # 发送成功
+                message_id = response.ext_fields.get(
+                    "msgId", f"MSG_{int(time.time() * 1000000)}"
+                )
+
+                return SendResult.success_result(
+                    message_id=message_id,
+                    topic=message.topic,
+                    broker_name=message_queue.broker_name,
+                    queue_id=message_queue.queue_id,
+                )
+            else:
+                # 发送失败
+                error_msg = f"Send failed, response code: {response.code if response else 'None'}"
+                return SendResult.failure_result(
+                    topic=message.topic, error=MessageSendError(error_msg)
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to send message to {broker_addr}: {e}")
+            return SendResult.failure_result(topic=message.topic, error=e)
+
+    def _send_message_to_broker_oneway(
+        self, message: Message, broker_addr: str, message_queue: MessageQueue
+    ) -> None:
+        """单向发送消息到Broker
+
+        发送消息但不等待响应，适用于对可靠性要求不高的场景。
+
+        Args:
+            message: 消息对象
+            broker_addr: Broker地址
+            message_queue: 消息队列
+        """
+        try:
+            # 获取或创建Broker连接
+            broker_remote = self._broker_manager.get_connection(broker_addr)
+
+            # 创建发送请求
+            request = RemotingRequestFactory.create_send_message_request(
+                producer_group=self._config.producer_group,
+                topic=message.topic,
+                body=message.body,
+                queue_id=message_queue.queue_id,
+                properties=message.properties,
+            )
+
+            # 单向发送请求
+            broker_remote.oneway(request)
+
+            logger.debug(f"Oneway message sent to {broker_addr}")
+
+        except Exception as e:
+            logger.error(f"Failed to send oneway message to {broker_addr}: {e}")
+            raise
+
     def _check_running(self) -> None:
         """检查Producer是否处于运行状态
 
@@ -380,23 +599,54 @@ class Producer:
                 "Producer is not running. Call start() first."
             )
 
-    def _get_broker_address(self, broker_data: BrokerData) -> Optional[str]:
-        """获取Broker地址
+    def _stop_background_tasks(self) -> None:
+        """停止后台任务"""
+        if self._background_thread and self._background_thread.is_alive():
+            logger.info("Stopping background tasks...")
+            self._shutdown_event.set()
+            self._background_thread.join(timeout=5.0)
 
-        优先选择Master节点，如果Master不可用则选择Slave。
+            if self._background_thread.is_alive():
+                logger.warning("Background task thread did not stop gracefully")
+            else:
+                logger.info("Background tasks stopped")
 
-        Args:
-            broker_data: Broker数据
+    def _close_nameserver_connections(self) -> None:
+        """关闭所有NameServer连接"""
+        logger.info("Closing NameServer connections...")
 
-        Returns:
-            Optional[str]: Broker地址，如果不可用则返回None
-        """
-        # TODO: 实现Broker地址选择逻辑
-        # 这里需要考虑Master/Slave的选择和健康状态
-        if broker_data.broker_addresses:
-            # 暂时返回第一个可用地址
-            return next(iter(broker_data.broker_addresses.values()))
-        return None
+        if not self._nameserver_connections:
+            logger.debug("No NameServer connections to close")
+            return
+
+        closed_count = 0
+        failed_count = 0
+
+        # 关闭所有连接
+        for addr, remote in list(self._nameserver_connections.items()):
+            try:
+                if hasattr(remote, "close"):
+                    remote.close()
+                    closed_count += 1
+                    logger.debug(f"Closed NameServer connection: {addr}")
+                else:
+                    logger.warning(
+                        f"Remote object for {addr} does not have close() method"
+                    )
+                    failed_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to close NameServer connection {addr}: {e}"
+                )
+                failed_count += 1
+
+        # 清空连接字典
+        self._nameserver_connections.clear()
+
+        logger.info(
+            f"NameServer connections closed: {closed_count} succeeded, "
+            f"{failed_count} failed"
+        )
 
     def get_stats(self) -> dict:
         """获取Producer统计信息
@@ -432,9 +682,52 @@ class Producer:
         Returns:
             bool: 更新是否成功
         """
-        # TODO: 实现从NameServer获取路由信息并更新缓存
-        # 这需要与NameServer客户端集成
-        logger.info(f"Route update requested for topic: {topic}")
+        logger.info(f"Updating route info for topic: {topic}")
+
+        for addr, remote in self._nameserver_connections.items():
+            try:
+                # 创建获取路由信息的请求
+                request = RemotingRequestFactory.create_get_route_info_request(
+                    topic
+                )
+
+                # 发送请求
+                response = remote.rpc(
+                    request, self._config.send_msg_timeout / 1000.0
+                )
+
+                if response and response.code == ResponseCode.SUCCESS:
+                    if not response.body:
+                        logger.warning(f"Empty response body from {addr}")
+                        return False
+
+                    # 解析路由数据
+                    topic_route_data = TopicRouteData.from_bytes(response.body)
+
+                    # 更新本地缓存
+                    success = self._topic_mapping.update_route_info(
+                        topic, topic_route_data
+                    )
+
+                    if success:
+                        logger.info(
+                            f"Route info updated for topic {topic} from {addr}"
+                        )
+                        return True
+                    else:
+                        logger.warning(
+                            f"Failed to update route cache for topic {topic}"
+                        )
+
+                else:
+                    logger.warning(
+                        f"Get route info failed from {addr}, code: {response.code if response else 'None'}"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to get route info from {addr}: {e}")
+
+        # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_mapping.force_refresh(topic)
 
     def is_running(self) -> bool:
