@@ -82,10 +82,11 @@ class ProducerStateError(ProducerError):
         message: str = "Producer is in invalid state",
         current_state: Optional[str] = None,
         expected_state: Optional[str] = None,
+        cause: Optional[Exception] = None,
     ):
         if current_state and expected_state:
             message = f"Producer state error: current={current_state}, expected={expected_state}"
-        super().__init__(message, error_code=1003)
+        super().__init__(message, error_code=1003, cause=cause)
         self.current_state = current_state
         self.expected_state = expected_state
 
@@ -378,14 +379,17 @@ def create_error_context(
     }
 
     # 添加具体异常的特有属性
-    if hasattr(error, "topic") and error.topic:
-        context["topic"] = error.topic
-    if hasattr(error, "broker") and error.broker:
-        context["broker"] = error.broker
-    if hasattr(error, "broker_name") and error.broker_name:
-        context["broker_name"] = error.broker_name
-    if hasattr(error, "queue_id") and error.queue_id is not None:
-        context["queue_id"] = error.queue_id
+    if hasattr(error, "topic") and getattr(error, "topic", None):
+        context["topic"] = getattr(error, "topic")
+    if hasattr(error, "broker") and getattr(error, "broker", None):
+        context["broker"] = getattr(error, "broker")
+    if hasattr(error, "broker_name") and getattr(error, "broker_name", None):
+        context["broker_name"] = getattr(error, "broker_name")
+    if (
+        hasattr(error, "queue_id")
+        and getattr(error, "queue_id", None) is not None
+    ):
+        context["queue_id"] = getattr(error, "queue_id")
 
     # 添加调用上下文
     if topic:
