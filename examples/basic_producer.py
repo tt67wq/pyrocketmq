@@ -37,8 +37,8 @@ def main():
     while True:
         try:
             message = Message(topic="test_im_015", body=b"Hello, RocketMQ!")
-            producer.send(message)
-            print("Message sent successfully!")
+            ret = producer.send(message)
+            print("Message sent ret:", ret)
         except ProducerError as e:
             print(f"Failed to send message: {e}")
             time.sleep(5)
