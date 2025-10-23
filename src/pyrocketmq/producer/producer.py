@@ -28,6 +28,7 @@ from typing import Dict, Optional
 
 from pyrocketmq.broker.broker_manager import SyncBrokerManager
 from pyrocketmq.logging import get_logger
+from pyrocketmq.model import HeartbeatData, ProducerData
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message
@@ -269,7 +270,7 @@ class Producer:
         except Exception as e:
             logger.error(f"Error during producer shutdown: {e}")
 
-    def send_sync(self, message: Message) -> SendResult:
+    def send(self, message: Message) -> SendResult:
         """同步发送消息
 
         阻塞直到消息发送完成或失败。
@@ -341,7 +342,7 @@ class Producer:
 
             raise MessageSendError(f"Message send failed: {e}") from e
 
-    def send_oneway(self, message: Message) -> None:
+    def oneway(self, message: Message) -> None:
         """单向发送消息
 
         发送消息但不等待响应。适用于对可靠性要求不高的场景。
@@ -461,12 +462,30 @@ class Producer:
         """后台任务循环"""
         logger.info("Background task loop started")
 
-        while not self._shutdown_event.wait(
-            self._config.update_topic_route_info_interval / 1000.0
-        ):
+        # 记录各任务的执行时间
+        last_route_refresh_time = 0
+        last_heartbeat_time = 0
+
+        while not self._shutdown_event.wait(1.0):  # 每秒检查一次
+            current_time = time.time()
+
             try:
-                # 定期更新路由信息
-                self._refresh_all_routes()
+                # 检查是否需要刷新路由信息
+                if (
+                    current_time - last_route_refresh_time
+                    >= self._config.update_topic_route_info_interval / 1000.0
+                ):
+                    self._refresh_all_routes()
+                    self._topic_mapping.clear_expired_routes()
+                    last_route_refresh_time = current_time
+
+                # 检查是否需要发送心跳
+                if (
+                    current_time - last_heartbeat_time
+                    >= self._config.heartbeat_broker_interval / 1000.0
+                ):
+                    self.send_heartbeat_to_all_broker()
+                    last_heartbeat_time = current_time
 
             except Exception as e:
                 logger.error(f"Background task error: {e}")
@@ -595,6 +614,77 @@ class Producer:
                 logger.warning("Background task thread did not stop gracefully")
             else:
                 logger.info("Background tasks stopped")
+
+    def send_heartbeat_to_all_broker(self) -> None:
+        """向所有Broker发送心跳"""
+        logger.debug("Sending heartbeat to all brokers...")
+
+        try:
+            # 获取所有已知的Broker地址
+            broker_addrs = set()
+            all_topics = self._topic_mapping.get_all_topics()
+
+            for topic in all_topics:
+                route_info = self._topic_mapping.get_route_info(topic)
+                if route_info:
+                    for broker_data in route_info.broker_data_list:
+                        # 获取主从地址
+                        if broker_data.broker_addresses:
+                            for addr in broker_data.broker_addresses.values():
+                                if addr:  # 过滤空地址
+                                    broker_addrs.add(addr)
+
+            if not broker_addrs:
+                logger.debug("No broker addresses found for heartbeat")
+                return
+
+            # 创建心跳数据
+            if not self._config.client_id:
+                logger.error("Client ID not set for heartbeat")
+                return
+
+            heartbeat_data = HeartbeatData(
+                client_id=self._config.client_id,
+                producer_data_set=[
+                    ProducerData(group_name=self._config.producer_group)
+                ],
+            )
+
+            # 创建心跳请求
+            heartbeat_request = RemotingRequestFactory.create_heartbeat_request(
+                heartbeat_data
+            )
+
+            # 统计结果
+            success_count = 0
+            failed_count = 0
+
+            # 向每个Broker发送心跳
+            for broker_addr in broker_addrs:
+                try:
+                    # 获取或创建Broker连接
+                    broker_remote = self._broker_manager.get_connection(
+                        broker_addr
+                    )
+
+                    # 发送单向心跳请求（不等待响应）
+                    broker_remote.oneway(heartbeat_request)
+                    success_count += 1
+                    logger.debug(f"Heartbeat sent to broker: {broker_addr}")
+
+                except Exception as e:
+                    failed_count += 1
+                    logger.debug(
+                        f"Failed to send heartbeat to {broker_addr}: {e}"
+                    )
+
+            if success_count > 0 or failed_count > 0:
+                logger.debug(
+                    f"Heartbeat sent: {success_count} succeeded, {failed_count} failed"
+                )
+
+        except Exception as e:
+            logger.error(f"Error sending heartbeat to brokers: {e}")
 
     def _close_nameserver_connections(self) -> None:
         """关闭所有NameServer连接"""
