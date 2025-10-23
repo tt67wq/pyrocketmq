@@ -291,7 +291,11 @@ class Producer:
             # 1. 验证消息
             validate_message(message, self._config.max_message_size)
 
-            # 2. 获取队列和Broker
+            # 2. 更新路由信息
+            if message.topic not in self._topic_mapping.get_all_topics():
+                self.update_route_info(message.topic)
+
+            # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(
                 message.topic, message
             )
@@ -360,7 +364,11 @@ class Producer:
             # 1. 验证消息
             validate_message(message, self._config.max_message_size)
 
-            # 2. 获取队列和Broker
+            # 2. 更新路由信息
+            if message.topic not in self._topic_mapping.get_all_topics():
+                self.update_route_info(message.topic)
+
+            # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(
                 message.topic, message
             )
@@ -382,7 +390,7 @@ class Producer:
                     f"No available broker data for topic: {message.topic}"
                 )
 
-            # 3. 获取Broker地址
+            # 4. 获取Broker地址
             target_broker_addr = routing_result.broker_address
             if not target_broker_addr:
                 raise BrokerNotAvailableError(
@@ -393,7 +401,7 @@ class Producer:
                 f"Sending oneway message to {target_broker_addr}, queue: {message_queue.full_name}"
             )
 
-            # 4. 发送消息到Broker
+            # 5. 发送消息到Broker
             self._send_message_to_broker_oneway(
                 message, target_broker_addr, message_queue
             )
@@ -779,6 +787,18 @@ class Producer:
                     # 解析路由数据
                     topic_route_data = TopicRouteData.from_bytes(response.body)
 
+                    # 维护broker连接
+                    for broker_data in topic_route_data.broker_data_list:
+                        for (
+                            idx,
+                            broker_addr,
+                        ) in broker_data.broker_addresses.items():
+                            logger.info(f"Adding broker {idx} {broker_addr}")
+                            self._broker_manager.add_broker(
+                                broker_addr,
+                                broker_data.broker_name,
+                            )
+
                     # 更新本地缓存
                     success = self._topic_mapping.update_route_info(
                         topic, topic_route_data
@@ -788,6 +808,7 @@ class Producer:
                         logger.info(
                             f"Route info updated for topic {topic} from {addr}"
                         )
+
                         return True
                     else:
                         logger.warning(

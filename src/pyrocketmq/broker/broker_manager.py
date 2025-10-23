@@ -503,51 +503,92 @@ class BrokerManager:
             broker_addr: Broker地址，格式为"host:port"
             broker_name: Broker名称，为None时从地址提取
         """
+        self._logger.info(f"开始添加Broker: {broker_addr}")
+
+        # 验证broker_addr格式
+        if not broker_addr or ":" not in broker_addr:
+            self._logger.error(f"无效的Broker地址格式: {broker_addr}")
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}")
+
+        # 解析主机和端口
+        try:
+            host, port_str = broker_addr.split(":")
+            port = int(port_str)
+            if not host or port <= 0 or port > 65535:
+                raise ValueError("无效的主机或端口")
+            self._logger.debug(f"Broker地址解析成功: host={host}, port={port}")
+        except ValueError as e:
+            self._logger.error(f"Broker地址解析失败: {broker_addr}, error={e}")
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}") from e
+
         if not broker_name:
             broker_name = broker_addr.split(":")[0]
+            self._logger.debug(f"从地址提取Broker名称: {broker_name}")
 
         async with self._lock:
             if broker_addr in self._brokers:
-                self._logger.warning(f"Broker已存在: {broker_addr}")
+                self._logger.warning(f"Broker已存在，跳过添加: {broker_addr}")
                 return
 
-            # 创建连接信息
-            broker_info = BrokerConnectionInfo(
-                broker_addr=broker_addr,
-                broker_name=broker_name,
-                state=BrokerState.UNKNOWN,
-            )
-            self._brokers[broker_addr] = broker_info
-
-            # 创建连接池
-            if self.transport_config:
-                # Remove host and port from transport_config dict to avoid duplication
-                transport_config_dict = {
-                    k: v
-                    for k, v in self.transport_config.__dict__.items()
-                    if k not in ("host", "port")
-                }
-                transport_config = TransportConfig(
-                    host=broker_addr.split(":")[0],
-                    port=int(broker_addr.split(":")[1]),
-                    **transport_config_dict,
+            try:
+                # 创建连接信息
+                self._logger.debug(f"创建Broker连接信息: {broker_addr}")
+                broker_info = BrokerConnectionInfo(
+                    broker_addr=broker_addr,
+                    broker_name=broker_name,
+                    state=BrokerState.UNKNOWN,
                 )
-            else:
-                transport_config = TransportConfig(
-                    host=broker_addr.split(":")[0],
-                    port=int(broker_addr.split(":")[1]),
+                self._brokers[broker_addr] = broker_info
+                self._logger.debug(f"Broker连接信息创建成功: {broker_addr}")
+
+                # 创建传输配置
+                self._logger.debug(f"创建传输配置: {broker_addr}")
+                if self.transport_config:
+                    # Remove host and port from transport_config dict to avoid duplication
+                    transport_config_dict = {
+                        k: v
+                        for k, v in self.transport_config.__dict__.items()
+                        if k not in ("host", "port")
+                    }
+                    transport_config = TransportConfig(
+                        host=broker_addr.split(":")[0],
+                        port=int(broker_addr.split(":")[1]),
+                        **transport_config_dict,
+                    )
+                else:
+                    transport_config = TransportConfig(
+                        host=broker_addr.split(":")[0],
+                        port=int(broker_addr.split(":")[1]),
+                    )
+                self._logger.debug(f"传输配置创建成功: {transport_config}")
+
+                # 创建连接池
+                self._logger.debug(
+                    f"创建连接池: {broker_addr}, max_connections={self.connection_pool_size}"
+                )
+                pool = BrokerConnectionPool(
+                    broker_addr=broker_addr,
+                    broker_name=broker_name,
+                    transport_config=transport_config,
+                    remote_config=self.remote_config,
+                    max_connections=self.connection_pool_size,
+                )
+                self._broker_pools[broker_addr] = pool
+                self._logger.debug(f"连接池创建成功: {broker_addr}")
+
+                self._logger.info(
+                    f"Broker添加完成: {broker_addr} ({broker_name}), "
+                    f"总Broker数={len(self._brokers)}, 总连接池数={len(self._broker_pools)}"
                 )
 
-            pool = BrokerConnectionPool(
-                broker_addr=broker_addr,
-                broker_name=broker_name,
-                transport_config=transport_config,
-                remote_config=self.remote_config,
-                max_connections=self.connection_pool_size,
-            )
-            self._broker_pools[broker_addr] = pool
-
-            self._logger.info(f"已添加Broker: {broker_addr} ({broker_name})")
+            except Exception as e:
+                # 添加失败时清理
+                self._logger.error(f"添加Broker失败: {broker_addr}, error={e}")
+                if broker_addr in self._brokers:
+                    del self._brokers[broker_addr]
+                if broker_addr in self._broker_pools:
+                    del self._broker_pools[broker_addr]
+                raise
 
     async def remove_broker(self, broker_addr: str) -> None:
         """移除Broker
@@ -1237,51 +1278,100 @@ class SyncBrokerManager:
             broker_addr: Broker地址，格式为"host:port"
             broker_name: Broker名称，为None时从地址提取
         """
+        self._logger.info(f"开始添加同步Broker: {broker_addr}")
+
+        # 验证broker_addr格式
+        if not broker_addr or ":" not in broker_addr:
+            self._logger.error(f"无效的Broker地址格式: {broker_addr}")
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}")
+
+        # 解析主机和端口
+        try:
+            host, port_str = broker_addr.split(":")
+            port = int(port_str)
+            if not host or port <= 0 or port > 65535:
+                raise ValueError("无效的主机或端口")
+            self._logger.debug(
+                f"同步Broker地址解析成功: host={host}, port={port}"
+            )
+        except ValueError as e:
+            self._logger.error(
+                f"同步Broker地址解析失败: {broker_addr}, error={e}"
+            )
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}") from e
+
         if not broker_name:
             broker_name = broker_addr.split(":")[0]
+            self._logger.debug(f"从地址提取同步Broker名称: {broker_name}")
 
         with self._lock:
             if broker_addr in self._brokers:
-                self._logger.warning(f"Broker已存在: {broker_addr}")
+                self._logger.warning(
+                    f"同步Broker已存在，跳过添加: {broker_addr}"
+                )
                 return
 
-            # 创建连接信息
-            broker_info = BrokerConnectionInfo(
-                broker_addr=broker_addr,
-                broker_name=broker_name,
-                state=BrokerState.UNKNOWN,
-            )
-            self._brokers[broker_addr] = broker_info
-
-            # 创建连接池
-            if self.transport_config:
-                # Remove host and port from transport_config dict to avoid duplication
-                transport_config_dict = {
-                    k: v
-                    for k, v in self.transport_config.__dict__.items()
-                    if k not in ("host", "port")
-                }
-                transport_config = TransportConfig(
-                    host=broker_addr.split(":")[0],
-                    port=int(broker_addr.split(":")[1]),
-                    **transport_config_dict,
+            try:
+                # 创建连接信息
+                self._logger.debug(f"创建同步Broker连接信息: {broker_addr}")
+                broker_info = BrokerConnectionInfo(
+                    broker_addr=broker_addr,
+                    broker_name=broker_name,
+                    state=BrokerState.UNKNOWN,
                 )
-            else:
-                transport_config = TransportConfig(
-                    host=broker_addr.split(":")[0],
-                    port=int(broker_addr.split(":")[1]),
+                self._brokers[broker_addr] = broker_info
+                self._logger.debug(f"同步Broker连接信息创建成功: {broker_addr}")
+
+                # 创建传输配置
+                self._logger.debug(f"创建同步传输配置: {broker_addr}")
+                if self.transport_config:
+                    # Remove host and port from transport_config dict to avoid duplication
+                    transport_config_dict = {
+                        k: v
+                        for k, v in self.transport_config.__dict__.items()
+                        if k not in ("host", "port")
+                    }
+                    transport_config = TransportConfig(
+                        host=broker_addr.split(":")[0],
+                        port=int(broker_addr.split(":")[1]),
+                        **transport_config_dict,
+                    )
+                else:
+                    transport_config = TransportConfig(
+                        host=broker_addr.split(":")[0],
+                        port=int(broker_addr.split(":")[1]),
+                    )
+                self._logger.debug(f"同步传输配置创建成功: {transport_config}")
+
+                # 创建同步连接池
+                self._logger.debug(
+                    f"创建同步连接池: {broker_addr}, max_connections={self.connection_pool_size}"
+                )
+                pool = SyncBrokerConnectionPool(
+                    broker_addr=broker_addr,
+                    broker_name=broker_name,
+                    transport_config=transport_config,
+                    remote_config=self.remote_config,
+                    max_connections=self.connection_pool_size,
+                )
+                self._broker_pools[broker_addr] = pool
+                self._logger.debug(f"同步连接池创建成功: {broker_addr}")
+
+                self._logger.info(
+                    f"同步Broker添加完成: {broker_addr} ({broker_name}), "
+                    f"总Broker数={len(self._brokers)}, 总连接池数={len(self._broker_pools)}"
                 )
 
-            pool = SyncBrokerConnectionPool(
-                broker_addr=broker_addr,
-                broker_name=broker_name,
-                transport_config=transport_config,
-                remote_config=self.remote_config,
-                max_connections=self.connection_pool_size,
-            )
-            self._broker_pools[broker_addr] = pool
-
-            self._logger.info(f"已添加Broker: {broker_addr} ({broker_name})")
+            except Exception as e:
+                # 添加失败时清理
+                self._logger.error(
+                    f"添加同步Broker失败: {broker_addr}, error={e}"
+                )
+                if broker_addr in self._brokers:
+                    del self._brokers[broker_addr]
+                if broker_addr in self._broker_pools:
+                    del self._broker_pools[broker_addr]
+                raise
 
     def remove_broker(self, broker_addr: str) -> None:
         """移除Broker
