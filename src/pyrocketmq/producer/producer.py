@@ -26,9 +26,10 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from pyrocketmq.broker.broker_manager import SyncBrokerManager
+from pyrocketmq.broker.broker_manager import BrokerManager
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import HeartbeatData, ProducerData
+from pyrocketmq.model.command import RemotingCommand
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message
@@ -186,7 +187,7 @@ class Producer:
         remote_config = RemoteConfig(
             rpc_timeout=self._config.send_msg_timeout / 1000.0,
         )
-        self._broker_manager = SyncBrokerManager(
+        self._broker_manager = BrokerManager(
             remote_config=remote_config,
             transport_config=transport_config,
         )
@@ -527,21 +528,21 @@ class Producer:
 
         try:
             # 获取或创建Broker连接
-            broker_remote = self._broker_manager.get_connection(broker_addr)
+            response: Optional[RemotingCommand] = None
+            with self._broker_manager.connection(broker_addr) as broker_remote:
+                # 创建发送请求
+                request = RemotingRequestFactory.create_send_message_request(
+                    producer_group=self._config.producer_group,
+                    topic=message.topic,
+                    body=message.body,
+                    queue_id=message_queue.queue_id,
+                    properties=message.properties,
+                )
 
-            # 创建发送请求
-            request = RemotingRequestFactory.create_send_message_request(
-                producer_group=self._config.producer_group,
-                topic=message.topic,
-                body=message.body,
-                queue_id=message_queue.queue_id,
-                properties=message.properties,
-            )
-
-            # 发送请求
-            response = broker_remote.rpc(
-                request, self._config.send_msg_timeout / 1000.0
-            )
+                # 发送请求
+                response = broker_remote.rpc(
+                    request, self._config.send_msg_timeout / 1000.0
+                )
 
             if response and response.code == 0:
                 # 发送成功

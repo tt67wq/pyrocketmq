@@ -179,7 +179,7 @@ class BrokerConnectionPool:
     def health_check(self) -> bool:
         """执行健康检查
 
-        检查连接池中是否有可用连接，如果没有则尝试创建一个。
+        检查连接池中是否有可用连接，如果没有则尝试创建一个并放回连接池。
 
         Returns:
             bool: 连接池是否健康
@@ -191,10 +191,26 @@ class BrokerConnectionPool:
         if not self._available_connections.empty():
             return True
 
-        # 尝试创建测试连接
+        # 尝试创建测试连接并放回连接池复用
         try:
             test_connection = self._create_connection()
-            self._destroy_connection(test_connection)
+            self._logger.debug(
+                f"健康检查创建连接，放回连接池: {self.broker_addr}"
+            )
+
+            # 将健康检查创建的连接放回连接池，避免浪费
+            try:
+                self._available_connections.put(test_connection, block=False)
+                self._logger.debug(
+                    f"健康检查连接已放回连接池: {self.broker_addr}"
+                )
+            except queue.Full:
+                # 如果连接池满了，销毁连接
+                self._logger.warning(
+                    f"连接池已满，销毁健康检查连接: {self.broker_addr}"
+                )
+                self._destroy_connection(test_connection)
+
             return True
         except Exception as e:
             self._logger.error(f"健康检查失败: {self.broker_addr}, error={e}")
