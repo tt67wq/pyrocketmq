@@ -283,6 +283,113 @@ class AsyncProducer:
 
             raise MessageSendError(f"Async message send failed: {e}") from e
 
+    async def send_batch(self, *messages: Message) -> SendResult:
+        """异步批量发送消息
+
+        将多个消息压缩为一个批量消息进行异步发送，提高发送效率。
+
+        Args:
+            *messages: 要发送的消息列表
+
+        Returns:
+            SendResult: 发送结果
+
+        Raises:
+            ProducerStateError: 当Producer未启动时
+            MessageSendError: 当消息发送失败时
+            ValueError: 当没有提供消息时
+
+        Examples:
+            >>> producer = await create_async_producer("group", "nameserver:9876")
+            >>> await producer.start()
+            >>> msg1 = Message(topic="test", body=b"message1")
+            >>> msg2 = Message(topic="test", body=b"message2")
+            >>> result = await producer.send_batch(msg1, msg2)
+        """
+        self._check_running()
+
+        if not messages:
+            raise ValueError("至少需要提供一个消息进行批量发送")
+
+        try:
+            # 1. 验证所有消息
+            for i, message in enumerate(messages):
+                validate_message(message, self._config.max_message_size)
+
+                # 检查所有消息的主题是否相同
+                if i > 0 and message.topic != messages[0].topic:
+                    raise ValueError(
+                        f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+                    )
+
+            # 2. 将多个消息编码为批量消息
+            batch_message = encode_batch(*messages)
+            logger.debug(
+                f"Encoded {len(messages)} messages into async batch message, "
+                f"batch size: {len(batch_message.body)} bytes"
+            )
+
+            # 3. 更新路由信息
+            if batch_message.topic not in self._topic_mapping.get_all_topics():
+                await self.update_route_info(batch_message.topic)
+
+            # 4. 获取队列和Broker
+            routing_result = self._message_router.route_message(
+                batch_message.topic, batch_message
+            )
+            if not routing_result.success:
+                raise BrokerNotAvailableError(
+                    f"No available queue for topic: {batch_message.topic}"
+                )
+
+            message_queue = routing_result.message_queue
+            broker_data = routing_result.broker_data
+
+            if not message_queue:
+                raise BrokerNotAvailableError(
+                    f"No available queue for topic: {batch_message.topic}"
+                )
+            if not broker_data:
+                raise BrokerNotAvailableError(
+                    f"No available broker data for topic: {batch_message.topic}"
+                )
+
+            target_broker_addr = routing_result.broker_address
+            if not target_broker_addr:
+                raise BrokerNotAvailableError(
+                    f"No available broker address for topic: {batch_message.topic}"
+                )
+            logger.debug(
+                f"Sending async batch message ({len(messages)} messages) to {target_broker_addr}, "
+                f"queue: {message_queue.full_name}"
+            )
+
+            # 5. 发送批量消息到Broker
+            send_result = await self._send_message_to_broker_async(
+                batch_message, target_broker_addr, message_queue
+            )
+
+            if send_result.success:
+                self._total_sent += len(messages)
+                logger.info(
+                    f"Async batch send success: {len(messages)} messages to topic {batch_message.topic}"
+                )
+                return send_result
+            else:
+                self._total_failed += len(messages)
+                return send_result
+
+        except Exception as e:
+            self._total_failed += len(messages)
+            logger.error(f"Failed to send async batch messages: {e}")
+
+            if isinstance(e, ProducerError):
+                raise
+
+            raise MessageSendError(
+                f"Async batch message send failed: {e}"
+            ) from e
+
     async def oneway(self, message: Message) -> None:
         """异步单向发送消息
 
