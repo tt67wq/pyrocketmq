@@ -14,6 +14,10 @@ MVP版本特性:
 - 基础的队列选择策略
 """
 
+from pyrocketmq.producer.async_producer import (
+    AsyncProducer,
+    create_async_producer,
+)
 from pyrocketmq.producer.config import (
     DEFAULT_CONFIG,
     DEVELOPMENT_CONFIG,
@@ -53,8 +57,10 @@ from pyrocketmq.producer.utils import (
 __all__ = [
     # Core Producer (MVP)
     "Producer",
+    "AsyncProducer",
     "SendResult",
     "create_producer",
+    "create_async_producer",
     # Config
     "ProducerConfig",
     "DEFAULT_CONFIG",
