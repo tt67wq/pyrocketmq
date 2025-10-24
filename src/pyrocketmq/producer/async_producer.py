@@ -207,7 +207,7 @@ class AsyncProducer:
         except Exception as e:
             logger.error(f"Error during async producer shutdown: {e}")
 
-    async def send_async(self, message: Message) -> SendResult:
+    async def send(self, message: Message) -> SendResult:
         """异步发送消息
 
         非阻塞发送消息，直到消息发送完成或失败。
@@ -283,7 +283,7 @@ class AsyncProducer:
 
             raise MessageSendError(f"Async message send failed: {e}") from e
 
-    async def oneway_async(self, message: Message) -> None:
+    async def oneway(self, message: Message) -> None:
         """异步单向发送消息
 
         发送消息但不等待响应。适用于对可靠性要求不高的场景。
