@@ -1,6 +1,7 @@
 import queue
 import threading
 import time
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
@@ -292,7 +293,7 @@ class BrokerConnectionPool:
         }
 
 
-class SyncBrokerManager:
+class BrokerManager:
     """同步版本的Broker连接管理器
 
     管理多个Broker的同步连接，提供统一的服务接口。包括：
@@ -809,3 +810,50 @@ class SyncBrokerManager:
     def healthy_brokers_count(self) -> int:
         """获取健康的Broker数量"""
         return len(self.get_healthy_brokers())
+
+    @contextmanager
+    def connection(self, broker_addr: str):
+        """with风格的connection获取方法
+
+        自动获取和释放Broker连接，确保连接总是被正确释放。
+
+        Args:
+            broker_addr: Broker地址
+
+        Yields:
+            Remote: 可用的连接实例
+
+        Raises:
+            ConnectionError: 连接失败或Broker不可用
+
+        Example:
+            >>> manager = BrokerManager(...)
+            >>> manager.start()
+            >>> try:
+            ...     with manager.connection("127.0.0.1:10911") as conn:
+            ...         # 使用连接进行操作
+            ...         response = conn.send_sync_request(request)
+            ...         print(f"收到响应: {response}")
+            ...     # 连接会自动释放
+            ... finally:
+            ...     manager.shutdown()
+        """
+        connection = None
+        try:
+            # 获取连接
+            connection = self.get_connection(broker_addr)
+            yield connection
+        except ConnectionError as e:
+            # 连接相关的异常，直接重新抛出
+            self._logger.error(f"连接获取失败: {broker_addr}, error={e}")
+            raise
+        finally:
+            # 确保连接被释放
+            if connection is not None:
+                try:
+                    self.release_connection(broker_addr, connection)
+                except Exception as e:
+                    self._logger.error(
+                        f"释放连接时发生异常: {broker_addr}, error={e}"
+                    )
+                    # 不抛出异常，避免掩盖原始异常

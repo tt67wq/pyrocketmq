@@ -9,8 +9,6 @@ from .broker_manager import (
     BrokerConnectionPool,
     BrokerManager,
     BrokerState,
-    SyncBrokerConnectionPool,
-    SyncBrokerManager,
 )
 from .client import BrokerClient, create_broker_client
 
@@ -23,9 +21,7 @@ __all__ = [
     "create_async_broker_client",
     # Broker Manager
     "BrokerManager",
-    "SyncBrokerManager",
     "BrokerConnectionPool",
-    "SyncBrokerConnectionPool",
     "BrokerConnectionInfo",
     "BrokerState",
 ]
