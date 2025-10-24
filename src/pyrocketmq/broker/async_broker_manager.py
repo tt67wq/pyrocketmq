@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
@@ -180,7 +181,7 @@ class AsyncBrokerConnectionPool:
     async def health_check(self) -> bool:
         """执行健康检查
 
-        检查连接池中是否有可用连接，如果没有则尝试创建一个。
+        检查连接池中是否有可用连接，如果没有则尝试创建一个并放回连接池。
 
         Returns:
             bool: 连接池是否健康
@@ -192,10 +193,26 @@ class AsyncBrokerConnectionPool:
         if not self._available_connections.empty():
             return True
 
-        # 尝试创建测试连接
+        # 尝试创建测试连接并放回连接池复用
         try:
             test_connection = await self._create_connection()
-            await self._destroy_connection(test_connection)
+            self._logger.debug(
+                f"健康检查创建连接，放回连接池: {self.broker_addr}"
+            )
+
+            # 将健康检查创建的连接放回连接池，避免浪费
+            try:
+                self._available_connections.put_nowait(test_connection)
+                self._logger.debug(
+                    f"健康检查连接已放回连接池: {self.broker_addr}"
+                )
+            except asyncio.QueueFull:
+                # 如果连接池满了，销毁连接
+                self._logger.warning(
+                    f"连接池已满，销毁健康检查连接: {self.broker_addr}"
+                )
+                await self._destroy_connection(test_connection)
+
             return True
         except Exception as e:
             self._logger.error(f"健康检查失败: {self.broker_addr}, error={e}")
@@ -808,3 +825,50 @@ class AsyncBrokerManager:
     def healthy_brokers_count(self) -> int:
         """获取健康的Broker数量"""
         return len(self.get_healthy_brokers())
+
+    @asynccontextmanager
+    async def connection(self, broker_addr: str):
+        """异步with风格的connection获取方法
+
+        自动获取和释放Broker连接，确保连接总是被正确释放。
+
+        Args:
+            broker_addr: Broker地址
+
+        Yields:
+            AsyncRemote: 可用的异步连接实例
+
+        Raises:
+            ConnectionError: 连接失败或Broker不可用
+
+        Example:
+            >>> manager = AsyncBrokerManager(...)
+            >>> await manager.start()
+            >>> try:
+            ...     async with manager.connection("127.0.0.1:10911") as conn:
+            ...         # 使用连接进行操作
+            ...         response = await conn.send_sync_request(request)
+            ...         print(f"收到响应: {response}")
+            ...     # 连接会自动释放
+            ... finally:
+            ...     await manager.shutdown()
+        """
+        connection = None
+        try:
+            # 获取连接
+            connection = await self.get_connection(broker_addr)
+            yield connection
+        except ConnectionError as e:
+            # 连接相关的异常，直接重新抛出
+            self._logger.error(f"连接获取失败: {broker_addr}, error={e}")
+            raise
+        finally:
+            # 确保连接被释放
+            if connection is not None:
+                try:
+                    await self.release_connection(broker_addr, connection)
+                except Exception as e:
+                    self._logger.error(
+                        f"释放连接时发生异常: {broker_addr}, error={e}"
+                    )
+                    # 不抛出异常，避免掩盖原始异常
