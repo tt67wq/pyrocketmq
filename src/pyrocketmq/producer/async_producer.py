@@ -31,7 +31,7 @@ from pyrocketmq.model import HeartbeatData, ProducerData
 from pyrocketmq.model.command import RemotingCommand
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
-from pyrocketmq.model.message import Message
+from pyrocketmq.model.message import Message, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.model.nameserver_models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig

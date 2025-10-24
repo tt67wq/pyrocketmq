@@ -14,7 +14,7 @@ pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于Ro
 - **连接池**: ✅ 连接池管理功能
 - **NameServer支持**: ✅ 完整客户端实现，支持路由信息查询
 - **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
-- **Producer模块**: 🚧 MVP版本实现完成，支持同步/异步消息发送和心跳机制
+- **Producer模块**: 🚧 MVP版本实现完成，支持同步/异步消息发送、批量消息发送和心跳机制
 
 ## 开发环境配置
 
@@ -60,6 +60,7 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 # 运行示例代码
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_producer.py
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_async_producer.py
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/simple_batch_producer.py
 ```
 
 ## 核心架构
@@ -141,7 +142,47 @@ Client Application
 #### Producer核心功能
 - **同步Producer**: MVP版本，支持生命周期管理和消息发送
 - **异步Producer**: 基于asyncio的高性能异步实现
+- **批量消息发送**: 支持将多个消息压缩为一个批量消息进行高效发送
 - **心跳机制**: 定期向所有Broker发送心跳，确保连接稳定性
+
+### 批量消息发送功能 ✅
+新增完整的批量消息发送支持，提升发送效率：
+
+#### 批量编码方法
+```python
+from pyrocketmq.model.message import encode_batch, Message
+
+# 将多个消息编码为批量消息
+msg1 = Message(topic="test", body=b"message1")
+msg2 = Message(topic="test", body=b"message2")
+batch_msg = encode_batch(msg1, msg2)  # 返回batch=True的Message
+```
+
+#### Producer批量发送方法
+```python
+from pyrocketmq.producer import create_producer
+
+# 同步批量发送
+producer = create_producer("group", "nameserver:9876")
+producer.start()
+result = producer.send_batch(msg1, msg2, msg3)  # 自动编码和发送
+
+# 异步批量发送
+from pyrocketmq.producer import create_async_producer
+import asyncio
+
+async def async_batch_send():
+    producer = await create_async_producer("group", "nameserver:9876")
+    await producer.start()
+    result = await producer.send_batch(msg1, msg2, msg3)
+```
+
+#### 批量消息特性
+- **自动编码**: 内置`encode_batch`函数，与Go实现保持一致的序列化格式
+- **主题验证**: 确保批量消息中的所有消息主题一致
+- **高效传输**: 减少网络调用次数，提升吞吐量
+- **错误处理**: 完整的批量发送错误处理和统计
+- **消息压缩**: 使用RocketMQ标准的批量消息格式压缩多个消息
 
 ### 消息属性键规范
 - **SHARDING_KEY**: 分片键，用于MessageHashSelector的顺序性保证
@@ -191,6 +232,36 @@ async def async_send():
 asyncio.run(async_send())
 ```
 
+### 批量消息发送模式
+```python
+from pyrocketmq.producer import create_producer, create_async_producer
+from pyrocketmq.model.message import Message
+
+# 同步批量发送
+producer = create_producer("GID_BATCH", "nameserver:9876")
+producer.start()
+
+# 创建多个消息
+messages = [
+    Message(topic="batch_topic", body=b"Message 1"),
+    Message(topic="batch_topic", body=b"Message 2"),
+    Message(topic="batch_topic", body=b"Message 3")
+]
+
+# 批量发送（自动编码为批量消息）
+result = producer.send_batch(*messages)
+
+# 异步批量发送
+async def async_batch_send():
+    producer = await create_async_producer("GID_BATCH_ASYNC", "nameserver:9876")
+    await producer.start()
+    
+    result = await producer.send_batch(*messages)
+    return result
+
+asyncio.run(async_batch_send())
+```
+
 ### 消息发送模式
 ```python
 from pyrocketmq.model import Message, RemotingRequestFactory
@@ -221,6 +292,7 @@ class CustomSelector(QueueSelector):
 项目提供完整的示例代码：
 - `examples/basic_producer.py`: 同步Producer基础使用示例
 - `examples/basic_async_producer.py`: 异步Producer基础使用示例
+- `examples/simple_batch_producer.py`: 批量消息发送示例（使用新的send_batch方法）
 
 ## 协议规范
 
@@ -267,4 +339,5 @@ uv sync
 7. **路由过期**: 默认路由过期时间30秒，可配置
 8. **类型安全**: 所有代码使用完整类型注解
 9. **心跳机制**: Producer会定期向所有Broker发送心跳，确保连接活跃状态
-10. **示例代码**: 参考 `examples/` 目录下的完整使用示例
+10. **批量消息**: 使用`send_batch()`方法可以高效发送多个消息，自动进行消息编码和主题验证
+11. **示例代码**: 参考 `examples/` 目录下的完整使用示例，包括批量消息发送示例
