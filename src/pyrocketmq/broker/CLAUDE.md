@@ -9,11 +9,13 @@ Broker模块是pyrocketmq客户端库的核心组件之一，提供与RocketMQ B
 ### 文件结构
 ```
 broker/
-├── __init__.py          # 模块入口，导出主要类
-├── client.py            # 同步Broker客户端实现
-├── async_client.py      # 异步Broker客户端实现
-├── broker_manager.py    # Broker连接管理器（从producer模块移动而来）
-└── errors.py            # Broker模块异常定义
+├── __init__.py              # 模块入口，导出主要类
+├── client.py                # 同步Broker客户端实现
+├── async_client.py          # 异步Broker客户端实现
+├── broker_manager.py        # 同步Broker连接管理器
+├── async_broker_manager.py  # 异步Broker连接管理器
+├── connection_info.py       # Broker连接信息和状态管理
+└── errors.py                # Broker模块异常定义
 ```
 
 ### 核心设计原则
@@ -23,17 +25,19 @@ broker/
 3. **协议兼容性**: 严格遵循RocketMQ TCP协议规范，与Go语言实现完全兼容
 4. **性能优化**: 支持oneway通信模式，减少不必要的响应等待
 5. **线程安全**: 所有操作都是线程安全的，支持高并发场景
+6. **智能连接管理**: 提供with风格的连接获取方法，自动管理连接生命周期
+7. **连接复用优化**: 健康检查创建的连接自动复用，避免资源浪费
 
 ## 核心数据结构
 
-### BrokerManager
-Broker连接管理器，提供高级的Broker连接管理和健康检查功能。
+### BrokerManager系列
+Broker连接管理器系列，提供高级的Broker连接管理和健康检查功能，支持同步和异步两种模式。
 
 **核心组件**:
-- `BrokerConnectionPool` - 管理单个Broker的连接池
-- `BrokerManager` - 管理多个Broker的连接和路由
-- `HealthChecker` - 执行健康检查任务
-- `BrokerState` - Broker状态枚举（HEALTHY, DEGRADED, UNHEALTHY, SUSPENDED）
+- `BrokerConnectionPool` / `AsyncBrokerConnectionPool` - 管理单个Broker的连接池
+- `BrokerManager` / `AsyncBrokerManager` - 管理多个Broker的连接和路由
+- `BrokerConnectionInfo` - Broker连接信息和统计数据
+- `BrokerState` - Broker状态枚举（HEALTHY, UNHEALTHY, FAILED, UNKNOWN, RECOVERING）
 
 **主要功能**:
 - **连接池管理**: 为每个Broker维护独立的连接池，支持连接复用
@@ -41,12 +45,26 @@ Broker连接管理器，提供高级的Broker连接管理和健康检查功能�
 - **故障转移**: 自动检测Broker故障并转移流量到健康节点
 - **负载均衡**: 在多个可用Broker间分配连接负载
 - **统计监控**: 提供详细的连接统计和性能指标
+- **智能连接管理**: 提供with风格的连接获取方法，自动管理连接生命周期
+- **连接复用优化**: 健康检查创建的连接自动放回连接池复用，避免资源浪费
 
 **核心类**:
-- `BrokerManager` - 异步Broker管理器
-- `SyncBrokerManager` - 同步Broker管理器
+- `BrokerManager` - **同步**Broker管理器
+- `AsyncBrokerManager` - **异步**Broker管理器
+- `BrokerConnectionPool` - **同步**连接池实现
+- `AsyncBrokerConnectionPool` - **异步**连接池实现
 - `BrokerConnectionInfo` - Broker连接信息和统计数据
-- `BrokerConnectionPool` - 连接池实现
+
+#### 🆕 智能连接管理特性
+- **with风格获取**: 使用`with manager.connection(broker_addr) as conn:`自动管理连接
+- **async with风格**: 使用`async with manager.connection(broker_addr) as conn:`异步自动管理连接
+- **异常安全**: 无论正常执行还是异常退出，连接都会被正确释放
+- **简洁API**: 减少手动get/release连接的样板代码
+
+#### 🆕 连接复用优化
+- **健康检查优化**: 健康检查创建的连接不再立即销毁，而是放回连接池复用
+- **智能管理**: 连接池满时才销毁多余连接，避免资源浪费
+- **性能提升**: 减少连接创建/销毁开销，提升健康检查效率
 
 ### BrokerClient
 同步Broker客户端，提供完整的同步API接口。
@@ -103,6 +121,51 @@ Broker连接管理器，提供高级的Broker连接管理和健康检查功能�
 - **请求统计**: 请求总数、成功数、失败数等详细信息
 
 #### 使用示例
+
+**🆕 智能连接管理（推荐）**:
+```python
+from pyrocketmq.broker.broker_manager import BrokerManager, AsyncBrokerManager
+
+# 同步版本 - with风格连接管理
+def sync_example():
+    manager = BrokerManager()
+    manager.start()
+    
+    try:
+        manager.add_broker("127.0.0.1:10911")
+        
+        # 使用with风格自动管理连接
+        with manager.connection("127.0.0.1:10911") as conn:
+            # 使用连接进行操作
+            print(f"连接状态: {conn.is_connected}")
+            # response = conn.send_sync_request(request)
+        
+        # 连接自动释放，无需手动调用release_connection
+        
+    finally:
+        manager.shutdown()
+
+# 异步版本 - async with风格连接管理
+async def async_example():
+    manager = AsyncBrokerManager()
+    await manager.start()
+    
+    try:
+        await manager.add_broker("127.0.0.1:10911")
+        
+        # 使用async with风格自动管理连接
+        async with manager.connection("127.0.0.1:10911") as conn:
+            # 使用连接进行异步操作
+            print(f"连接状态: {conn.is_connected}")
+            # response = await conn.send_sync_request(request)
+        
+        # 连接自动释放，无需手动调用release_connection
+        
+    finally:
+        await manager.shutdown()
+```
+
+**传统手动管理方式**:
 ```python
 from pyrocketmq.broker.broker_manager import BrokerManager
 
@@ -116,11 +179,12 @@ await broker_manager.add_broker("broker-a", "127.0.0.1:10911")
 # 获取连接
 connection = await broker_manager.get_connection("broker-a")
 
-# 使用连接
-# ... 执行业务逻辑 ...
-
-# 释放连接
-await broker_manager.release_connection("broker-a", connection)
+try:
+    # 使用连接
+    # ... 执行业务逻辑 ...
+finally:
+    # 释放连接
+    await broker_manager.release_connection("broker-a", connection)
 
 # 获取统计信息
 stats = await broker_manager.get_all_brokers_stats()
@@ -251,7 +315,9 @@ BrokerError (基础异常)
 - **批量操作**: 支持批量消息发送，减少网络开销
 - **异步支持**: 提供异步客户端，支持高并发场景
 
-### 2. 连接管理优化
+### 2. 🆕 连接管理优化
+- **智能连接管理**: with风格的连接获取方法，自动管理连接生命周期
+- **连接复用**: 健康检查创建的连接自动放回连接池复用，减少资源浪费
 - **连接池**: 与远程通信层的连接池配合，避免频繁建连
 - **心跳保活**: 定期心跳维持连接，避免连接超时断开
 - **状态检查**: 提供连接状态检查接口，便于上层应用判断
@@ -259,6 +325,7 @@ BrokerError (基础异常)
 ### 3. 内存优化
 - **响应复用**: 合理复用响应对象，减少内存分配
 - **异常复用**: 异常对象包含足够上下文，减少重复查询
+- **连接复用**: 减少连接创建/销毁开销，提升整体性能
 
 ## 使用示例
 
@@ -361,10 +428,28 @@ result = await client.async_send_message(
 - **行为一致**: 错误处理、状态转换等行为与Go实现一致
 - **性能匹配**: 在Python环境下提供与Go实现相近的性能表现
 
-### BrokerManager高级特性
+### 🆕 BrokerManager高级特性
 - **故障检测**: 实现了与Go语言版本相同的健康检查机制
 - **负载均衡**: 支持多Broker间的智能负载分配
 - **连接复用**: 高效的连接池管理，提升整体性能
 - **状态同步**: 与RocketMQ Broker状态保持同步
+- **智能连接管理**: with风格的连接获取方法，自动管理连接生命周期
+- **健康检查优化**: 健康检查创建的连接自动复用，减少资源浪费
+- **异步支持**: 提供完整的异步API，支持高并发场景
 
-该模块是pyrocketmq实现RocketMQ客户端功能的核心基础，为上层生产者和消费者模块提供稳定、高效的Broker通信能力和连接管理能力。BrokerManager的加入使得该模块具备了企业级的连接管理和故障处理能力。
+## 🎉 最新优化总结
+
+### 2024年重大更新
+1. **智能连接管理**: 新增with/async with风格的连接获取方法，自动管理连接生命周期
+2. **连接复用优化**: 健康检查创建的连接不再立即销毁，而是放回连接池复用
+3. **异步支持**: 完整的异步Broker管理器实现，支持高并发场景
+4. **异常安全**: 无论正常执行还是异常退出，连接都会被正确释放
+5. **性能提升**: 减少连接创建/销毁开销，提升整体性能
+
+### 使用建议
+- **推荐使用**: with/async with风格的连接获取方法，避免手动管理连接
+- **性能优先**: 异步版本适合高并发场景，同步版本适合简单场景
+- **资源优化**: 连接池会自动管理连接，无需担心资源泄漏
+- **异常处理**: 连接管理器提供了完善的异常处理机制
+
+该模块是pyrocketmq实现RocketMQ客户端功能的核心基础，为上层生产者和消费者模块提供稳定、高效的Broker通信能力和连接管理能力。BrokerManager的加入使得该模块具备了企业级的连接管理和故障处理能力。最新的优化进一步提升了易用性和性能表现。
