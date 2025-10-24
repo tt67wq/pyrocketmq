@@ -581,19 +581,18 @@ class Producer:
         """
         try:
             # 获取或创建Broker连接
-            broker_remote = self._broker_manager.get_connection(broker_addr)
+            with self._broker_manager.connection(broker_addr) as broker_remote:
+                # 创建发送请求
+                request = RemotingRequestFactory.create_send_message_request(
+                    producer_group=self._config.producer_group,
+                    topic=message.topic,
+                    body=message.body,
+                    queue_id=message_queue.queue_id,
+                    properties=message.properties,
+                )
 
-            # 创建发送请求
-            request = RemotingRequestFactory.create_send_message_request(
-                producer_group=self._config.producer_group,
-                topic=message.topic,
-                body=message.body,
-                queue_id=message_queue.queue_id,
-                properties=message.properties,
-            )
-
-            # 单向发送请求
-            broker_remote.oneway(request)
+                # 单向发送请求
+                broker_remote.oneway(request)
 
             logger.debug(f"Oneway message sent to {broker_addr}")
 
@@ -672,14 +671,13 @@ class Producer:
             for broker_addr in broker_addrs:
                 try:
                     # 获取或创建Broker连接
-                    broker_remote = self._broker_manager.get_connection(
+                    with self._broker_manager.connection(
                         broker_addr
-                    )
-
-                    # 发送单向心跳请求（不等待响应）
-                    broker_remote.oneway(heartbeat_request)
-                    success_count += 1
-                    logger.debug(f"Heartbeat sent to broker: {broker_addr}")
+                    ) as broker_remote:
+                        # 发送单向心跳请求（不等待响应）
+                        broker_remote.oneway(heartbeat_request)
+                        success_count += 1
+                        logger.debug(f"Heartbeat sent to broker: {broker_addr}")
 
                 except Exception as e:
                     failed_count += 1
