@@ -14,7 +14,7 @@ pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于Ro
 - **连接池**: ✅ 连接池管理功能
 - **NameServer支持**: ✅ 完整客户端实现，支持路由信息查询
 - **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
-- **Producer模块**: 🚧 实现中，已完成Topic-Broker映射管理和队列选择器
+- **Producer模块**: 🚧 MVP版本实现完成，支持同步/异步消息发送和心跳机制
 
 ## 开发环境配置
 
@@ -53,6 +53,13 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 
 # 运行异步测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/transport/ -v --asyncio-mode=auto
+
+# 运行Producer模块测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/producer/ -v
+
+# 运行示例代码
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_producer.py
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_async_producer.py
 ```
 
 ## 核心架构
@@ -116,7 +123,7 @@ Client Application
 ## 核心模块详解
 
 ### Producer层 (`src/pyrocketmq/producer/`)
-**关键组件**: TopicBrokerMapping + QueueSelector架构
+**关键组件**: TopicBrokerMapping + QueueSelector架构 + 心跳机制
 
 #### TopicBrokerMapping
 - **功能**: 管理Topic到Broker的路由信息和队列选择
@@ -127,9 +134,14 @@ Client Application
   - 线程安全的并发访问
 
 #### QueueSelector策略
-- **RoundRobinSelector**: 默认轮询负载均衡，维护计数器状态
-- **RandomSelector**: 随机选择，适合无状态负载均衡
+- **同步版本**: RoundRobinSelector、RandomSelector、MessageHashSelector
+- **异步版本**: AsyncRoundRobinSelector、AsyncRandomSelector、AsyncMessageHashSelector
 - **MessageHashSelector**: 基于SHARDING_KEY或KEYS的哈希选择，保证顺序性
+
+#### Producer核心功能
+- **同步Producer**: MVP版本，支持生命周期管理和消息发送
+- **异步Producer**: 基于asyncio的高性能异步实现
+- **心跳机制**: 定期向所有Broker发送心跳，确保连接稳定性
 
 ### 消息属性键规范
 - **SHARDING_KEY**: 分片键，用于MessageHashSelector的顺序性保证
@@ -151,6 +163,32 @@ mapping = TopicBrokerMapping(default_selector=hash_selector)
 
 # 选择队列时可以覆盖选择器
 result = mapping.select_queue("topic", message, RandomSelector())
+```
+
+### Producer使用模式
+```python
+# 同步Producer
+from pyrocketmq.producer import create_producer
+from pyrocketmq.model.message import Message
+
+producer = create_producer("GID_POETRY", "nameserver:9876")
+producer.start()
+
+message = Message(topic="test_topic", body=b"Hello, RocketMQ!")
+result = producer.send(message)
+
+# 异步Producer
+from pyrocketmq.producer import create_async_producer
+import asyncio
+
+async def async_send():
+    producer = create_async_producer("GID_POETRY", "nameserver:9876")
+    await producer.start()
+    
+    message = Message(topic="test_topic", body=b"Hello, Async RocketMQ!")
+    result = await producer.send(message)
+
+asyncio.run(async_send())
 ```
 
 ### 消息发送模式
@@ -179,6 +217,11 @@ class CustomSelector(QueueSelector):
         return available_queues[0] if available_queues else None
 ```
 
+### 示例代码
+项目提供完整的示例代码：
+- `examples/basic_producer.py`: 同步Producer基础使用示例
+- `examples/basic_async_producer.py`: 异步Producer基础使用示例
+
 ## 协议规范
 
 ### 数据帧格式
@@ -197,6 +240,22 @@ class CustomSelector(QueueSelector):
 - 最大header大小: 64KB (65536字节)
 - 长度字段: 大端序4字节整数
 
+## 依赖管理
+
+### 项目配置
+- 使用 `pyproject.toml` 进行现代化项目配置
+- 支持 `uv.lock` 文件实现高效依赖管理
+- Python 3.11+ 要求，支持完整类型注解
+
+### 开发工具
+```bash
+# 使用pip安装依赖
+pip install -e .
+
+# 使用uv进行快速依赖管理
+uv sync
+```
+
 ## 注意事项
 
 1. **环境变量**: 开发时必须设置`PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src`
@@ -207,3 +266,5 @@ class CustomSelector(QueueSelector):
 6. **异步优先**: 网络通信主要基于asyncio，同步模式是其封装
 7. **路由过期**: 默认路由过期时间30秒，可配置
 8. **类型安全**: 所有代码使用完整类型注解
+9. **心跳机制**: Producer会定期向所有Broker发送心跳，确保连接活跃状态
+10. **示例代码**: 参考 `examples/` 目录下的完整使用示例
