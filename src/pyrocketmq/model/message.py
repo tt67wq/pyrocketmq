@@ -355,6 +355,23 @@ class Message:
         data = json.loads(json_str)
         return cls.from_dict(data)
 
+    @staticmethod
+    def encode_batch(*messages: "Message") -> "Message":
+        """将多个消息编码为一个批量消息（静态便利方法）
+
+        Args:
+            *messages: 要编码的消息列表
+
+        Returns:
+            编码后的批量消息
+
+        Examples:
+            >>> msg1 = Message(topic="test", body=b"message1")
+            >>> msg2 = Message(topic="test", body=b"message2")
+            >>> batch_msg = Message.encode_batch(msg1, msg2)
+        """
+        return encode_batch(*messages)
+
     # 复制方法
     def copy(self) -> "Message":
         """创建消息的副本
@@ -386,6 +403,65 @@ class Message:
             f"flag={self.flag}, "
             f"propertiesCount={len(self.properties)}]"
         )
+
+    def marshal(self) -> bytes:
+        """将消息序列化为字节数组（与Go实现保持一致）
+
+        Returns:
+            序列化后的消息字节数组
+
+        消息格式（与Go实现一致）：
+        | TOTALSIZE(4) | MAGICCODE(4) | BODYCRC(4) | FLAG(4) | BODYSIZE(4) | BODY | PROPERTYSIZE(2) | PROPERTY |
+        """
+        import struct
+
+        # 序列化properties
+        properties_str = self.marshall_properties()
+        properties_bytes = properties_str.encode("utf-8")
+
+        # 计算存储大小：TOTALSIZE + MAGICCODE + BODYCRC + FLAG + BODYSIZE + BODY + PROPERTYSIZE + PROPERTY
+        store_size = (
+            4 + 4 + 4 + 4 + 4 + len(self.body) + 2 + len(properties_bytes)
+        )
+
+        # 创建缓冲区
+        buffer = bytearray(store_size)
+        pos = 0
+
+        # 1. TOTALSIZE (4 bytes) - 整个消息的大小
+        struct.pack_into(">I", buffer, pos, store_size)
+        pos += 4
+
+        # 2. MAGICCODE (4 bytes) - 魔数，Go实现中设为0
+        struct.pack_into(">I", buffer, pos, 0)
+        pos += 4
+
+        # 3. BODYCRC (4 bytes) - 消息体CRC校验，Go实现中设为0
+        struct.pack_into(">I", buffer, pos, 0)
+        pos += 4
+
+        # 4. FLAG (4 bytes) - 消息标志
+        struct.pack_into(">I", buffer, pos, self.flag)
+        pos += 4
+
+        # 5. BODYSIZE (4 bytes) - 消息体大小
+        struct.pack_into(">I", buffer, pos, len(self.body))
+        pos += 4
+
+        # 6. BODY - 消息体
+        if self.body:
+            buffer[pos : pos + len(self.body)] = self.body
+            pos += len(self.body)
+
+        # 7. PROPERTYSIZE (2 bytes) - 属性大小
+        struct.pack_into(">H", buffer, pos, len(properties_bytes))
+        pos += 2
+
+        # 8. PROPERTY - 序列化的属性
+        if properties_bytes:
+            buffer[pos : pos + len(properties_bytes)] = properties_bytes
+
+        return bytes(buffer)
 
     def __repr__(self) -> str:
         """详细字符串表示"""
@@ -486,184 +562,73 @@ def create_delay_message(
     return msg
 
 
-@dataclass
-class MessageExt(Message):
-    """RocketMQ扩展消息数据结构
+def marshal_message_batch(*messages: Message) -> bytes:
+    """将多个消息序列化为批量消息格式（与Go实现保持一致）
 
-    继承自Message，包含消息在Broker端的存储信息和元数据。
-    与Go语言实现的MessageExt结构保持兼容。
+    Args:
+        *messages: 要序列化的消息列表
+
+    Returns:
+        序列化后的批量消息字节数组
+
+    Examples:
+        >>> msg1 = Message(topic="test", body=b"message1")
+        >>> msg2 = Message(topic="test", body=b"message2")
+        >>> batch_data = marshal_message_batch(msg1, msg2)
     """
+    if not messages:
+        return b""
 
-    # 消息ID相关
-    msg_id: str = ""  # 消息唯一ID
-    offset_msg_id: str = ""  # 偏移量消息ID
+    # 创建字节缓冲区
+    buffer = bytearray()
 
-    # 存储信息
-    store_size: int = 0  # 存储大小（字节）
-    queue_offset: int = 0  # 队列偏移量
-    sys_flag: int = 0  # 系统标志
-    commit_log_offset: int = 0  # 提交日志偏移量
-    body_crc: int = 0  # 消息体CRC校验码
+    # 将每个消息序列化并添加到缓冲区
+    for msg in messages:
+        serialized_data = msg.marshal()
+        buffer.extend(serialized_data)
 
-    # 时间戳信息
-    born_timestamp: int = 0  # 消息产生时间戳
-    born_host: str = ""  # 消息产生主机地址
-    store_timestamp: int = 0  # 消息存储时间戳
-    store_host: str = ""  # 消息存储主机地址
+    return bytes(buffer)
 
-    # 消费相关信息
-    reconsume_times: int = 0  # 重新消费次数
-    prepared_transaction_offset: int = 0  # 预提交事务偏移量
 
-    def __post_init__(self):
-        """后处理，调用父类后处理并确保数据类型正确"""
-        super().__post_init__()
+def encode_batch(*messages: Message) -> Message:
+    """将多个消息编码为一个批量消息（与Go实现保持一致）
 
-        # 确保整数字段类型正确
-        if not isinstance(self.store_size, int):
-            self.store_size = int(self.store_size)
-        if not isinstance(self.queue_offset, int):
-            self.queue_offset = int(self.queue_offset)
-        if not isinstance(self.sys_flag, int):
-            self.sys_flag = int(self.sys_flag)
-        if not isinstance(self.commit_log_offset, int):
-            self.commit_log_offset = int(self.commit_log_offset)
-        if not isinstance(self.body_crc, int):
-            self.body_crc = int(self.body_crc)
-        if not isinstance(self.born_timestamp, int):
-            self.born_timestamp = int(self.born_timestamp)
-        if not isinstance(self.store_timestamp, int):
-            self.store_timestamp = int(self.store_timestamp)
-        if not isinstance(self.reconsume_times, int):
-            self.reconsume_times = int(self.reconsume_times)
-        if not isinstance(self.prepared_transaction_offset, int):
-            self.prepared_transaction_offset = int(
-                self.prepared_transaction_offset
-            )
+    Args:
+        *messages: 要编码的消息列表
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式，包含扩展字段
+    Returns:
+        编码后的批量消息
 
-        Returns:
-            包含所有字段的字典
-        """
-        result = super().to_dict()
+    Examples:
+        >>> msg1 = Message(topic="test", body=b"message1")
+        >>> msg2 = Message(topic="test", body=b"message2")
+        >>> batch_msg = encode_batch(msg1, msg2)
+        >>> print(batch_msg.batch)  # True
+    """
+    if not messages:
+        raise ValueError("至少需要提供一个消息")
 
-        # 添加MessageExt特有字段
-        result.update(
-            {
-                "msgId": self.msg_id,
-                "offsetMsgId": self.offset_msg_id,
-                "storeSize": self.store_size,
-                "queueOffset": self.queue_offset,
-                "sysFlag": self.sys_flag,
-                "commitLogOffset": self.commit_log_offset,
-                "bodyCRC": self.body_crc,
-                "bornTimestamp": self.born_timestamp,
-                "bornHost": self.born_host,
-                "storeTimestamp": self.store_timestamp,
-                "storeHost": self.store_host,
-                "reconsumeTimes": self.reconsume_times,
-                "preparedTransactionOffset": self.prepared_transaction_offset,
-            }
-        )
+    # 如果只有一个消息，直接返回该消息
+    if len(messages) == 1:
+        return messages[0]
 
-        return result
+    # 获取第一个消息作为批量消息的基础
+    first_msg = messages[0]
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MessageExt":
-        """从字典创建MessageExt实例
+    # 创建批量消息
+    batch_msg = Message(
+        topic=first_msg.topic,
+        body=b"",  # 将在下面设置
+        queue=first_msg.queue,
+        flag=first_msg.flag,
+        transaction_id=first_msg.transaction_id,
+    )
 
-        Args:
-            data: 包含消息数据的字典
+    # 编码批量消息体
+    batch_msg.body = marshal_message_batch(*messages)
+    batch_msg.batch = True
 
-        Returns:
-            MessageExt实例
-        """
-        # 首先创建Message实例来处理基础字段
-        base_msg = Message.from_dict(data)
-
-        return cls(
-            # Message字段
-            topic=base_msg.topic,
-            body=base_msg.body,
-            flag=base_msg.flag,
-            transaction_id=base_msg.transaction_id,
-            batch=base_msg.batch,
-            compress=base_msg.compress,
-            queue=base_msg.queue,
-            properties=base_msg.properties,
-            # MessageExt特有字段
-            msg_id=data.get("msgId", ""),
-            offset_msg_id=data.get("offsetMsgId", ""),
-            store_size=data.get("storeSize", 0),
-            queue_offset=data.get("queueOffset", 0),
-            sys_flag=data.get("sysFlag", 0),
-            commit_log_offset=data.get("commitLogOffset", 0),
-            body_crc=data.get("bodyCRC", 0),
-            born_timestamp=data.get("bornTimestamp", 0),
-            born_host=data.get("bornHost", ""),
-            store_timestamp=data.get("storeTimestamp", 0),
-            store_host=data.get("storeHost", ""),
-            reconsume_times=data.get("reconsumeTimes", 0),
-            prepared_transaction_offset=data.get(
-                "preparedTransactionOffset", 0
-            ),
-        )
-
-    def copy(self) -> "MessageExt":
-        """创建MessageExt的副本
-
-        Returns:
-            MessageExt副本
-        """
-        return MessageExt(
-            # Message字段
-            topic=self.topic,
-            body=self.body,
-            flag=self.flag,
-            transaction_id=self.transaction_id,
-            batch=self.batch,
-            compress=self.compress,
-            queue=self.queue,
-            properties=dict(self.properties),
-            # MessageExt特有字段
-            msg_id=self.msg_id,
-            offset_msg_id=self.offset_msg_id,
-            store_size=self.store_size,
-            queue_offset=self.queue_offset,
-            sys_flag=self.sys_flag,
-            commit_log_offset=self.commit_log_offset,
-            body_crc=self.body_crc,
-            born_timestamp=self.born_timestamp,
-            born_host=self.born_host,
-            store_timestamp=self.store_timestamp,
-            store_host=self.store_host,
-            reconsume_times=self.reconsume_times,
-            prepared_transaction_offset=self.prepared_transaction_offset,
-        )
-
-    def __str__(self) -> str:
-        """字符串表示"""
-        base_str = super().__str__()
-        return (
-            f"MessageExt[{base_str}, "
-            f"msgId='{self.msg_id}', "
-            f"queueOffset={self.queue_offset}, "
-            f"storeSize={self.store_size}]"
-        )
-
-    def __repr__(self) -> str:
-        """详细字符串表示"""
-        return (
-            f"MessageExt(topic='{self.topic}', "
-            f"msgId='{self.msg_id}', "
-            f"queueOffset={self.queue_offset}, "
-            f"storeSize={self.store_size}, "
-            f"bornTimestamp={self.born_timestamp}, "
-            f"storeTimestamp={self.store_timestamp}, "
-            f"reconsumeTimes={self.reconsume_times})"
-        )
+    return batch_msg
 
 
 # 消息属性常量
