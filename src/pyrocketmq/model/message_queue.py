@@ -102,3 +102,16 @@ class MessageQueue:
             完整名称格式：topic@brokerName:queueId
         """
         return f"{self.topic}@{self.broker_name}:{self.queue_id}"
+
+    @classmethod
+    def fake_message_queue(cls) -> "MessageQueue":
+        """创建一个假的消息队列实例
+
+        Returns:
+            消息队列实例
+        """
+        return MessageQueue(
+            topic="fake_topic",
+            broker_name="fake_broker",
+            queue_id=0,
+        )

@@ -19,20 +19,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
 
+from pyrocketmq.model.enums import LocalTransactionState
 from pyrocketmq.model.result_data import SendMessageResult
 
 from ..model.message import Message
-
-
-class LocalTransactionState(Enum):
-    """本地事务状态枚举
-
-    定义本地事务执行后的可能状态，与RocketMQ标准实现保持一致。
-    """
-
-    COMMIT_MESSAGE = 1  # 提交消息
-    ROLLBACK_MESSAGE = 2  # 回滚消息
-    UNKNOW = 3  # 未知状态，需要回查
 
 
 class TransactionState(Enum):
@@ -44,7 +34,7 @@ class TransactionState(Enum):
     PREPARE = 1  # 准备阶段（半消息已发送）
     COMMIT = 2  # 已提交
     ROLLBACK = 3  # 已回滚
-    UNKNOWN = 4  # 状态未知
+    UNKNOW_STATEN = 4  # 状态未知
 
 
 @dataclass
@@ -70,7 +60,8 @@ class TransactionSendResult(SendMessageResult):
     def is_commit(self) -> bool:
         """检查是否为提交状态"""
         return (
-            self.local_transaction_state == LocalTransactionState.COMMIT_MESSAGE
+            self.local_transaction_state
+            == LocalTransactionState.COMMIT_MESSAGE_STATE
         )
 
     @property
@@ -78,13 +69,15 @@ class TransactionSendResult(SendMessageResult):
         """检查是否为回滚状态"""
         return (
             self.local_transaction_state
-            == LocalTransactionState.ROLLBACK_MESSAGE
+            == LocalTransactionState.ROLLBACK_MESSAGE_STATE
         )
 
     @property
-    def is_unknown(self) -> bool:
+    def is_UNKNOW_STATEn(self) -> bool:
         """检查是否为未知状态"""
-        return self.local_transaction_state == LocalTransactionState.UNKNOW
+        return (
+            self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -102,7 +95,7 @@ class TransactionSendResult(SendMessageResult):
 
     def __str__(self) -> str:
         """字符串表示"""
-        state_str = "UNKNOWN"
+        state_str = "UNKNOW_STATEN"
         if self.local_transaction_state:
             state_str = self.local_transaction_state.name
 
@@ -136,9 +129,9 @@ class TransactionListener(ABC):
 
         Returns:
             本地事务状态
-            - COMMIT_MESSAGE: 提交事务，消息对消费者可见
-            - ROLLBACK_MESSAGE: 回滚事务，消息将被删除
-            - UNKNOW: 状态未知，触发回查机制
+            - COMMIT_MESSAGE_STATE: 提交事务，消息对消费者可见
+            - ROLLBACK_MESSAGE_STATE: 回滚事务，消息将被删除
+            - UNKNOW_STATE: 状态未知，触发回查机制
         """
         pass
 
@@ -156,9 +149,9 @@ class TransactionListener(ABC):
 
         Returns:
             本地事务状态
-            - COMMIT_MESSAGE: 提交事务
-            - ROLLBACK_MESSAGE: 回滚事务
-            - UNKNOW: 继续保持未知状态，可能触发后续回查
+            - COMMIT_MESSAGE_STATE: 提交事务
+            - ROLLBACK_MESSAGE_STATE: 回滚事务
+            - UNKNOW_STATE: 继续保持未知状态，可能触发后续回查
         """
         pass
 
@@ -173,41 +166,41 @@ class SimpleTransactionListener(TransactionListener):
         self,
         always_commit: bool = False,
         always_rollback: bool = False,
-        always_unknown: bool = False,
+        always_UNKNOW_STATEn: bool = False,
     ):
         """初始化简单事务监听器
 
         Args:
-            always_commit: 总是返回COMMIT_MESSAGE
-            always_rollback: 总是返回ROLLBACK_MESSAGE
-            always_unknown: 总是返回UNKNOW
+            always_commit: 总是返回COMMIT_MESSAGE_STATE
+            always_rollback: 总是返回ROLLBACK_MESSAGE_STATE
+            always_UNKNOW_STATEn: 总是返回UNKNOW_STATE
         """
         self.always_commit = always_commit
         self.always_rollback = always_rollback
-        self.always_unknown = always_unknown
+        self.always_UNKNOW_STATEn = always_UNKNOW_STATEn
 
     def execute_local_transaction(
         self, message: Message, transaction_id: str, arg: Any = None
     ) -> LocalTransactionState:
         """执行本地事务"""
         if self.always_commit:
-            return LocalTransactionState.COMMIT_MESSAGE
+            return LocalTransactionState.COMMIT_MESSAGE_STATE
         elif self.always_rollback:
-            return LocalTransactionState.ROLLBACK_MESSAGE
-        elif self.always_unknown:
-            return LocalTransactionState.UNKNOW
+            return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+        elif self.always_UNKNOW_STATEn:
+            return LocalTransactionState.UNKNOW_STATE
         else:
             # 默认情况下基于消息体内容做简单判断
             try:
                 body_str = message.body.decode("utf-8")
                 if body_str.startswith("commit"):
-                    return LocalTransactionState.COMMIT_MESSAGE
+                    return LocalTransactionState.COMMIT_MESSAGE_STATE
                 elif body_str.startswith("rollback"):
-                    return LocalTransactionState.ROLLBACK_MESSAGE
+                    return LocalTransactionState.ROLLBACK_MESSAGE_STATE
                 else:
-                    return LocalTransactionState.UNKNOW
+                    return LocalTransactionState.UNKNOW_STATE
             except Exception:
-                return LocalTransactionState.ROLLBACK_MESSAGE
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
 
     def check_local_transaction(
         self, message: Message, transaction_id: str
@@ -246,7 +239,7 @@ class TransactionMetadata:
     def need_check(self) -> bool:
         """检查是否需要回查"""
         return (
-            self.local_transaction_state == LocalTransactionState.UNKNOW
+            self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
             and not self.is_timeout
         )
 

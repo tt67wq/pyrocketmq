@@ -46,6 +46,16 @@ from .message import (
     create_transaction_message,
 )
 from .message_ext import MessageExt
+from .message_id import (
+    MessageID,
+    create_message_id,
+    create_message_id_from_bytes,
+    format_message_id_info,
+    get_address_by_bytes,
+    is_valid_message_id,
+    parse_message_id_from_string,
+    unmarshal_msg_id,
+)
 from .message_queue import MessageQueue
 from .result_data import (
     ConsumeFromWhere,
@@ -93,6 +103,7 @@ __all__ = [
     "MessageQueue",
     "MessageProperty",
     "MessageExt",
+    "MessageID",
     "SendMessageResult",
     "PullMessageResult",
     "OffsetResult",
@@ -100,6 +111,14 @@ __all__ = [
     "create_message",
     "create_transaction_message",
     "create_delay_message",
+    # MessageID函数
+    "create_message_id",
+    "create_message_id_from_bytes",
+    "unmarshal_msg_id",
+    "is_valid_message_id",
+    "parse_message_id_from_string",
+    "format_message_id_info",
+    "get_address_by_bytes",
     # 枚举类型
     "LanguageCode",
     "RequestCode",

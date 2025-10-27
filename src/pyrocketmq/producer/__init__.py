@@ -55,7 +55,6 @@ from pyrocketmq.producer.transaction import (
     TransactionCheckError,
     TransactionCommitError,
     TransactionError,
-    TransactionIdGenerator,
     TransactionListener,
     TransactionRollbackError,
     TransactionSendResult,
@@ -66,6 +65,10 @@ from pyrocketmq.producer.transaction import (
     create_transaction_message,
     create_transaction_send_result,
     create_transaction_send_result_from_base,
+)
+from pyrocketmq.producer.transactional_producer import (
+    TransactionProducer,
+    create_transactional_producer,
 )
 from pyrocketmq.producer.utils import (
     calculate_message_size,
@@ -79,8 +82,10 @@ __all__ = [
     # Core Producer (MVP)
     "Producer",
     "AsyncProducer",
+    "TransactionProducer",
     "create_producer",
     "create_async_producer",
+    "create_transactional_producer",
     # Config
     "ProducerConfig",
     "DEFAULT_CONFIG",
@@ -103,7 +108,6 @@ __all__ = [
     "TransactionSendResult",
     "LocalTransactionState",
     "TransactionState",
-    "TransactionIdGenerator",
     "create_simple_transaction_listener",
     "create_transaction_message",
     "create_transaction_send_result",
