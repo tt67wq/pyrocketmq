@@ -226,12 +226,6 @@ class BrokerClient:
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
-            # 解析响应体为SendMessageResult
-            # if not response.body:
-            #     raise BrokerResponseError(
-            #         "Empty response body for send message"
-            #     )
-
             try:
                 result = self._process_send_response(response, mq, properties)
             except Exception as e:

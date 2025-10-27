@@ -107,7 +107,7 @@ RocketMQ Producer的核心实现，采用简化架构设计。
 **核心特性**:
 - **简化状态管理**: 使用`_running: bool`替代复杂状态机
 - **生命周期管理**: `start()`/`shutdown()`幂等操作
-- **消息发送**: 同步发送(`send_sync`)和单向发送(`send_oneway`)
+- **多种发送模式**: 支持同步发送、批量发送、单向发送和单向批量发送
 - **集成路由**: 内置MessageRouter进行智能路由选择
 - **统计信息**: 基础的发送成功/失败统计
 
@@ -115,9 +115,11 @@ RocketMQ Producer的核心实现，采用简化架构设计。
 ```python
 def start() -> None:                    # 启动生产者
 def shutdown() -> None:                 # 关闭生产者
-def send_sync(message: Message) -> SendResult:  # 同步发送
-def send_oneway(message: Message) -> None:      # 单向发送
-def send_heartbeat_to_all_broker() -> None:      # 向所有Broker发送心跳
+def send(message: Message) -> SendResult:           # 同步发送消息
+def send_batch(*messages: Message) -> SendResult:   # 批量发送消息
+def oneway(message: Message) -> None:               # 单向发送消息
+def oneway_batch(*messages: Message) -> None:       # 单向批量发送消息
+def send_heartbeat_to_all_broker() -> None:         # 向所有Broker发送心跳
 def get_stats() -> dict:                # 获取统计信息
 ```
 
@@ -443,8 +445,22 @@ producer.start()
 
 # 发送消息
 message = Message(topic="test_topic", body=b"Hello RocketMQ")
-result = producer.send_sync(message)
+
+# 1. 同步发送消息
+result = producer.send(message)
 print(f"Send result: {result.success}")
+
+# 2. 批量发送消息
+msg1 = Message(topic="test_topic", body=b"Batch message 1")
+msg2 = Message(topic="test_topic", body=b"Batch message 2")
+batch_result = producer.send_batch(msg1, msg2)
+print(f"Batch send result: {batch_result.success}")
+
+# 3. 单向发送消息（高性能，不等待响应）
+producer.oneway(Message(topic="test_topic", body=b"Oneway message"))
+
+# 4. 单向批量发送消息（超高性能，不等待响应）
+producer.oneway_batch(msg1, msg2)
 
 # 关闭Producer
 producer.shutdown()
@@ -460,7 +476,7 @@ order_message = Message(topic="order_topic", body=b"order_data")
 order_message.set_property("SHARDING_KEY", "user_123")
 
 # Producer会自动使用消息哈希路由确保顺序性
-result = producer.send_sync(order_message)
+result = producer.send(order_message)
 ```
 
 ### 3. 配置管理
@@ -496,6 +512,87 @@ router_stats = producer._message_router.get_routing_stats()
 print(f"总路由次数: {router_stats['total_routing']}")
 ```
 
+### 5. 🆕 消息发送模式对比
+
+```python
+from pyrocketmq.producer import create_producer
+from pyrocketmq.model.message import Message
+
+producer = create_producer("GID_TEST", "nameserver:9876")
+producer.start()
+
+# 准备测试消息
+msg = Message(topic="test", body=b"test message")
+batch_msgs = [
+    Message(topic="test", body=b"batch_msg_1"),
+    Message(topic="test", body=b"batch_msg_2"),
+    Message(topic="test", body=b"batch_msg_3")
+]
+
+# 1. 同步发送 - 高可靠性，等待Broker确认
+result = producer.send(msg)
+print(f"同步发送: 消息ID={result.message_id}, 成功={result.success}")
+
+# 2. 批量发送 - 高效率，一次发送多个消息
+batch_result = producer.send_batch(*batch_msgs)
+print(f"批量发送: 消息ID={batch_result.message_id}, 成功={batch_result.success}")
+
+# 3. 单向发送 - 高性能，不等待Broker确认
+producer.oneway(msg)  # 适用于日志收集、指标上报等场景
+
+# 4. 单向批量发送 - 超高性能，兼具批量和单向优势
+producer.oneway_batch(*batch_msgs)  # 适用于高吞吐量场景
+
+producer.shutdown()
+```
+
+#### 发送模式选择指南
+
+| 发送模式 | 可靠性 | 性能 | 适用场景 |
+|----------|--------|------|----------|
+| `send()` | 高 | 中等 | 重要业务消息、事务消息 |
+| `send_batch()` | 高 | 较高 | 批量业务消息、数据同步 |
+| `oneway()` | 低 | 高 | 日志收集、指标上报 |
+| `oneway_batch()` | 低 | 超高 | 大数据量日志、实时事件流 |
+
+#### 🆕 单向发送使用场景
+
+```python
+# 1. 日志收集 - 允许少量丢失，追求高吞吐量
+def send_application_logs(logs):
+    producer = create_producer("log_producer", "nameserver:9876")
+    producer.start()
+    
+    log_messages = [
+        Message(topic="app_logs", body=log.encode())
+        for log in logs
+    ]
+    
+    # 使用单向批量发送提升性能
+    producer.oneway_batch(*log_messages)
+
+# 2. 监控指标上报 - 实时性要求高
+def report_metrics(metric_name, value):
+    producer = create_producer("metrics_producer", "nameserver:9876")
+    producer.start()
+    
+    metric_data = f"{metric_name}:{value}:{time.time()}"
+    producer.oneway(Message(topic="metrics", body=metric_data.encode()))
+
+# 3. 事件流处理 - 高频事件数据
+def process_events(events):
+    producer = create_producer("event_producer", "nameserver:9876")
+    producer.start()
+    
+    event_messages = [
+        Message(topic="events", body=event.to_json().encode())
+        for event in events
+    ]
+    
+    # 批量+单向的超高性能组合
+    producer.oneway_batch(*event_messages)
+```
+
 ## MVP版本状态
 
 ### ✅ 已完成功能
@@ -520,12 +617,103 @@ print(f"总路由次数: {router_stats['total_routing']}")
 - **学习成本降低**: 更少的抽象层次，更容易理解
 
 ### 🔄 未来扩展计划
-1. **批量消息发送**: 提升发送效率
+1. **✅ 批量消息发送**: 提升发送效率 (已完成)
 2. **事务消息支持**: 保证消息一致性
-3. **异步Producer**: 支持高并发场景
+3. **✅ 异步Producer**: 支持高并发场景 (已完成)
 4. **更多监控指标**: 增强运维能力
 5. **连接池优化**: 提升网络性能
 
+## 🆕 AsyncProducer 高级功能
+
+### 异步Producer特性
+AsyncProducer提供了完整的异步消息发送能力，支持高并发场景：
+
+```python
+from pyrocketmq.producer import create_async_producer
+from pyrocketmq.model.message import Message
+import asyncio
+
+async def async_producer_example():
+    # 创建异步Producer
+    producer = await create_async_producer("GID_ASYNC", "nameserver:9876")
+    await producer.start()
+    
+    # 准备消息
+    msg = Message(topic="async_test", body=b"async message")
+    batch_msgs = [
+        Message(topic="async_test", body=f"async_batch_{i}".encode())
+        for i in range(3)
+    ]
+    
+    # 1. 异步同步发送
+    result = await producer.send(msg)
+    print(f"异步发送: {result.success}")
+    
+    # 2. 异步批量发送
+    batch_result = await producer.send_batch(*batch_msgs)
+    print(f"异步批量发送: {batch_result.success}")
+    
+    # 3. 异步单向发送
+    await producer.oneway(msg)
+    
+    # 4. 异步单向批量发送
+    await producer.oneway_batch(*batch_msgs)
+    
+    await producer.shutdown()
+
+# 运行异步示例
+asyncio.run(async_producer_example())
+```
+
+### 异步发送模式对比
+
+| 异步方法 | 可靠性 | 性能 | 适用场景 |
+|----------|--------|------|----------|
+| `send()` | 高 | 中等 | 重要异步业务消息 |
+| `send_batch()` | 高 | 较高 | 异步批量业务消息 |
+| `oneway()` | 低 | 高 | 异步日志收集、指标上报 |
+| `oneway_batch()` | 低 | 超高 | 异步高吞吐量场景 |
+
+### 高并发使用示例
+
+```python
+# 高并发日志收集
+async def collect_logs_concurrently(log_streams):
+    producer = await create_async_producer("log_collector", "nameserver:9876")
+    await producer.start()
+    
+    # 并发处理多个日志流
+    tasks = []
+    for stream_id, logs in log_streams.items():
+        task = process_log_stream(producer, stream_id, logs)
+        tasks.append(task)
+    
+    # 并发执行所有日志流处理
+    await asyncio.gather(*tasks)
+    await producer.shutdown()
+
+async def process_log_stream(producer, stream_id, logs):
+    for log in logs:
+        message = Message(topic="logs", body=log.encode())
+        message.set_property("stream_id", stream_id)
+        await producer.oneway(message)  # 高性能单向发送
+
+# 实时指标批量上报
+async def report_metrics_batch(metrics):
+    producer = await create_async_producer("metrics_reporter", "nameserver:9876")
+    await producer.start()
+    
+    # 批量收集指标并异步上报
+    metric_messages = [
+        Message(topic="metrics", body=json.dumps(metric).encode())
+        for metric in metrics
+    ]
+    
+    # 使用异步单向批量发送
+    await producer.oneway_batch(*metric_messages)
+    await producer.shutdown()
+```
+
 ---
 
-**总结**: Producer MVP版本已经完成，提供了简洁高效的消息发送核心功能，通过架构优化显著提升了性能和可维护性。新增的心跳机制确保与Broker的连接稳定性，为后续功能扩展奠定了坚实基础。
+**总结**: Producer模块现在提供完整的同步和异步消息发送能力，包括4种发送模式（同步/异步 × 普通/批量 × 可靠/单向），满足从高可靠性到超高性能的各种应用场景需求。通过架构优化和功能扩展，显著提升了性能、可维护性和适用性。
