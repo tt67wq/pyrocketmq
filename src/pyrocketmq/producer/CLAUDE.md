@@ -12,12 +12,16 @@ Producer模块是pyrocketmq的消息生产者实现，采用MVP设计理念，�
 - **灵活配置**: 支持多种环境配置模板和便捷创建函数
 - **性能监控**: 实时统计发送成功/失败率和基础指标
 - **工具函数**: 消息验证、大小计算、客户端ID生成等实用工具
+- **🆕 事务消息**: 完整的事务消息支持，保证分布式事务一致性
 
 ## 模块结构 (MVP简化版)
 
 ```
 producer/
 ├── producer.py             # 核心Producer实现 (MVP)
+├── async_producer.py       # 异步Producer实现
+├── transactional_producer.py # 🆕 事务消息Producer实现
+├── transaction.py          # 🆕 事务消息核心数据结构
 ├── config.py              # 配置管理
 ├── topic_broker_mapping.py # Topic-Broker映射管理 + 队列选择
 ├── queue_selectors.py     # 队列选择策略
@@ -97,6 +101,58 @@ class RoutingResult:
     broker_address: Optional[str]
     error: Optional[Exception]
     routing_strategy: Optional[RoutingStrategy]
+```
+
+### 5. 🆕 TransactionSendResult (事务消息发送结果)
+事务消息发送结果，继承自SendMessageResult，包含事务相关状态信息。
+
+```python
+@dataclass
+class TransactionSendResult(SendMessageResult):
+    transaction_id: str                    # 事务ID
+    local_transaction_state: LocalTransactionState  # 本地事务状态
+    check_times: int = 0                   # 事务回查次数
+```
+
+### 6. 🆕 LocalTransactionState (本地事务状态)
+本地事务执行状态枚举。
+
+```python
+class LocalTransactionState(Enum):
+    COMMIT_MESSAGE_STATE = "COMMIT_MESSAGE"     # 提交事务
+    ROLLBACK_MESSAGE_STATE = "ROLLBACK_MESSAGE" # 回滚事务
+    UNKNOW = "UNKNOW"                            # 未知状态，需要回查
+```
+
+### 7. 🆕 TransactionListener (事务监听器接口)
+事务监听器接口，定义本地事务执行和状态回查逻辑。
+
+```python
+class TransactionListener(ABC):
+    @abstractmethod
+    def execute_local_transaction(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState:
+        """执行本地事务"""
+        pass
+
+    @abstractmethod
+    def check_local_transaction(self, message: Message, transaction_id: str) -> LocalTransactionState:
+        """检查本地事务状态"""
+        pass
+```
+
+### 8. 🆕 TransactionMetadata (事务元数据)
+事务元数据管理，跟踪事务状态和超时信息。
+
+```python
+@dataclass
+class TransactionMetadata:
+    transaction_id: str
+    message: Message
+    local_state: LocalTransactionState
+    create_time: float
+    timeout: float = 60000.0  # 默认60秒超时
+    check_times: int = 0
+    max_check_times: int = 15
 ```
 
 ## 核心组件 (MVP版本)
@@ -184,7 +240,34 @@ def report_routing_failure(self, broker_name: str, error: Exception)
 2. `KEYS`: 消息键，多个键用空格分隔
 3. 随机选择：当都没有时回退到随机选择
 
-### 5. ProducerConfig
+### 5. 🆕 TransactionProducer (事务消息Producer)
+RocketMQ事务消息Producer实现，提供完整的分布式事务消息支持。
+
+**核心特性**:
+- **两阶段提交**: 支持事务消息的两阶段提交流程
+- **本地事务集成**: 通过TransactionListener接口集成业务本地事务
+- **事务状态回查**: 自动处理Broker的事务状态回查请求
+- **事务超时管理**: 支持事务超时检测和自动清理
+- **异常处理**: 完整的事务异常处理和错误恢复机制
+
+**核心方法**:
+```python
+def start() -> None:  # 启动事务Producer
+def send_message_in_transaction(message: Message, arg: Any = None) -> TransactionSendResult  # 发送事务消息
+def _execute_local_transaction(message: Message, transaction_id: str, arg: Any) -> LocalTransactionState  # 执行本地事务
+def _send_transaction_confirmation(result: TransactionSendResult, local_state: LocalTransactionState, message_queue: MessageQueue) -> None  # 发送事务确认
+def _handle_transaction_check(request) -> None  # 处理事务回查
+def set_transaction_timeout(timeout: float) -> None  # 设置事务超时时间
+def set_max_check_times(max_times: int) -> None  # 设置最大回查次数
+def get_stats() -> Dict[str, Any]  # 获取事务统计信息
+```
+
+**便捷创建**:
+```python
+def create_transactional_producer(producer_group: str, namesrv_addr: str, transaction_listener: TransactionListener, **kwargs) -> TransactionProducer
+```
+
+### 6. ProducerConfig
 完整的Producer配置管理，支持环境变量和预定义模板。
 
 **配置分类**:
@@ -562,12 +645,12 @@ producer.shutdown()
 def send_application_logs(logs):
     producer = create_producer("log_producer", "nameserver:9876")
     producer.start()
-    
+
     log_messages = [
         Message(topic="app_logs", body=log.encode())
         for log in logs
     ]
-    
+
     # 使用单向批量发送提升性能
     producer.oneway_batch(*log_messages)
 
@@ -575,7 +658,7 @@ def send_application_logs(logs):
 def report_metrics(metric_name, value):
     producer = create_producer("metrics_producer", "nameserver:9876")
     producer.start()
-    
+
     metric_data = f"{metric_name}:{value}:{time.time()}"
     producer.oneway(Message(topic="metrics", body=metric_data.encode()))
 
@@ -583,12 +666,12 @@ def report_metrics(metric_name, value):
 def process_events(events):
     producer = create_producer("event_producer", "nameserver:9876")
     producer.start()
-    
+
     event_messages = [
         Message(topic="events", body=event.to_json().encode())
         for event in events
     ]
-    
+
     # 批量+单向的超高性能组合
     producer.oneway_batch(*event_messages)
 ```
@@ -597,8 +680,11 @@ def process_events(events):
 
 ### ✅ 已完成功能
 - **Producer核心**: 生命周期管理、消息发送、基础统计
+- **AsyncProducer**: 完整的异步消息发送能力，支持高并发场景
 - **路由管理**: 多种路由策略、故障感知、性能监控
 - **心跳机制**: 定期向所有Broker发送心跳，维持连接活跃状态
+- **批量消息**: 支持同步/异步批量发送，提升发送效率
+- **🆕 事务消息**: 完整的分布式事务消息支持，包含两阶段提交和状态回查
 - **配置管理**: 灵活配置、环境变量支持、预定义模板
 - **工具函数**: 消息验证、大小计算、客户端ID生成
 - **异常处理**: 完整的异常体系和错误处理
@@ -618,10 +704,13 @@ def process_events(events):
 
 ### 🔄 未来扩展计划
 1. **✅ 批量消息发送**: 提升发送效率 (已完成)
-2. **事务消息支持**: 保证消息一致性
+2. **✅ 事务消息支持**: 保证消息一致性 (已完成)
 3. **✅ 异步Producer**: 支持高并发场景 (已完成)
 4. **更多监控指标**: 增强运维能力
 5. **连接池优化**: 提升网络性能
+6. **消息压缩**: 支持消息压缩减少网络传输
+7. **延迟消息**: 支持定时和延迟消息发送
+8. **顺序消息**: 增强顺序消息保证机制
 
 ## 🆕 AsyncProducer 高级功能
 
@@ -637,28 +726,28 @@ async def async_producer_example():
     # 创建异步Producer
     producer = await create_async_producer("GID_ASYNC", "nameserver:9876")
     await producer.start()
-    
+
     # 准备消息
     msg = Message(topic="async_test", body=b"async message")
     batch_msgs = [
         Message(topic="async_test", body=f"async_batch_{i}".encode())
         for i in range(3)
     ]
-    
+
     # 1. 异步同步发送
     result = await producer.send(msg)
     print(f"异步发送: {result.success}")
-    
+
     # 2. 异步批量发送
     batch_result = await producer.send_batch(*batch_msgs)
     print(f"异步批量发送: {batch_result.success}")
-    
+
     # 3. 异步单向发送
     await producer.oneway(msg)
-    
+
     # 4. 异步单向批量发送
     await producer.oneway_batch(*batch_msgs)
-    
+
     await producer.shutdown()
 
 # 运行异步示例
@@ -674,6 +763,252 @@ asyncio.run(async_producer_example())
 | `oneway()` | None | 低 | 高 | 异步日志收集、指标上报 |
 | `oneway_batch()` | None | 低 | 超高 | 异步高吞吐量场景 |
 
+## 🆕 事务消息高级功能
+
+### TransactionProducer特性
+TransactionProducer提供了完整的分布式事务消息支持，保证消息一致性和可靠性：
+
+```python
+from pyrocketmq.producer.transactional_producer import create_transactional_producer
+from pyrocketmq.producer.transaction import TransactionListener, LocalTransactionState
+from pyrocketmq.model.message import Message
+import json
+
+# 自定义事务监听器
+class OrderTransactionListener(TransactionListener):
+    def execute_local_transaction(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState:
+        """执行本地事务"""
+        try:
+            # 解析订单数据
+            order_data = json.loads(message.body.decode())
+
+            # 执行本地数据库操作（创建订单）
+            create_order_in_database(order_data)
+
+            # 扣减库存
+            deduct_inventory(order_data['product_id'], order_data['quantity'])
+
+            print(f"本地事务执行成功: transactionId={transaction_id}")
+            return LocalTransactionState.COMMIT_MESSAGE_STATE
+
+        except Exception as e:
+            print(f"本地事务执行失败: transactionId={transaction_id}, error={e}")
+            return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+    def check_local_transaction(self, message: Message, transaction_id: str) -> LocalTransactionState:
+        """检查本地事务状态"""
+        try:
+            order_id = message.get_property("order_id")
+            if not order_id:
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+            # 查询本地数据库中的订单状态
+            if order_exists_in_database(order_id):
+                print(f"事务状态检查成功: transactionId={transaction_id}, order_id={order_id}")
+                return LocalTransactionState.COMMIT_MESSAGE_STATE
+            else:
+                print(f"事务状态检查失败: transactionId={transaction_id}, order_id={order_id}")
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except Exception as e:
+            print(f"事务状态检查异常: transactionId={transaction_id}, error={e}")
+            return LocalTransactionState.UNKNOW
+
+def create_transactional_order_example():
+    """事务消息发送示例"""
+    # 创建事务监听器
+    transaction_listener = OrderTransactionListener()
+
+    # 创建事务Producer
+    producer = create_transactional_producer(
+        producer_group="GID_ORDER_TRANSACTIONAL",
+        namesrv_addr="localhost:9876",
+        transaction_listener=transaction_listener,
+        transaction_timeout=60000.0,  # 60秒超时
+        max_check_times=15          # 最大回查15次
+    )
+
+    producer.start()
+
+    try:
+        # 创建订单消息
+        order_data = {
+            "order_id": "ORDER_12345",
+            "user_id": "USER_67890",
+            "product_id": "PROD_ABC",
+            "quantity": 2,
+            "amount": 299.00,
+            "timestamp": "2024-01-20T10:30:00Z"
+        }
+
+        message = Message(
+            topic="order_topic",
+            body=json.dumps(order_data).encode()
+        )
+
+        # 设置消息属性
+        message.set_property("order_id", order_data["order_id"])
+        message.set_property("user_id", order_data["user_id"])
+        message.set_keys(order_data["order_id"])
+
+        # 发送事务消息
+        result = producer.send_message_in_transaction(message, arg=order_data)
+
+        print(f"事务消息发送结果:")
+        print(f"  消息ID: {result.message_id}")
+        print(f"  事务ID: {result.transaction_id}")
+        print(f"  本地事务状态: {result.local_transaction_state}")
+        print(f"  发送状态: {'成功' if result.success else '失败'}")
+
+        # 检查事务最终状态
+        if result.is_commit:
+            print(f"✅ 事务 {result.transaction_id} 已提交")
+        elif result.is_rollback:
+            print(f"❌ 事务 {result.transaction_id} 已回滚")
+        else:
+            print(f"⏳ 事务 {result.transaction_id} 状态未知，等待回查")
+
+    finally:
+        producer.shutdown()
+
+# 辅助函数（实际实现中需要连接真实数据库）
+def create_order_in_database(order_data):
+    """模拟创建订单的数据库操作"""
+    print(f"创建订单: {order_data['order_id']}")
+    # 这里应该是实际的数据库插入操作
+
+def deduct_inventory(product_id, quantity):
+    """模拟扣减库存操作"""
+    print(f"扣减库存: product_id={product_id}, quantity={quantity}")
+    # 这里应该是实际的库存扣减操作
+
+def order_exists_in_database(order_id):
+    """模拟查询订单是否存在"""
+    # 这里应该是实际的数据库查询操作
+    return True  # 简化示例，返回True
+
+# 运行事务消息示例
+if __name__ == "__main__":
+    create_transactional_order_example()
+```
+
+### 事务消息流程说明
+
+事务消息采用两阶段提交流程：
+
+1. **第一阶段（发送半消息）**:
+   - Producer发送消息到Broker，消息标记为事务状态
+   - Broker保存消息但不对外可见，返回发送结果
+   - Producer执行本地事务
+
+2. **本地事务执行**:
+   - 根据业务逻辑执行数据库操作
+   - 返回COMMIT、ROLLBACK或UNKNOW状态
+
+3. **第二阶段（提交/回滚）**:
+   - 根据本地事务结果向Broker发送COMMIT或ROLLBACK
+   - Broker根据确认结果提交或删除消息
+
+4. **事务回查机制**:
+   - 如果Producer长时间未发送确认，Broker会发起回查
+   - Producer通过TransactionListener.check_local_transaction()查询本地状态
+   - 支持多次回查直到获得明确状态
+
+### 事务消息配置和最佳实践
+
+```python
+# 事务Producer配置
+producer = create_transactional_producer(
+    producer_group="GID_TRANSACTIONAL",
+    namesrv_addr="localhost:9876",
+    transaction_listener=custom_listener,
+
+    # 事务相关配置
+    transaction_timeout=60000.0,    # 事务超时时间（毫秒）
+    max_check_times=15,            # 最大回查次数
+
+    # 生产者通用配置
+    send_msg_timeout=10000.0,      # 发送超时
+    retry_times=3,                 # 重试次数
+    heartbeat_broker_interval=30000.0  # 心跳间隔
+)
+
+# 动态调整配置
+producer.set_transaction_timeout(120000.0)  # 调整事务超时为2分钟
+producer.set_max_check_times(20)            # 调整最大回查次数为20次
+
+# 获取事务统计信息
+stats = producer.get_stats()
+print(f"事务统计:")
+print(f"  总事务数: {stats['total_transactions']}")
+print(f"  提交事务数: {stats['committed_transactions']}")
+print(f"  回滚事务数: {stats['rolled_back_transactions']}")
+print(f"  未知状态事务数: {stats['unknown_transactions']}")
+print(f"  平均回查次数: {stats['avg_check_times']}")
+```
+
+### 事务消息错误处理
+
+```python
+class RobustTransactionListener(TransactionListener):
+    """健壮的事务监听器实现"""
+
+    def execute_local_transaction(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState:
+        try:
+            # 执行业务逻辑
+            result = self._execute_business_logic(message, arg)
+
+            if result.success:
+                return LocalTransactionState.COMMIT_MESSAGE_STATE
+            else:
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except DatabaseConnectionError as e:
+            # 数据库连接错误，返回UNKNOWN让系统重试
+            self._logger.error(f"数据库连接失败: {e}")
+            return LocalTransactionState.UNKNOW
+
+        except ValidationError as e:
+            # 数据验证错误，直接回滚
+            self._logger.error(f"数据验证失败: {e}")
+            return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except Exception as e:
+            # 其他未知错误，返回UNKNOWN
+            self._logger.error(f"未知错误: {e}")
+            return LocalTransactionState.UNKNOW
+
+    def check_local_transaction(self, message: Message, transaction_id: str) -> LocalTransactionState:
+        try:
+            order_id = message.get_property("order_id")
+            if not order_id:
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+            # 检查本地事务状态
+            status = self._query_transaction_status(transaction_id, order_id)
+
+            if status == "COMPLETED":
+                return LocalTransactionState.COMMIT_MESSAGE_STATE
+            elif status == "FAILED":
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+            elif status == "PROCESSING":
+                return LocalTransactionState.UNKNOW
+            else:
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except Exception as e:
+            self._logger.error(f"事务状态查询失败: {e}")
+            return LocalTransactionState.UNKNOW
+```
+
+### 事务消息使用场景
+
+1. **订单处理**: 订单创建和库存扣减的原子性保证
+2. **支付处理**: 支付成功和账户更新的数据一致性
+3. **积分系统**: 消费积分和积分账户的同步更新
+4. **数据同步**: 跨系统数据同步的事务保证
+5. **业务流程**: 复杂业务流程中的状态一致性
+
 ### 高并发使用示例
 
 ```python
@@ -681,13 +1016,13 @@ asyncio.run(async_producer_example())
 async def collect_logs_concurrently(log_streams):
     producer = await create_async_producer("log_collector", "nameserver:9876")
     await producer.start()
-    
+
     # 并发处理多个日志流
     tasks = []
     for stream_id, logs in log_streams.items():
         task = process_log_stream(producer, stream_id, logs)
         tasks.append(task)
-    
+
     # 并发执行所有日志流处理
     await asyncio.gather(*tasks)
     await producer.shutdown()
@@ -702,13 +1037,13 @@ async def process_log_stream(producer, stream_id, logs):
 async def report_metrics_batch(metrics):
     producer = await create_async_producer("metrics_reporter", "nameserver:9876")
     await producer.start()
-    
+
     # 批量收集指标并异步上报
     metric_messages = [
         Message(topic="metrics", body=json.dumps(metric).encode())
         for metric in metrics
     ]
-    
+
     # 使用异步单向批量发送
     await producer.oneway_batch(*metric_messages)
     await producer.shutdown()
@@ -716,4 +1051,12 @@ async def report_metrics_batch(metrics):
 
 ---
 
-**总结**: Producer模块现在提供完整的同步和异步消息发送能力，包括4种发送模式（同步/异步 × 普通/批量 × 可靠/单向），满足从高可靠性到超高性能的各种应用场景需求。通过架构优化和功能扩展，显著提升了性能、可维护性和适用性。
+**总结**: Producer模块现在提供完整的消息发送能力，包括：
+
+1. **多种发送模式**: 同步/异步 × 普通/批量 × 可靠/单向 × 事务消息
+2. **丰富的功能特性**: 路由策略、故障感知、心跳机制、批量发送、事务支持
+3. **高性能架构**: 简化设计、预构建队列列表、连接池管理
+4. **完善的监控**: 统计信息、健康状态、事务状态追踪
+5. **企业级特性**: 配置管理、异常处理、错误恢复、最佳实践指导
+
+通过架构优化和功能扩展，Producer模块显著提升了性能、可维护性和适用性，能够满足从高可靠性事务处理到超高性能日志收集等各种应用场景需求。事务消息功能的加入使其具备了完整的分布式事务支持能力，为企业级应用提供了可靠的消息一致性保证。

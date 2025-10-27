@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 from pyrocketmq.broker.client import BrokerClient
+from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     LocalTransactionState,
@@ -231,9 +232,9 @@ class TransactionProducer(Producer):
 
             broker_addr = f"{broker_data.broker_name}:{broker_data.broker_addresses[MASTER_BROKER_ID]}"
 
-            # 4. 发送事务消息
+            # 4. 发送事务消息（增强错误处理）
             with self._broker_manager.connection(broker_addr) as broker_remote:
-                # 按需注册事务检查处理器到当前连接
+                # 注册事务检查处理器（增强错误处理）
                 try:
                     broker_remote.register_request_processor_lazy(
                         self._transaction_check_code,
@@ -242,22 +243,67 @@ class TransactionProducer(Producer):
                     self._logger.debug(
                         f"为Broker {broker_addr} 注册事务检查处理器"
                     )
+                except ConnectionError as e:
+                    self._logger.error(f"无法连接到Broker {broker_addr}: {e}")
+                    raise BrokerNotAvailableError(
+                        f"Cannot connect to broker {broker_addr}: {e}"
+                    )
+                except TimeoutError as e:
+                    self._logger.error(
+                        f"注册事务检查处理器超时 {broker_addr}: {e}"
+                    )
+                    raise BrokerTimeoutError(
+                        f"Registration timeout for broker {broker_addr}: {e}"
+                    )
                 except Exception as e:
-                    self._logger.warning(
-                        f"为Broker {broker_addr} 注册事务检查处理器失败: {e}"
+                    self._logger.error(
+                        f"注册事务检查处理器失败 {broker_addr}: {e}"
+                    )
+                    # 事务检查处理器注册失败应该继续发送，但需要明确记录
+                    # 这里可以设置一个标记，在后续处理中进行补偿
+                    if not hasattr(self, "_failed_registrations"):
+                        self._failed_registrations = set()
+                    self._failed_registrations.add(broker_addr)
+
+                # 发送消息（添加网络错误处理）
+                try:
+                    result = BrokerClient(broker_remote).sync_send_message(
+                        self._config.producer_group, message.body, message_queue
                     )
 
-                return BrokerClient(broker_remote).sync_send_message(
-                    self._config.producer_group, message.body, message_queue
-                )
+                    if not result:
+                        raise MessageSendError("Broker returned empty result")
 
+                    self._logger.debug(
+                        f"事务消息发送成功: broker={broker_addr}, msgId={result.msg_id}"
+                    )
+                    return result
+
+                except ConnectionError as e:
+                    self._logger.error(f"连接Broker失败 {broker_addr}: {e}")
+                    raise BrokerNotAvailableError(
+                        f"Cannot connect to broker {broker_addr}: {e}"
+                    )
+                except TimeoutError as e:
+                    self._logger.error(f"发送消息超时 {broker_addr}: {e}")
+                    raise MessageSendError(
+                        f"Send timeout to broker {broker_addr}: {e}"
+                    )
+                except Exception as e:
+                    self._logger.error(f"发送消息失败 {broker_addr}: {e}")
+                    raise MessageSendError(
+                        f"Failed to send message to {broker_addr}: {e}"
+                    ) from e
+
+        except (ProducerError, BrokerError):
+            # 重新抛出已知异常
+            raise
         except Exception as e:
+            # 处理未知异常
             self._logger.error(f"发送事务消息失败: {e}")
-
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Oneway message send failed: {e}") from e
+            raise MessageSendError(
+                f"Failed to send transaction message: {e}"
+            ) from e
 
     def _execute_local_transaction(
         self, message: Message, transaction_id: str, arg: Any = None
@@ -274,20 +320,53 @@ class TransactionProducer(Producer):
         """
         try:
             self._logger.debug(f"执行本地事务: transactionId={transaction_id}")
-            if not transaction_id:
-                raise ValueError("transaction_id is required")
-            if not self._transaction_listener:
-                raise ValueError("transaction_listener is required")
 
-            return self._transaction_listener.execute_local_transaction(
+            # 参数验证
+            if not transaction_id:
+                self._logger.error("transaction_id is required")
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+            if not self._transaction_listener:
+                self._logger.error("transaction_listener is required")
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+            # 执行本地事务
+            result = self._transaction_listener.execute_local_transaction(
                 message, transaction_id, arg
             )
-        except Exception as e:
-            self._logger.error(
-                f"执行本地事务失败: transactionId={transaction_id}, error={e}"
+
+            # 验证返回值
+            if not isinstance(result, LocalTransactionState):
+                self._logger.error(
+                    f"本地事务返回无效状态: transactionId={transaction_id}, "
+                    f"expected=LocalTransactionState, actual={type(result)}"
+                )
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+            self._logger.debug(
+                f"本地事务执行完成: transactionId={transaction_id}, state={result}"
             )
-            # 本地事务执行失败，回滚消息
+            return result
+
+        except TransactionError as e:
+            # 业务层面的事务错误，直接回滚
+            self._logger.error(
+                f"事务执行失败: transactionId={transaction_id}, error={e}"
+            )
             return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except (ValueError, TypeError) as e:
+            # 参数错误，直接回滚
+            self._logger.error(
+                f"事务参数错误: transactionId={transaction_id}, error={e}"
+            )
+            return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+        except Exception as e:
+            # 其他未知错误，返回UNKNOWN
+            self._logger.error(
+                f"未知系统错误: transactionId={transaction_id}, error={e}"
+            )
+            return LocalTransactionState.UNKNOW_STATE
 
     def _send_transaction_confirmation(
         self,
