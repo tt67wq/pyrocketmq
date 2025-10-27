@@ -38,7 +38,7 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
     TimeoutError,
 )
-from pyrocketmq.producer.producer import Producer, SendResult, create_producer
+from pyrocketmq.producer.producer import Producer, create_producer
 from pyrocketmq.producer.queue_selectors import (
     MessageHashSelector,
     RandomSelector,
@@ -58,7 +58,6 @@ __all__ = [
     # Core Producer (MVP)
     "Producer",
     "AsyncProducer",
-    "SendResult",
     "create_producer",
     "create_async_producer",
     # Config
