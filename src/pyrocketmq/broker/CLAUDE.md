@@ -203,10 +203,26 @@ await broker_manager.shutdown()
   - 发送状态跟踪（SEND_OK, FLUSH_DISK_TIMEOUT等）
   - 消息ID自动生成和返回
   - 事务消息支持
+- **方法类型**:
+  - `sync_send_message()`: 同步发送，等待Broker响应
+  - `oneway_send_message()`: 单向发送，不等待响应（高性能）
 
 #### 批量消息发送
 - **功能**: 一次发送多条消息，提升吞吐量
 - **优势**: 减少网络往返次数，提高发送效率
+- **方法类型**:
+  - `sync_batch_send_message()`: 同步批量发送，等待Broker响应
+  - `oneway_batch_send_message()`: 单向批量发送，不等待响应（超高性能）
+
+#### 🆕 单向消息发送特性
+- **oneway_send_message**: 
+  - 不等待Broker确认，立即返回
+  - 适用于对可靠性要求不高但追求高吞吐量的场景
+  - 提供发送耗时统计和详细日志
+- **oneway_batch_send_message**:
+  - 批量消息的单向发送，兼具批量和高性能优势
+  - 适合日志收集、指标上报等高吞吐场景
+  - 显著减少网络IO和等待延迟
 
 ### 2. 消息拉取模块
 
@@ -312,13 +328,14 @@ BrokerError (基础异常)
 
 ### 1. 通信优化
 - **oneway模式**: 对于心跳、偏移量更新等无需响应的操作使用oneway模式
+- **🆕 单向消息发送**: 新增`oneway_send_message()`和`oneway_batch_send_message()`方法，显著提升发送性能
 - **批量操作**: 支持批量消息发送，减少网络开销
 - **异步支持**: 提供异步客户端，支持高并发场景
 
 ### 2. 🆕 连接管理优化
 - **智能连接管理**: with风格的连接获取方法，自动管理连接生命周期
-- **连接复用**: 健康检查创建的连接自动放回连接池复用，减少资源浪费
-- **连接池**: 与远程通信层的连接池配合，避免频繁建连
+- **连接复用**: 基于LRU的连接复用机制，避免频繁连接建立/断开
+- **连接池**: 支持多Broker连接池管理，提升并发性能
 - **心跳保活**: 定期心跳维持连接，避免连接超时断开
 - **状态检查**: 提供连接状态检查接口，便于上层应用判断
 
@@ -397,6 +414,20 @@ result = client.sync_send_message(
     body=b"Hello RocketMQ",
     mq=MessageQueue(topic="test", broker_name="broker1", queue_id=0)
 )
+
+# 🆕 单向发送消息（高性能）
+client.oneway_send_message(
+    producer_group="test_group",
+    body=b"Hello Oneway RocketMQ",
+    mq=MessageQueue(topic="test", broker_name="broker1", queue_id=0)
+)
+
+# 🆕 单向批量发送消息（超高性能）
+client.oneway_batch_send_message(
+    producer_group="test_group",
+    body=batch_message_body,  # 预编码的批量消息体
+    mq=MessageQueue(topic="test", broker_name="broker1", queue_id=0)
+)
 ```
 
 ### 异步客户端使用
@@ -413,6 +444,28 @@ result = await client.async_send_message(
     body=b"Hello Async RocketMQ",
     mq=MessageQueue(topic="test", broker_name="broker1", queue_id=0)
 )
+```
+
+### 🆕 单向消息发送使用场景
+```python
+# 日志收集场景 - 高吞吐量，允许少量丢失
+def send_logs_bulk(logs):
+    """批量发送日志，使用单向模式提升性能"""
+    batch_body = encode_batch_message(logs)  # 编码批量消息
+    client.oneway_batch_send_message(
+        producer_group="log_collector",
+        body=batch_body,
+        mq=MessageQueue(topic="logs", broker_name="broker1", queue_id=0)
+    )
+
+# 指标上报场景 - 实时性要求高，允许丢失
+def report_metrics(metric):
+    """发送监控指标，使用单向模式降低延迟"""
+    client.oneway_send_message(
+        producer_group="metrics_reporter",
+        body=metric.to_json().encode(),
+        mq=MessageQueue(topic="metrics", broker_name="broker1", queue_id=0)
+    )
 ```
 
 ## 协议兼容性

@@ -262,6 +262,65 @@ class BrokerClient:
                 f"Unexpected error during send_message: {e}"
             )
 
+    def oneway_send_message(
+        self,
+        producer_group: str,
+        body: bytes,
+        mq: MessageQueue,
+        properties: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> None:
+        """单向发送消息（不等待响应）
+
+        Args:
+            producer_group: 生产者组名
+            mq: 消息队列
+            body: 消息体内容
+            properties: 消息属性字典，默认为None
+            **kwargs: 其他参数
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Oneway sending message: producerGroup={producer_group}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}"
+            )
+
+            # 创建发送消息请求
+            request = RemotingRequestFactory.create_send_message_request(
+                producer_group=producer_group,
+                topic=mq.topic,
+                body=body,
+                queue_id=mq.queue_id,
+                properties=properties,
+                **kwargs,
+            )
+
+            # 单向发送请求（不等待响应）
+            start_time = time.time()
+            self.remote.oneway(request)
+            send_msg_rt = time.time() - start_time
+
+            logger.info(
+                f"Successfully oneway sent message: producerGroup={producer_group}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, sendMsgRT={send_msg_rt:.3f}s"
+            )
+
+        except Exception as e:
+            if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
+                raise
+
+            logger.error(f"Unexpected error during oneway_send_message: {e}")
+            raise BrokerResponseError(
+                f"Unexpected error during oneway_send_message: {e}"
+            )
+
     def sync_batch_send_message(
         self,
         producer_group: str,
@@ -351,6 +410,67 @@ class BrokerClient:
             logger.error(f"Unexpected error during send_batch_message: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during send_batch_message: {e}"
+            )
+
+    def oneway_batch_send_message(
+        self,
+        producer_group: str,
+        body: bytes,
+        mq: MessageQueue,
+        properties: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> None:
+        """单向批量发送消息（不等待响应）
+
+        Args:
+            producer_group: 生产者组名
+            body: 批量消息体内容
+            mq: 消息队列
+            properties: 消息属性字典，默认为None
+            **kwargs: 其他参数
+
+        Raises:
+            BrokerConnectionError: 连接错误
+            BrokerTimeoutError: 请求超时
+        """
+        if not self.is_connected:
+            raise BrokerConnectionError("Not connected to Broker")
+
+        try:
+            logger.debug(
+                f"Oneway sending batch message: producerGroup={producer_group}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}"
+            )
+
+            # 创建发送批量消息请求
+            request = RemotingRequestFactory.create_send_batch_message_request(
+                producer_group=producer_group,
+                topic=mq.topic,
+                body=body,
+                queue_id=mq.queue_id,
+                properties=properties,
+                **kwargs,
+            )
+
+            # 单向发送请求（不等待响应）
+            start_time = time.time()
+            self.remote.oneway(request)
+            send_msg_rt = time.time() - start_time
+
+            logger.info(
+                f"Successfully oneway sent batch message: producerGroup={producer_group}, "
+                f"topic={mq.topic}, queueId={mq.queue_id}, sendMsgRT={send_msg_rt:.3f}s"
+            )
+
+        except Exception as e:
+            if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
+                raise
+
+            logger.error(
+                f"Unexpected error during oneway_batch_send_message: {e}"
+            )
+            raise BrokerResponseError(
+                f"Unexpected error during oneway_batch_send_message: {e}"
             )
 
     def pull_message(

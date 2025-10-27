@@ -23,13 +23,12 @@ MVP版本功能:
 
 import threading
 import time
-from dataclasses import dataclass
 from typing import Dict, Optional
 
 from pyrocketmq.broker.broker_manager import BrokerManager
+from pyrocketmq.broker.client import BrokerClient
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import HeartbeatData, ProducerData
-from pyrocketmq.model.command import RemotingCommand
+from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message, encode_batch
@@ -51,70 +50,6 @@ from pyrocketmq.remote.sync_remote import Remote
 from pyrocketmq.transport.config import TransportConfig
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class SendResult:
-    """消息发送结果
-
-    简化版本的发送结果，包含最核心的信息。
-    随着功能演进可以逐步扩展字段。
-    """
-
-    success: bool
-    """发送是否成功"""
-
-    message_id: Optional[str] = None
-    """消息ID，发送成功时由Broker返回"""
-
-    topic: Optional[str] = None
-    """消息主题"""
-
-    broker_name: Optional[str] = None
-    """选中的Broker名称"""
-
-    queue_id: Optional[int] = None
-    """选中的队列ID"""
-
-    error: Optional[Exception] = None
-    """错误信息，发送失败时设置"""
-
-    send_timestamp: Optional[float] = None
-    """发送时间戳"""
-
-    @classmethod
-    def success_result(
-        cls,
-        message_id: str,
-        topic: str,
-        broker_name: str,
-        queue_id: int,
-    ) -> "SendResult":
-        """创建成功结果"""
-        return cls(
-            success=True,
-            message_id=message_id,
-            topic=topic,
-            broker_name=broker_name,
-            queue_id=queue_id,
-            send_timestamp=time.time(),
-        )
-
-    @classmethod
-    def failure_result(
-        cls,
-        topic: str,
-        error: Exception,
-        message_id: Optional[str] = None,
-    ) -> "SendResult":
-        """创建失败结果"""
-        return cls(
-            success=False,
-            message_id=message_id,
-            topic=topic,
-            error=error,
-            send_timestamp=time.time(),
-        )
 
 
 class Producer:
@@ -271,7 +206,7 @@ class Producer:
         except Exception as e:
             logger.error(f"Error during producer shutdown: {e}")
 
-    def send(self, message: Message) -> SendResult:
+    def send(self, message: Message) -> SendMessageResult:
         """同步发送消息
 
         阻塞直到消息发送完成或失败。
@@ -331,7 +266,7 @@ class Producer:
                 message, target_broker_addr, message_queue
             )
 
-            if send_result.success:
+            if send_result.is_success:
                 self._total_sent += 1
                 return send_result
             else:
@@ -347,7 +282,7 @@ class Producer:
 
             raise MessageSendError(f"Message send failed: {e}") from e
 
-    def send_batch(self, *messages: Message) -> SendResult:
+    def send_batch(self, *messages: Message) -> SendMessageResult:
         """批量发送消息
 
         将多个消息压缩为一个批量消息进行发送，提高发送效率。
@@ -429,11 +364,11 @@ class Producer:
             )
 
             # 5. 发送批量消息到Broker
-            send_result = self._send_message_to_broker(
+            send_result = self._batch_send_message_to_broker(
                 batch_message, target_broker_addr, message_queue
             )
 
-            if send_result.success:
+            if send_result.is_success:
                 self._total_sent += len(messages)
                 logger.info(
                     f"Batch send success: {len(messages)} messages to topic {batch_message.topic}"
@@ -522,6 +457,108 @@ class Producer:
                 raise
 
             raise MessageSendError(f"Oneway message send failed: {e}") from e
+
+    def oneway_batch(self, *messages: Message) -> None:
+        """单向批量发送消息
+
+        将多个消息压缩为一个批量消息进行单向发送，不等待响应。
+        适用于对可靠性要求不高但追求高吞吐量的场景。
+
+        Args:
+            *messages: 要发送的消息列表
+
+        Raises:
+            ProducerStateError: 当Producer未启动时
+            MessageSendError: 当消息发送失败时
+            ValueError: 当没有提供消息时
+
+        Examples:
+            >>> producer = create_producer("group", "nameserver:9876")
+            >>> producer.start()
+            >>> msg1 = Message(topic="test", body=b"message1")
+            >>> msg2 = Message(topic="test", body=b"message2")
+            >>> producer.oneway_batch(msg1, msg2)  # 不等待响应
+        """
+        self._check_running()
+
+        if not messages:
+            raise ValueError("至少需要提供一个消息进行批量发送")
+
+        try:
+            # 1. 验证所有消息
+            for i, message in enumerate(messages):
+                validate_message(message, self._config.max_message_size)
+
+                # 检查所有消息的主题是否相同
+                if i > 0 and message.topic != messages[0].topic:
+                    raise ValueError(
+                        f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+                    )
+
+            # 2. 将多个消息编码为批量消息
+            batch_message = encode_batch(*messages)
+            logger.debug(
+                f"Encoded {len(messages)} messages into batch message, "
+                f"batch size: {len(batch_message.body)} bytes"
+            )
+
+            # 3. 更新路由信息
+            if batch_message.topic not in self._topic_mapping.get_all_topics():
+                self.update_route_info(batch_message.topic)
+
+            # 4. 获取队列和Broker
+            routing_result = self._message_router.route_message(
+                batch_message.topic, batch_message
+            )
+            if not routing_result.success:
+                raise BrokerNotAvailableError(
+                    f"No available queue for topic: {batch_message.topic}"
+                )
+
+            message_queue = routing_result.message_queue
+            broker_data = routing_result.broker_data
+
+            if not message_queue:
+                raise BrokerNotAvailableError(
+                    f"No available queue for topic: {batch_message.topic}"
+                )
+
+            if not broker_data:
+                raise BrokerNotAvailableError(
+                    f"No available broker data for topic: {batch_message.topic}"
+                )
+
+            # 5. 获取Broker地址
+            target_broker_addr = routing_result.broker_address
+            if not target_broker_addr:
+                raise BrokerNotAvailableError(
+                    f"No available broker address for: {broker_data.broker_name}"
+                )
+
+            logger.debug(
+                f"Sending oneway batch message ({len(messages)} messages) to {target_broker_addr}, "
+                f"queue: {message_queue.full_name}"
+            )
+
+            # 6. 单向发送批量消息到Broker
+            self._batch_send_message_to_broker_oneway(
+                batch_message, target_broker_addr, message_queue
+            )
+
+            # 更新统计（单向发送不计入成功/失败）
+            logger.debug(
+                f"Oneway batch message sent successfully: {len(messages)} messages"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to send oneway batch messages: {e}")
+
+            if isinstance(e, ProducerError):
+                raise
+
+            raise MessageSendError(
+                f"Oneway batch message send failed: {e}"
+            ) from e
 
     def _parse_nameserver_addrs(self, namesrv_addr: str) -> Dict[str, str]:
         """解析NameServer地址列表
@@ -619,7 +656,7 @@ class Producer:
 
     def _send_message_to_broker(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
-    ) -> SendResult:
+    ) -> SendMessageResult:
         """发送消息到Broker
 
         Args:
@@ -631,46 +668,10 @@ class Producer:
             SendResult: 发送结果
         """
 
-        try:
-            # 获取或创建Broker连接
-            response: Optional[RemotingCommand] = None
-            with self._broker_manager.connection(broker_addr) as broker_remote:
-                # 创建发送请求
-                request = RemotingRequestFactory.create_send_message_request(
-                    producer_group=self._config.producer_group,
-                    topic=message.topic,
-                    body=message.body,
-                    queue_id=message_queue.queue_id,
-                    properties=message.properties,
-                )
-
-                # 发送请求
-                response = broker_remote.rpc(
-                    request, self._config.send_msg_timeout / 1000.0
-                )
-
-            if response and response.code == 0:
-                # 发送成功
-                message_id = response.ext_fields.get(
-                    "msgId", f"MSG_{int(time.time() * 1000000)}"
-                )
-
-                return SendResult.success_result(
-                    message_id=message_id,
-                    topic=message.topic,
-                    broker_name=message_queue.broker_name,
-                    queue_id=message_queue.queue_id,
-                )
-            else:
-                # 发送失败
-                error_msg = f"Send failed, response code: {response.code if response else 'None'}"
-                return SendResult.failure_result(
-                    topic=message.topic, error=MessageSendError(error_msg)
-                )
-
-        except Exception as e:
-            logger.error(f"Failed to send message to {broker_addr}: {e}")
-            return SendResult.failure_result(topic=message.topic, error=e)
+        with self._broker_manager.connection(broker_addr) as broker_remote:
+            return BrokerClient(broker_remote).sync_send_message(
+                self._config.producer_group, message.body, message_queue
+            )
 
     def _send_message_to_broker_oneway(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
@@ -684,26 +685,52 @@ class Producer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        try:
-            # 获取或创建Broker连接
-            with self._broker_manager.connection(broker_addr) as broker_remote:
-                # 创建发送请求
-                request = RemotingRequestFactory.create_send_message_request(
-                    producer_group=self._config.producer_group,
-                    topic=message.topic,
-                    body=message.body,
-                    queue_id=message_queue.queue_id,
-                    properties=message.properties,
-                )
 
-                # 单向发送请求
-                broker_remote.oneway(request)
+        with self._broker_manager.connection(broker_addr) as broker_remote:
+            BrokerClient(broker_remote).oneway_send_message(
+                self._config.producer_group, message.body, message_queue
+            )
 
-            logger.debug(f"Oneway message sent to {broker_addr}")
+    def _batch_send_message_to_broker(
+        self,
+        batch_message: Message,
+        broker_addr: str,
+        message_queue: MessageQueue,
+    ) -> SendMessageResult:
+        """批量发送消息到Broker
 
-        except Exception as e:
-            logger.error(f"Failed to send oneway message to {broker_addr}: {e}")
-            raise
+        Args:
+            batch_message: 批量消息对象（已编码）
+            broker_addr: Broker地址
+            message_queue: 消息队列
+
+        Returns:
+            SendMessageResult: 发送结果
+        """
+        with self._broker_manager.connection(broker_addr) as broker_remote:
+            return BrokerClient(broker_remote).sync_batch_send_message(
+                self._config.producer_group, batch_message.body, message_queue
+            )
+
+    def _batch_send_message_to_broker_oneway(
+        self,
+        batch_message: Message,
+        broker_addr: str,
+        message_queue: MessageQueue,
+    ) -> None:
+        """单向批量发送消息到Broker
+
+        发送批量消息但不等待响应，适用于对可靠性要求不高但追求高吞吐量的场景。
+
+        Args:
+            batch_message: 批量消息对象（已编码）
+            broker_addr: Broker地址
+            message_queue: 消息队列
+        """
+        with self._broker_manager.connection(broker_addr) as broker_remote:
+            BrokerClient(broker_remote).oneway_batch_send_message(
+                self._config.producer_group, batch_message.body, message_queue
+            )
 
     def _check_running(self) -> None:
         """检查Producer是否处于运行状态
