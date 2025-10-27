@@ -247,9 +247,6 @@ class TransactionProducer(Producer):
                         f"为Broker {broker_addr} 注册事务检查处理器失败: {e}"
                     )
 
-                # 发送消息到Broker，使用事务标记
-                from ..broker.client import BrokerClient
-
                 return BrokerClient(broker_remote).sync_send_message(
                     self._config.producer_group, message.body, message_queue
                 )
