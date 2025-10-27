@@ -111,6 +111,54 @@ class BrokerBusyError(BrokerError):
         self.broker_address = broker_address
 
 
+class MessagePullError(BrokerError):
+    """消息拉取异常"""
+
+    def __init__(
+        self,
+        message: str,
+        topic: Optional[str] = None,
+        queue_id: Optional[int] = None,
+        pull_offset: Optional[int] = None,
+    ):
+        """初始化消息拉取错误
+
+        Args:
+            message: 错误信息
+            topic: 主题名称（可选）
+            queue_id: 队列ID（可选）
+            pull_offset: 拉取偏移量（可选）
+        """
+        super().__init__(message)
+        self.topic = topic
+        self.queue_id = queue_id
+        self.pull_offset = pull_offset
+
+
+class OffsetError(BrokerError):
+    """偏移量异常"""
+
+    def __init__(
+        self,
+        message: str,
+        topic: Optional[str] = None,
+        queue_id: Optional[int] = None,
+        offset: Optional[int] = None,
+    ):
+        """初始化偏移量错误
+
+        Args:
+            message: 错误信息
+            topic: 主题名称（可选）
+            queue_id: 队列ID（可选）
+            offset: 偏移量（可选）
+        """
+        super().__init__(message)
+        self.topic = topic
+        self.queue_id = queue_id
+        self.offset = offset
+
+
 class BrokerSystemError(BrokerError):
     """Broker 系统异常"""
 
