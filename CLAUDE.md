@@ -14,7 +14,8 @@ pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于Ro
 - **连接池**: ✅ 连接池管理功能
 - **NameServer支持**: ✅ 完整客户端实现，支持路由信息查询
 - **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
-- **Producer模块**: 🚧 MVP版本实现完成，支持同步/异步消息发送、批量消息发送和心跳机制
+- **Producer模块**: ✅ MVP版本实现完成，支持同步/异步消息发送、批量消息发送和心跳机制
+- **事务消息模块**: 🚧 核心数据结构完成，TransactionProducer实现中
 
 ## 开发环境配置
 
@@ -124,7 +125,7 @@ Client Application
 ## 核心模块详解
 
 ### Producer层 (`src/pyrocketmq/producer/`)
-**关键组件**: TopicBrokerMapping + QueueSelector架构 + 心跳机制
+**关键组件**: TopicBrokerMapping + QueueSelector架构 + 心跳机制 + 事务消息支持
 
 #### TopicBrokerMapping
 - **功能**: 管理Topic到Broker的路由信息和队列选择
@@ -144,6 +145,23 @@ Client Application
 - **异步Producer**: 基于asyncio的高性能异步实现
 - **批量消息发送**: 支持将多个消息压缩为一个批量消息进行高效发送
 - **心跳机制**: 定期向所有Broker发送心跳，确保连接稳定性
+
+#### 事务消息支持 🚧
+TransactionProducer模块提供完整的事务消息功能：
+
+**核心组件**:
+- **LocalTransactionState**: 本地事务状态枚举 (COMMIT/ROLLBACK/UNKNOWN)
+- **TransactionListener**: 事务监听器接口，定义本地事务执行和回查逻辑
+- **TransactionSendResult**: 事务发送结果，继承自SendMessageResult
+- **TransactionMetadata**: 事务元数据管理，跟踪事务状态和超时
+- **SimpleTransactionListener**: 简单实现，用于测试和简单场景
+
+**关键特性**:
+- 完整的事务状态管理
+- 支持本地事务执行和回查
+- 事务超时检测和重试机制
+- 丰富的异常处理和错误分类
+- 便利函数简化开发流程
 
 ### 批量消息发送功能 ✅
 新增完整的批量消息发送支持，提升发送效率：
@@ -277,6 +295,66 @@ mapping = TopicBrokerMapping()
 result = mapping.select_queue("test_topic", message, hash_selector)
 ```
 
+### 事务消息发送模式 🚧
+基于TransactionListener的事务消息发送，支持本地事务执行和状态回查：
+
+```python
+from pyrocketmq.producer.transaction import (
+    TransactionListener, 
+    LocalTransactionState,
+    SimpleTransactionListener,
+    create_transaction_send_result,
+    create_simple_transaction_listener
+)
+from pyrocketmq.model.message import Message
+
+# 自定义事务监听器
+class OrderTransactionListener(TransactionListener):
+    def execute_local_transaction(self, message, transaction_id: str, arg=None) -> LocalTransactionState:
+        try:
+            # 执行本地事务（如订单创建）
+            order_data = json.loads(message.body.decode())
+            create_order(order_data)
+            return LocalTransactionState.COMMIT_MESSAGE
+        except Exception as e:
+            logger.error(f"Order creation failed: {e}")
+            return LocalTransactionState.ROLLBACK_MESSAGE
+    
+    def check_local_transaction(self, message, transaction_id: str) -> LocalTransactionState:
+        # 检查本地事务状态
+        order_id = message.get_property("order_id")
+        if order_exists(order_id):
+            return LocalTransactionState.COMMIT_MESSAGE
+        return LocalTransactionState.ROLLBACK_MESSAGE
+
+# 使用简单事务监听器（测试用）
+simple_listener = create_simple_transaction_listener(commit=True)
+
+# 创建事务消息
+transaction_msg = create_transaction_message(
+    topic="order_topic", 
+    body=json.dumps({"order_id": "12345", "amount": 100}),
+    transaction_id="txn_12345"
+)
+transaction_msg.set_property("order_id", "12345")
+
+# 事务发送结果处理
+result = create_transaction_send_result(
+    status=SendStatus.SEND_OK,
+    msg_id="msg123",
+    message_queue=some_queue,
+    queue_offset=100,
+    transaction_id="txn_12345",
+    local_state=LocalTransactionState.COMMIT_MESSAGE
+)
+
+# 检查事务结果状态
+if result.is_commit:
+    print(f"Transaction {result.transaction_id} committed successfully")
+elif result.is_rollback:
+    print(f"Transaction {result.transaction_id} rolled back")
+```
+
 ### 扩展自定义选择器
 ```python
 from pyrocketmq.producer.topic_broker_mapping import QueueSelector
@@ -293,6 +371,7 @@ class CustomSelector(QueueSelector):
 - `examples/basic_producer.py`: 同步Producer基础使用示例
 - `examples/basic_async_producer.py`: 异步Producer基础使用示例
 - `examples/simple_batch_producer.py`: 批量消息发送示例（使用新的send_batch方法）
+- `examples/transactional_producer.py`: 事务消息发送示例（即将实现）
 
 ## 协议规范
 
@@ -341,3 +420,9 @@ uv sync
 9. **心跳机制**: Producer会定期向所有Broker发送心跳，确保连接活跃状态
 10. **批量消息**: 使用`send_batch()`方法可以高效发送多个消息，自动进行消息编码和主题验证
 11. **示例代码**: 参考 `examples/` 目录下的完整使用示例，包括批量消息发送示例
+12. **事务消息**: 🚧 事务消息模块已完成核心数据结构，TransactionProducer正在实现中
+    - 使用`TransactionListener`接口定义本地事务逻辑
+    - 支持三种事务状态：COMMIT_MESSAGE、ROLLBACK_MESSAGE、UNKNOW
+    - 提供`SimpleTransactionListener`用于测试场景
+    - 包含完整的事务异常处理和超时管理
+    - 便利函数简化事务消息创建和结果处理

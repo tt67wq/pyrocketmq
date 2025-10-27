@@ -41,6 +41,8 @@ from pyrocketmq.producer.errors import (
     ProducerError,
     ProducerStartError,
     ProducerStateError,
+    QueueNotAvailableError,
+    RouteNotFoundError,
 )
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
@@ -236,15 +238,15 @@ class AsyncProducer:
                 message.topic, message
             )
             if not routing_result.success:
-                raise BrokerNotAvailableError(
-                    f"No available queue for topic: {message.topic}"
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {message.topic}"
                 )
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
 
             if not message_queue:
-                raise BrokerNotAvailableError(
+                raise QueueNotAvailableError(
                     f"No available queue for topic: {message.topic}"
                 )
             if not broker_data:
@@ -337,15 +339,15 @@ class AsyncProducer:
                 batch_message.topic, batch_message
             )
             if not routing_result.success:
-                raise BrokerNotAvailableError(
-                    f"No available queue for topic: {batch_message.topic}"
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {batch_message.topic}"
                 )
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
 
             if not message_queue:
-                raise BrokerNotAvailableError(
+                raise QueueNotAvailableError(
                     f"No available queue for topic: {batch_message.topic}"
                 )
             if not broker_data:
@@ -419,8 +421,8 @@ class AsyncProducer:
                 message.topic, message
             )
             if not routing_result.success:
-                raise BrokerNotAvailableError(
-                    f"No available queue for topic: {message.topic}"
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {message.topic}"
                 )
 
             message_queue = routing_result.message_queue
@@ -521,15 +523,15 @@ class AsyncProducer:
                 batch_message.topic, batch_message
             )
             if not routing_result.success:
-                raise BrokerNotAvailableError(
-                    f"No available queue for topic: {batch_message.topic}"
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {batch_message.topic}"
                 )
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
 
             if not message_queue:
-                raise BrokerNotAvailableError(
+                raise QueueNotAvailableError(
                     f"No available queue for topic: {batch_message.topic}"
                 )
 
