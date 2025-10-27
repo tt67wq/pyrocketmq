@@ -114,6 +114,27 @@ class Remote:
             self._processors[code] = processor
             self._logger.debug(f"注册请求处理器: code={code}")
 
+    def register_request_processor_lazy(
+        self, code: int, processor: ClientRequestFunc
+    ) -> bool:
+        """惰性注册请求处理器，如果已存在相同code的processor则不更新
+
+        Args:
+            code: 请求代码
+            processor: 处理函数
+
+        Returns:
+            bool: 是否成功注册（True表示新注册，False表示已存在）
+        """
+        with self._processors_lock:
+            if code in self._processors:
+                self._logger.debug(f"请求处理器已存在，跳过注册: code={code}")
+                return False
+
+            self._processors[code] = processor
+            self._logger.debug(f"惰性注册请求处理器: code={code}")
+            return True
+
     def unregister_request_processor(self, code: int) -> bool:
         """取消注册请求处理器
 
