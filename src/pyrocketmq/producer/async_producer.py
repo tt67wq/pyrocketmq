@@ -215,7 +215,7 @@ class AsyncProducer:
             message: 要发送的消息
 
         Returns:
-            SendResult: 发送结果
+            SendMessageResult: 发送结果，包含消息ID、队列信息、发送状态等
 
         Raises:
             ProducerStateError: 当Producer未启动时
@@ -291,7 +291,7 @@ class AsyncProducer:
             *messages: 要发送的消息列表
 
         Returns:
-            SendResult: 发送结果
+            SendMessageResult: 发送结果，包含消息ID、队列信息、发送状态等
 
         Raises:
             ProducerStateError: 当Producer未启动时
@@ -397,6 +397,9 @@ class AsyncProducer:
         Args:
             message: 要发送的消息
 
+        Returns:
+            None: 单向发送不返回任何结果
+
         Raises:
             ProducerStateError: 当Producer未启动时
             MessageSendError: 当消息发送失败时
@@ -470,6 +473,9 @@ class AsyncProducer:
 
         Args:
             *messages: 要发送的消息列表
+
+        Returns:
+            None: 单向发送不返回任何结果
 
         Raises:
             ProducerStateError: 当Producer未启动时

@@ -256,41 +256,6 @@ class TransactionMetadata:
         self.check_times += 1
 
 
-class TransactionIdGenerator:
-    """事务ID生成器
-
-    生成唯一的事务ID，基于时间戳和计数器实现。
-    """
-
-    def __init__(self):
-        """初始化事务ID生成器"""
-        self._counter = 0
-        self._last_timestamp = 0
-
-    def generate(self) -> str:
-        """生成新的事务ID
-
-        Returns:
-            唯一的事务ID字符串，格式为：{timestamp}-{counter}-{pid}
-        """
-        import os
-        import time
-
-        current_time = int(time.time() * 1000)
-
-        # 如果时间戳相同，增加计数器
-        if current_time == self._last_timestamp:
-            self._counter += 1
-        else:
-            self._counter = 0
-            self._last_timestamp = current_time
-
-        # 生成事务ID：时间戳-计数器-进程ID
-        transaction_id = f"{current_time}-{self._counter}-{os.getpid()}"
-
-        return transaction_id
-
-
 # 便利函数
 def create_transaction_send_result(
     status: int,

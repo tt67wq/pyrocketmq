@@ -70,12 +70,12 @@ class BrokerHealthInfo:
 - 自动恢复机制：连续成功5次恢复健康状态
 - 性能监控：跟踪延迟、成功率等关键指标
 
-### 3. SendResult (MVP新增)
-消息发送结果，简化版本的发送响应。
+### 3. SendMessageResult (MVP新增)
+消息发送结果，包含完整的发送响应信息。
 
 ```python
 @dataclass
-class SendResult:
+class SendMessageResult:
     success: bool
     message_id: Optional[str] = None
     topic: Optional[str] = None
@@ -115,8 +115,8 @@ RocketMQ Producer的核心实现，采用简化架构设计。
 ```python
 def start() -> None:                    # 启动生产者
 def shutdown() -> None:                 # 关闭生产者
-def send(message: Message) -> SendResult:           # 同步发送消息
-def send_batch(*messages: Message) -> SendResult:   # 批量发送消息
+def send(message: Message) -> SendMessageResult:           # 同步发送消息
+def send_batch(*messages: Message) -> SendMessageResult:   # 批量发送消息
 def oneway(message: Message) -> None:               # 单向发送消息
 def oneway_batch(*messages: Message) -> None:       # 单向批量发送消息
 def send_heartbeat_to_all_broker() -> None:         # 向所有Broker发送心跳
@@ -548,12 +548,12 @@ producer.shutdown()
 
 #### 发送模式选择指南
 
-| 发送模式 | 可靠性 | 性能 | 适用场景 |
-|----------|--------|------|----------|
-| `send()` | 高 | 中等 | 重要业务消息、事务消息 |
-| `send_batch()` | 高 | 较高 | 批量业务消息、数据同步 |
-| `oneway()` | 低 | 高 | 日志收集、指标上报 |
-| `oneway_batch()` | 低 | 超高 | 大数据量日志、实时事件流 |
+| 发送模式 | 返回类型 | 可靠性 | 性能 | 适用场景 |
+|----------|----------|--------|------|----------|
+| `send()` | SendMessageResult | 高 | 中等 | 重要业务消息、事务消息 |
+| `send_batch()` | SendMessageResult | 高 | 较高 | 批量业务消息、数据同步 |
+| `oneway()` | None | 低 | 高 | 日志收集、指标上报 |
+| `oneway_batch()` | None | 低 | 超高 | 大数据量日志、实时事件流 |
 
 #### 🆕 单向发送使用场景
 
@@ -667,12 +667,12 @@ asyncio.run(async_producer_example())
 
 ### 异步发送模式对比
 
-| 异步方法 | 可靠性 | 性能 | 适用场景 |
-|----------|--------|------|----------|
-| `send()` | 高 | 中等 | 重要异步业务消息 |
-| `send_batch()` | 高 | 较高 | 异步批量业务消息 |
-| `oneway()` | 低 | 高 | 异步日志收集、指标上报 |
-| `oneway_batch()` | 低 | 超高 | 异步高吞吐量场景 |
+| 异步方法 | 返回类型 | 可靠性 | 性能 | 适用场景 |
+|----------|----------|--------|------|----------|
+| `send()` | SendMessageResult | 高 | 中等 | 重要异步业务消息 |
+| `send_batch()` | SendMessageResult | 高 | 较高 | 异步批量业务消息 |
+| `oneway()` | None | 低 | 高 | 异步日志收集、指标上报 |
+| `oneway_batch()` | None | 低 | 超高 | 异步高吞吐量场景 |
 
 ### 高并发使用示例
 
