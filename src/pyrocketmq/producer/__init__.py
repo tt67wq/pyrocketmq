@@ -3,6 +3,7 @@ Producer模块
 
 提供RocketMQ消息生产者的完整实现，包括：
 - Producer核心实现 (MVP版本)
+- TransactionProducer事务消息Producer
 - Topic-Broker映射管理
 - 消息路由和队列选择
 - 生产者配置管理
@@ -12,6 +13,7 @@ MVP版本特性:
 - 简化的状态管理
 - 核心消息发送功能
 - 基础的队列选择策略
+- 事务消息支持
 """
 
 from pyrocketmq.producer.async_producer import (
@@ -46,6 +48,25 @@ from pyrocketmq.producer.queue_selectors import (
 )
 from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
+from pyrocketmq.producer.transaction import (
+    HalfMessageSendError,
+    LocalTransactionState,
+    SimpleTransactionListener,
+    TransactionCheckError,
+    TransactionCommitError,
+    TransactionError,
+    TransactionIdGenerator,
+    TransactionListener,
+    TransactionRollbackError,
+    TransactionSendResult,
+    TransactionState,
+    TransactionStateError,
+    TransactionTimeoutError,
+    create_simple_transaction_listener,
+    create_transaction_message,
+    create_transaction_send_result,
+    create_transaction_send_result_from_base,
+)
 from pyrocketmq.producer.utils import (
     calculate_message_size,
     generate_client_id,
@@ -76,6 +97,17 @@ __all__ = [
     "RoundRobinSelector",
     "RandomSelector",
     "MessageHashSelector",
+    # Transaction Support
+    "TransactionListener",
+    "SimpleTransactionListener",
+    "TransactionSendResult",
+    "LocalTransactionState",
+    "TransactionState",
+    "TransactionIdGenerator",
+    "create_simple_transaction_listener",
+    "create_transaction_message",
+    "create_transaction_send_result",
+    "create_transaction_send_result_from_base",
     # Utils
     "generate_client_id",
     "validate_message",
@@ -91,6 +123,14 @@ __all__ = [
     "BrokerNotAvailableError",
     "QueueNotAvailableError",
     "TimeoutError",
+    # Transaction Errors
+    "TransactionError",
+    "TransactionTimeoutError",
+    "TransactionCheckError",
+    "TransactionStateError",
+    "HalfMessageSendError",
+    "TransactionCommitError",
+    "TransactionRollbackError",
     # Constants
     "RoutingStrategy",
 ]

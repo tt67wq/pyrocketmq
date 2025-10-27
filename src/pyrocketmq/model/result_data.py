@@ -99,6 +99,10 @@ class SendMessageResult:
     region_id: str = "DefaultRegion"  # 区域ID
     trace_on: bool = False  # 是否开启Trace
 
+    def __post_init__(self):
+        """后处理，确保数据类型正确"""
+        pass
+
     @property
     def is_success(self) -> bool:
         """判断发送是否成功"""
