@@ -18,7 +18,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pyrocketmq.model.enums import LocalTransactionState
 from pyrocketmq.model.result_data import SendMessageResult
@@ -47,7 +47,7 @@ class TransactionSendResult(SendMessageResult):
     继承SendMessageResult，添加事务相关的状态信息。
     """
 
-    local_transaction_state: Optional[LocalTransactionState] = None  # 本地事务状态
+    local_transaction_state: LocalTransactionState | None = None  # 本地事务状态
     transaction_timeout: bool = False  # 是否事务超时
     check_times: int = 0  # 回查次数
 
@@ -76,7 +76,7 @@ class TransactionSendResult(SendMessageResult):
         """检查是否为未知状态"""
         return self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         result = super().to_dict()
         result.update(
@@ -113,7 +113,7 @@ class TransactionListener(ABC):
 
     @abstractmethod
     def execute_local_transaction(
-        self, message: Message, transaction_id: str, arg: Any = None
+        self, message: Message, transaction_id: str, arg: ... = None
     ) -> LocalTransactionState:
         """执行本地事务
 
@@ -177,7 +177,7 @@ class SimpleTransactionListener(TransactionListener):
         self.always_unknow: bool = always_unknow
 
     def execute_local_transaction(
-        self, message: Message, transaction_id: str, arg: None = None
+        self, message: Message, transaction_id: str, arg: ... = None
     ) -> LocalTransactionState:
         """执行本地事务"""
         logger.info(f"执行本地事务，事务ID: {transaction_id}, 主题: {message.topic}")
@@ -235,7 +235,7 @@ class TransactionMetadata:
 
     transaction_id: str
     message: Message
-    local_transaction_state: Optional[LocalTransactionState] = None
+    local_transaction_state: LocalTransactionState | None = None
     create_time: int = field(
         default_factory=lambda: int(__import__("time").time() * 1000)
     )
@@ -272,8 +272,8 @@ def create_transaction_send_result(
     message_queue,
     queue_offset: int,
     transaction_id: str,
-    local_state: Optional[LocalTransactionState] = None,
-    offset_msg_id: Optional[str] = None,
+    local_state: LocalTransactionState | None = None,
+    offset_msg_id: str | None = None,
     region_id: str = "DefaultRegion",
     trace_on: bool = False,
     transaction_timeout: bool = False,
@@ -314,7 +314,7 @@ def create_transaction_send_result(
 
 def create_transaction_send_result_from_base(
     base_result: SendMessageResult,
-    local_state: Optional[LocalTransactionState] = None,
+    local_state: LocalTransactionState | None = None,
     transaction_timeout: bool = False,
     check_times: int = 0,
 ) -> TransactionSendResult:
@@ -359,7 +359,7 @@ def create_simple_transaction_listener(
 
 
 def create_transaction_message(
-    topic: str, body: Any, transaction_id: str, **kwargs
+    topic: str, body: ..., transaction_id: str, **kwargs
 ) -> Message:
     """创建事务消息的便利函数
 

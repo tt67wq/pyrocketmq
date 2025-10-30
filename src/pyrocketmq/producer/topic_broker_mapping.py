@@ -18,7 +18,6 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message_queue import MessageQueue
@@ -39,7 +38,7 @@ class RouteInfo:
     last_update_time: float = field(default_factory=time.time)
 
     # 预构建的队列列表，提升性能
-    available_queues: List[Tuple[MessageQueue, BrokerData]] = field(
+    available_queues: list[tuple[MessageQueue, BrokerData]] = field(
         default_factory=list
     )
 
@@ -68,12 +67,11 @@ class RouteInfo:
         route_info = cls(topic_route_data=topic_route_data)
 
         # 预构建所有可用的队列列表
-        available_queues: List[Tuple[MessageQueue, BrokerData]] = []
+        available_queues: list[tuple[MessageQueue, BrokerData]] = []
 
         # 构建broker名称到broker_data的映射，提升查找性能
-        broker_map = {
-            broker.broker_name: broker
-            for broker in topic_route_data.broker_data_list
+        broker_map: dict[str, BrokerData] = {
+            broker.broker_name: broker for broker in topic_route_data.broker_data_list
         }
 
         for queue_data in topic_route_data.queue_data_list:
@@ -112,7 +110,7 @@ class TopicBrokerMapping:
 
     def __init__(self, route_timeout: float = 30.0):
         # 路由信息缓存: topic -> RouteInfo
-        self._route_cache: Dict[str, RouteInfo] = {}
+        self._route_cache: dict[str, RouteInfo] = {}
 
         # 线程安全锁
         self._lock = threading.RLock()
@@ -120,11 +118,9 @@ class TopicBrokerMapping:
         # 默认路由过期时间 (秒)
         self._default_route_timeout = route_timeout
 
-        logger.info(
-            f"TopicBrokerMapping initialized with timeout={route_timeout}s"
-        )
+        logger.info(f"TopicBrokerMapping initialized with timeout={route_timeout}s")
 
-    def get_route_info(self, topic: str) -> Optional[TopicRouteData]:
+    def get_route_info(self, topic: str) -> TopicRouteData | None:
         """
         获取Topic的路由信息
 
@@ -149,9 +145,7 @@ class TopicBrokerMapping:
             logger.debug(f"Found route info for topic: {topic}")
             return route_info.topic_route_data
 
-    def update_route_info(
-        self, topic: str, topic_route_data: TopicRouteData
-    ) -> bool:
+    def update_route_info(self, topic: str, topic_route_data: TopicRouteData) -> bool:
         """
         更新Topic的路由信息
 
@@ -169,9 +163,7 @@ class TopicBrokerMapping:
         with self._lock:
             try:
                 # 创建新的路由信息并预先构建队列列表
-                new_route_info = RouteInfo.create_with_queues(
-                    topic_route_data, topic
-                )
+                new_route_info = RouteInfo.create_with_queues(topic_route_data, topic)
 
                 # 更新缓存
                 self._route_cache[topic] = new_route_info
@@ -185,9 +177,7 @@ class TopicBrokerMapping:
                 return True
 
             except Exception as e:
-                logger.error(
-                    f"Failed to update route info for topic {topic}: {e}"
-                )
+                logger.error(f"Failed to update route info for topic {topic}: {e}")
                 return False
 
     def remove_route_info(self, topic: str) -> bool:
@@ -212,9 +202,7 @@ class TopicBrokerMapping:
 
             return removed
 
-    def get_available_queues(
-        self, topic: str
-    ) -> List[Tuple[MessageQueue, BrokerData]]:
+    def get_available_queues(self, topic: str) -> list[tuple[MessageQueue, BrokerData]]:
         """
         获取Topic的所有可用队列和对应的Broker
 
@@ -222,7 +210,7 @@ class TopicBrokerMapping:
             topic: 主题名称
 
         Returns:
-            List[Tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
+            list[tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
         """
         with self._lock:
             route_info = self._route_cache.get(topic)
@@ -236,7 +224,7 @@ class TopicBrokerMapping:
             # 直接返回预构建队列列表的副本
             return route_info.available_queues.copy()
 
-    def get_available_brokers(self, topic: str) -> List[BrokerData]:
+    def get_available_brokers(self, topic: str) -> list[BrokerData]:
         """
         获取Topic的所有可用Broker
 
@@ -244,7 +232,7 @@ class TopicBrokerMapping:
             topic: 主题名称
 
         Returns:
-            List[BrokerData]: Broker列表
+            list[BrokerData]: Broker列表
         """
         route_info = self.get_route_info(topic)
         if not route_info:
@@ -252,7 +240,7 @@ class TopicBrokerMapping:
 
         return route_info.broker_data_list.copy()
 
-    def get_queue_data(self, topic: str) -> List[QueueData]:
+    def get_queue_data(self, topic: str) -> list[QueueData]:
         """
         获取Topic的队列数据
 
@@ -260,7 +248,7 @@ class TopicBrokerMapping:
             topic: 主题名称
 
         Returns:
-            List[QueueData]: 队列数据列表
+            list[QueueData]: 队列数据列表
         """
         route_info = self.get_route_info(topic)
         if not route_info:
@@ -268,17 +256,17 @@ class TopicBrokerMapping:
 
         return route_info.queue_data_list.copy()
 
-    def get_all_topics(self) -> Set[str]:
+    def get_all_topics(self) -> set[str]:
         """
         获取所有已缓存的Topic
 
         Returns:
-            Set[str]: Topic集合
+            set[str]: Topic集合
         """
         with self._lock:
             return set(self._route_cache.keys())
 
-    def clear_expired_routes(self, timeout: Optional[float] = None) -> int:
+    def clear_expired_routes(self, timeout: float | None = None) -> int:
         """
         清理过期的路由信息
 
@@ -310,12 +298,12 @@ class TopicBrokerMapping:
 
         return len(expired_topics)
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self):
         """
         获取缓存统计信息
 
         Returns:
-            Dict[str, any]: 统计信息
+            dict[str, any]: 统计信息
         """
         with self._lock:
             total_topics = len(self._route_cache)
@@ -330,8 +318,7 @@ class TopicBrokerMapping:
 
             # 使用预构建的队列列表统计实际可用的写队列总数
             total_available_queues = sum(
-                len(route.available_queues)
-                for route in self._route_cache.values()
+                len(route.available_queues) for route in self._route_cache.values()
             )
 
             return {
@@ -376,9 +363,7 @@ class TopicBrokerMapping:
         Args:
             interval: 清理间隔（秒）
         """
-        logger.info(
-            f"Starting background cleanup task with interval {interval}s"
-        )
+        logger.info(f"Starting background cleanup task with interval {interval}s")
 
         while True:
             try:

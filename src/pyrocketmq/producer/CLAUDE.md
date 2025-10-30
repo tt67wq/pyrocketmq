@@ -1,10 +1,10 @@
-# Producer模块
+# Producer模块 ✅
 
 ## 模块概述
 
-Producer模块是pyrocketmq的消息生产者实现，采用MVP设计理念，提供简洁高效的消息发送、路由管理和故障处理功能。该模块经过架构简化，移除了冗余组件，专注于核心功能实现。
+Producer模块是pyrocketmq的消息生产者实现，提供完整高效的消息发送、路由管理和故障处理功能。该模块经过架构优化，移除了冗余组件，专注于核心功能实现，现已提供完整的事务消息支持。
 
-### 核心功能 (MVP版本)
+### 核心功能 (完整版本)
 - **简化状态管理**: 使用布尔标志替代复杂状态机，提升性能和可维护性
 - **智能路由**: 支持多种路由策略（轮询、随机、消息哈希）
 - **故障感知**: 自动检测和规避故障Broker
@@ -12,7 +12,7 @@ Producer模块是pyrocketmq的消息生产者实现，采用MVP设计理念，�
 - **灵活配置**: 支持多种环境配置模板和便捷创建函数
 - **性能监控**: 实时统计发送成功/失败率和基础指标
 - **工具函数**: 消息验证、大小计算、客户端ID生成等实用工具
-- **🆕 事务消息**: 完整的事务消息支持，保证分布式事务一致性
+- **✅ 事务消息**: 完整的事务消息支持，保证分布式事务一致性，包含完整的生命周期管理
 
 ## 模块结构 (MVP简化版)
 
@@ -48,7 +48,7 @@ producer/
 class RouteInfo:
     topic_route_data: TopicRouteData
     last_update_time: float
-    available_queues: List[Tuple[MessageQueue, BrokerData]]  # 预构建队列列表
+    available_queues: list[tuple[MessageQueue, BrokerData]]  # 预构建队列列表
 ```
 
 **设计亮点**:
@@ -81,12 +81,12 @@ class BrokerHealthInfo:
 @dataclass
 class SendMessageResult:
     success: bool
-    message_id: Optional[str] = None
-    topic: Optional[str] = None
-    broker_name: Optional[str] = None
-    queue_id: Optional[int] = None
-    error: Optional[Exception] = None
-    send_timestamp: Optional[float] = None
+    message_id: str | None = None
+    topic: str | None = None
+    broker_name: str | None = None
+    queue_id: int | None = None
+    error: Exception | None = None
+    send_timestamp: float | None = None
 ```
 
 ### 4. RoutingResult
@@ -96,11 +96,11 @@ class SendMessageResult:
 @dataclass
 class RoutingResult:
     success: bool
-    message_queue: Optional[MessageQueue]
-    broker_data: Optional[BrokerData]
-    broker_address: Optional[str]
-    error: Optional[Exception]
-    routing_strategy: Optional[RoutingStrategy]
+    message_queue: MessageQueue | None
+    broker_data: BrokerData | None
+    broker_address: str | None
+    error: Exception | None
+    routing_strategy: RoutingStrategy | None
 ```
 
 ### 5. 🆕 TransactionSendResult (事务消息发送结果)
@@ -195,10 +195,10 @@ Topic-Broker映射管理器，现在集成队列选择功能。
 
 **关键方法**:
 ```python
-def get_available_queues(self, topic: str) -> List[Tuple[MessageQueue, BrokerData]]
+def get_available_queues(self, topic: str) -> list[tuple[MessageQueue, BrokerData]]
 def update_route_info(self, topic: str, topic_route_data: TopicRouteData) -> bool
-def clear_expired_routes(self, timeout: Optional[float] = None) -> int
-def select_queue(topic: str, message: Optional[Message], selector: Optional[QueueSelector]) -> SelectionResult  # 新增队列选择
+def clear_expired_routes(self, timeout: float | None = None) -> int
+def select_queue(topic: str, message: Message | None, selector: QueueSelector | None) -> SelectionResult  # 新增队列选择
 ```
 
 ### 3. MessageRouter (简化版)
@@ -219,11 +219,11 @@ def select_queue(topic: str, message: Optional[Message], selector: Optional[Queu
 def route_message(
     self,
     topic: str,
-    message: Optional[Message] = None,
-    strategy: Optional[RoutingStrategy] = None
+    message: Message | None = None,
+    strategy: RoutingStrategy | None = None
 ) -> RoutingResult
 
-def report_routing_result(self, result: RoutingResult, latency_ms: Optional[float] = None)
+def report_routing_result(self, result: RoutingResult, latency_ms: float | None = None)
 def report_routing_failure(self, broker_name: str, error: Exception)
 ```
 
@@ -259,7 +259,7 @@ def _send_transaction_confirmation(result: TransactionSendResult, local_state: L
 def _handle_transaction_check(request) -> None  # 处理事务回查
 def set_transaction_timeout(timeout: float) -> None  # 设置事务超时时间
 def set_max_check_times(max_times: int) -> None  # 设置最大回查次数
-def get_stats() -> Dict[str, Any]  # 获取事务统计信息
+def get_stats() -> dict[str, Any]  # 获取事务统计信息
 ```
 
 **便捷创建**:

@@ -29,7 +29,6 @@ Producer配置管理模块
 import os
 import socket
 from dataclasses import dataclass
-from typing import Optional
 
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
@@ -98,7 +97,7 @@ class ProducerConfig:
     建议使用有意义的业务名称，如"order_producer"、"payment_producer"等。
     """
 
-    client_id: Optional[str] = None
+    client_id: str | None = None
     """客户端唯一标识符
 
     用于在RocketMQ服务器端标识不同的客户端实例。如果为None，系统会自动生成，
@@ -233,14 +232,14 @@ class ProducerConfig:
     """
 
     # ==================== 传输层配置 ====================
-    transport_config: Optional[TransportConfig] = None
+    transport_config: TransportConfig | None = None
     """传输层配置
 
     包含TCP连接、超时、重连等底层网络配置。如果为None，
     将使用默认的TransportConfig配置。
     """
 
-    remote_config: Optional[RemoteConfig] = None
+    remote_config: RemoteConfig | None = None
     """远程通信配置
 
     包含RPC调用、连接池、并发控制等通信层配置。如果为None，

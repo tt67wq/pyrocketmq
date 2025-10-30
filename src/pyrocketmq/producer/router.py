@@ -19,9 +19,9 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
-from pyrocketmq.broker.broker_manager import BrokerState
+from pyrocketmq.broker import BrokerState
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message
 from pyrocketmq.model.message_queue import MessageQueue
@@ -74,7 +74,7 @@ class BrokerHealthInfo:
     # 性能指标
     avg_latency: float = 0.0  # 平均延迟 (ms)
     max_latency: float = 0.0  # 最大延迟 (ms)
-    recent_latencies: List[float] = field(default_factory=list)  # 最近延迟记录
+    recent_latencies: list[float] = field(default_factory=list)  # 最近延迟记录
 
     # 故障恢复
     failure_start_time: float = 0
@@ -207,7 +207,7 @@ class MessageRouter:
         self.health_check_interval: float = health_check_interval
 
         # 统计信息
-        self._routing_stats = {
+        self._routing_stats: dict[str, Any] = {
             "total_routing": 0,
             "successful_routing": 0,
             "failed_routing": 0,
@@ -384,12 +384,12 @@ class MessageRouter:
             elif health_info:
                 health_info.update_failure()
 
-    def get_routing_stats(self) -> Dict[str, Any]:
+    def get_routing_stats(self) -> dict[str, Any]:
         """
         获取路由统计信息
 
         Returns:
-            Dict[str, any]: 统计信息
+            dict[str, any]: 统计信息
         """
         with self._stats_lock:
             stats = self._routing_stats.copy()
@@ -465,12 +465,12 @@ class MessageRouter:
                 return True
             return False
 
-    def get_available_brokers(self) -> List[str]:
+    def get_available_brokers(self) -> list[str]:
         """
         获取可用的Broker列表
 
         Returns:
-            List[str]: 可用的Broker名称列表
+            list[str]: 可用的Broker名称列表
         """
         available_brokers = []
         with self._health_lock:
@@ -481,7 +481,7 @@ class MessageRouter:
 
     def _get_available_queues(
         self, topic: str
-    ) -> List[Tuple[MessageQueue, BrokerData]]:
+    ) -> list[tuple[MessageQueue, BrokerData]]:
         """获取Topic的可用队列列表"""
         return self.topic_mapping.get_available_queues(topic)
 

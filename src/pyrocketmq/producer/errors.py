@@ -8,8 +8,6 @@ Producer模块异常定义
 版本: MVP 1.0
 """
 
-from typing import Optional
-
 
 class ProducerError(Exception):
     """Producer基础异常类
@@ -20,8 +18,8 @@ class ProducerError(Exception):
     def __init__(
         self,
         message: str,
-        error_code: Optional[int] = None,
-        cause: Optional[Exception] = None,
+        error_code: int | None = None,
+        cause: Exception | None = None,
     ):
         """
         初始化Producer异常
@@ -52,7 +50,7 @@ class ProducerStartError(ProducerError):
     def __init__(
         self,
         message: str = "Failed to start producer",
-        cause: Optional[Exception] = None,
+        cause: Exception | None = None,
     ):
         super().__init__(message, error_code=1001, cause=cause)
 
@@ -66,7 +64,7 @@ class ProducerShutdownError(ProducerError):
     def __init__(
         self,
         message: str = "Failed to shutdown producer",
-        cause: Optional[Exception] = None,
+        cause: Exception | None = None,
     ):
         super().__init__(message, error_code=1002, cause=cause)
 
@@ -80,9 +78,9 @@ class ProducerStateError(ProducerError):
     def __init__(
         self,
         message: str = "Producer is in invalid state",
-        current_state: Optional[str] = None,
-        expected_state: Optional[str] = None,
-        cause: Optional[Exception] = None,
+        current_state: str | None = None,
+        expected_state: str | None = None,
+        cause: Exception | None = None,
     ):
         if current_state and expected_state:
             message = f"Producer state error: current={current_state}, expected={expected_state}"
@@ -100,14 +98,12 @@ class MessageSendError(ProducerError):
     def __init__(
         self,
         message: str = "Failed to send message",
-        topic: Optional[str] = None,
-        broker: Optional[str] = None,
-        cause: Optional[Exception] = None,
+        topic: str | None = None,
+        broker: str | None = None,
+        cause: Exception | None = None,
     ):
         if topic and broker:
-            message = (
-                f"Failed to send message to topic {topic} on broker {broker}"
-            )
+            message = f"Failed to send message to topic {topic} on broker {broker}"
         elif topic:
             message = f"Failed to send message to topic {topic}"
 
@@ -125,8 +121,8 @@ class MessageValidationError(ProducerError):
     def __init__(
         self,
         message: str = "Message validation failed",
-        topic: Optional[str] = None,
-        validation_error: Optional[str] = None,
+        topic: str | None = None,
+        validation_error: str | None = None,
     ):
         if validation_error:
             message = f"Message validation failed: {validation_error}"
@@ -147,7 +143,7 @@ class RouteNotFoundError(ProducerError):
     def __init__(
         self,
         message: str = "Route not found",
-        topic: Optional[str] = None,
+        topic: str | None = None,
     ):
         if topic:
             message = f"Route not found for topic {topic}"
@@ -165,8 +161,8 @@ class BrokerNotAvailableError(ProducerError):
     def __init__(
         self,
         message: str = "Broker is not available",
-        broker_name: Optional[str] = None,
-        broker_addr: Optional[str] = None,
+        broker_name: str | None = None,
+        broker_addr: str | None = None,
     ):
         if broker_name:
             message = f"Broker {broker_name} is not available"
@@ -187,9 +183,9 @@ class QueueNotAvailableError(ProducerError):
     def __init__(
         self,
         message: str = "Queue is not available",
-        topic: Optional[str] = None,
-        broker_name: Optional[str] = None,
-        queue_id: Optional[int] = None,
+        topic: str | None = None,
+        broker_name: str | None = None,
+        queue_id: int | None = None,
     ):
         if topic and broker_name and queue_id is not None:
             message = f"Queue {queue_id} is not available for topic {topic} on broker {broker_name}"
@@ -211,8 +207,8 @@ class RouteUpdateError(ProducerError):
     def __init__(
         self,
         message: str = "Failed to update route info",
-        topic: Optional[str] = None,
-        cause: Optional[Exception] = None,
+        topic: str | None = None,
+        cause: Exception | None = None,
     ):
         if topic:
             message = f"Failed to update route info for topic {topic}"
@@ -230,8 +226,8 @@ class NameServerError(ProducerError):
     def __init__(
         self,
         message: str = "NameServer error occurred",
-        nameserver_addr: Optional[str] = None,
-        cause: Optional[Exception] = None,
+        nameserver_addr: str | None = None,
+        cause: Exception | None = None,
     ):
         if nameserver_addr:
             message = f"NameServer error at {nameserver_addr}"
@@ -249,8 +245,8 @@ class ConfigurationError(ProducerError):
     def __init__(
         self,
         message: str = "Configuration error",
-        config_key: Optional[str] = None,
-        config_value: Optional[str] = None,
+        config_key: str | None = None,
+        config_value: str | None = None,
     ):
         if config_key:
             message = f"Invalid configuration: {config_key}={config_value}"
@@ -269,8 +265,8 @@ class TimeoutError(ProducerError):
     def __init__(
         self,
         message: str = "Operation timed out",
-        operation: Optional[str] = None,
-        timeout_ms: Optional[int] = None,
+        operation: str | None = None,
+        timeout_ms: int | None = None,
     ):
         if operation and timeout_ms:
             message = f"Operation {operation} timed out after {timeout_ms}ms"
@@ -291,8 +287,8 @@ class RetryExhaustedError(ProducerError):
     def __init__(
         self,
         message: str = "Retry attempts exhausted",
-        attempts: Optional[int] = None,
-        last_error: Optional[Exception] = None,
+        attempts: int | None = None,
+        last_error: Exception | None = None,
     ):
         if attempts:
             message = f"Failed after {attempts} retry attempts"
@@ -311,7 +307,7 @@ class CompressionError(ProducerError):
     def __init__(
         self,
         message: str = "Message compression failed",
-        cause: Optional[Exception] = None,
+        cause: Exception | None = None,
     ):
         super().__init__(message, error_code=6001, cause=cause)
 
@@ -325,7 +321,7 @@ class SerializationError(ProducerError):
     def __init__(
         self,
         message: str = "Message serialization failed",
-        cause: Optional[Exception] = None,
+        cause: Exception | None = None,
     ):
         super().__init__(message, error_code=6002, cause=cause)
 
@@ -334,7 +330,7 @@ class SerializationError(ProducerError):
 def wrap_producer_error(
     error: Exception,
     default_message: str = "Producer operation failed",
-    error_code: Optional[int] = None,
+    error_code: int | None = None,
 ) -> ProducerError:
     """
     将普通异常包装为Producer异常
@@ -356,10 +352,10 @@ def wrap_producer_error(
 
 def create_error_context(
     error: ProducerError,
-    topic: Optional[str] = None,
-    broker: Optional[str] = None,
-    operation: Optional[str] = None,
-) -> dict:
+    topic: str | None = None,
+    broker: str | None = None,
+    operation: str | None = None,
+) -> dict[str, str | int | None]:
     """
     创建异常上下文信息
 
@@ -385,10 +381,7 @@ def create_error_context(
         context["broker"] = getattr(error, "broker")
     if hasattr(error, "broker_name") and getattr(error, "broker_name", None):
         context["broker_name"] = getattr(error, "broker_name")
-    if (
-        hasattr(error, "queue_id")
-        and getattr(error, "queue_id", None) is not None
-    ):
+    if hasattr(error, "queue_id") and getattr(error, "queue_id", None) is not None:
         context["queue_id"] = getattr(error, "queue_id")
 
     # 添加调用上下文

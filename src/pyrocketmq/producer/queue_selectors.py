@@ -12,7 +12,6 @@ import abc
 import asyncio
 import random
 import threading
-from typing import List, Optional, Tuple
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message, MessageProperty
@@ -34,9 +33,9 @@ class QueueSelector(abc.ABC):
     def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         """从可用队列中选择一个队列"""
         pass
 
@@ -51,9 +50,9 @@ class RoundRobinSelector(QueueSelector):
     def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
@@ -86,9 +85,9 @@ class RandomSelector(QueueSelector):
     def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
@@ -106,9 +105,9 @@ class MessageHashSelector(QueueSelector):
     def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
@@ -123,9 +122,7 @@ class MessageHashSelector(QueueSelector):
                 sharding_key = keys.split()[0]
 
         if not sharding_key:
-            logger.debug(
-                "No sharding key found for message, using random selection"
-            )
+            logger.debug("No sharding key found for message, using random selection")
             return RandomSelector().select(topic, available_queues, message)
 
         hash_value = hash(sharding_key)
@@ -152,9 +149,9 @@ class AsyncQueueSelector(abc.ABC):
     async def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         """从可用队列中选择一个队列（异步版本）"""
         pass
 
@@ -169,9 +166,9 @@ class AsyncRoundRobinSelector(AsyncQueueSelector):
     async def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
@@ -204,9 +201,9 @@ class AsyncRandomSelector(AsyncQueueSelector):
     async def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
@@ -229,16 +226,14 @@ class AsyncMessageHashSelector(AsyncQueueSelector):
     async def select(
         self,
         topic: str,
-        available_queues: List[Tuple[MessageQueue, BrokerData]],
-        message: Optional[Message] = None,
-    ) -> Optional[Tuple[MessageQueue, BrokerData]]:
+        available_queues: list[tuple[MessageQueue, BrokerData]],
+        message: Message | None = None,
+    ) -> tuple[MessageQueue, BrokerData] | None:
         if not available_queues:
             return None
 
         if not message:
-            return await AsyncRandomSelector().select(
-                topic, available_queues, message
-            )
+            return await AsyncRandomSelector().select(topic, available_queues, message)
 
         # 优先使用分片键，其次使用消息键
         sharding_key = message.get_property(MessageProperty.SHARDING_KEY)
@@ -248,12 +243,8 @@ class AsyncMessageHashSelector(AsyncQueueSelector):
                 sharding_key = keys.split()[0]
 
         if not sharding_key:
-            logger.debug(
-                "No sharding key found for message, using random selection"
-            )
-            return await AsyncRandomSelector().select(
-                topic, available_queues, message
-            )
+            logger.debug("No sharding key found for message, using random selection")
+            return await AsyncRandomSelector().select(topic, available_queues, message)
 
         loop = asyncio.get_event_loop()
         hash_value = await loop.run_in_executor(None, hash, sharding_key)

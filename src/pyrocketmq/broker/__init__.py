@@ -5,11 +5,10 @@ Broker 模块
 
 from .async_client import AsyncBrokerClient, create_async_broker_client
 from .broker_manager import (
-    BrokerConnectionInfo,
     BrokerConnectionPool,
     BrokerManager,
-    BrokerState,
 )
+from .connection_info import BrokerState, BrokerConnectionInfo
 from .client import BrokerClient, create_broker_client
 
 __all__ = [

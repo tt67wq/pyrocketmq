@@ -23,7 +23,7 @@ MVP版本功能:
 
 import threading
 import time
-from typing import Dict
+
 
 # Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
@@ -121,7 +121,7 @@ class Producer:
         self._total_failed = 0
 
         # NameServer连接管理（仅用于路由查询）
-        self._nameserver_connections: Dict[str, Remote] = {}
+        self._nameserver_connections: dict[str, Remote] = {}
         self._nameserver_addrs = self._parse_nameserver_addrs(self._config.namesrv_addr)
 
         # Broker管理器（使用现有的连接池管理）
@@ -578,14 +578,14 @@ class Producer:
 
             raise MessageSendError(f"Oneway batch message send failed: {e}") from e
 
-    def _parse_nameserver_addrs(self, namesrv_addr: str) -> Dict[str, str]:
+    def _parse_nameserver_addrs(self, namesrv_addr: str) -> dict[str, str]:
         """解析NameServer地址列表
 
         Args:
             namesrv_addr: NameServer地址，格式为"host1:port1;host2:port2"
 
         Returns:
-            Dict[str, str]: 地址字典 {addr: host:port}
+            dict[str, str]: 地址字典 {addr: host:port}
         """
         addrs = {}
         for addr in namesrv_addr.split(";"):
