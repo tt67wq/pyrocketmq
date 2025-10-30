@@ -62,6 +62,7 @@ def main():
                 topic="test_im_015",
                 body=b"Hello, RocketMQ From Python's Transactional Producer!",
             )
+
             ret = producer.send_message_in_transaction(message)
             print("Message sent ret:", ret)
         except ProducerError as e:

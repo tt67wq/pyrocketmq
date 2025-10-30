@@ -15,6 +15,7 @@ MVP版本功能:
 版本: MVP 1.0
 """
 
+from sys import flags
 import threading
 import time
 from dataclasses import dataclass, field
@@ -98,16 +99,11 @@ class BrokerHealthInfo:
         if len(self.recent_latencies) > 100:  # 只保留最近100次
             self.recent_latencies.pop(0)
 
-        self.avg_latency = sum(self.recent_latencies) / len(
-            self.recent_latencies
-        )
+        self.avg_latency = sum(self.recent_latencies) / len(self.recent_latencies)
         self.max_latency = max(self.max_latency, latency_ms)
 
         # 故障恢复检查
-        if (
-            self.status != BrokerState.HEALTHY
-            and self.consecutive_successes >= 5
-        ):
+        if self.status != BrokerState.HEALTHY and self.consecutive_successes >= 5:
             self.status = BrokerState.HEALTHY
             logger.info(
                 f"Broker {self.broker_data.broker_name} recovered to healthy status"
@@ -122,23 +118,15 @@ class BrokerHealthInfo:
         self.consecutive_successes = 0
 
         # 故障检测
-        if (
-            self.consecutive_failures >= 3
-            and self.status == BrokerState.HEALTHY
-        ):
+        if self.consecutive_failures >= 3 and self.status == BrokerState.HEALTHY:
             self.status = BrokerState.DEGRADED
             self.failure_start_time = time.time()
             logger.warning(
                 f"Broker {self.broker_data.broker_name} degraded due to consecutive failures"
             )
-        elif (
-            self.consecutive_failures >= 5
-            and self.status == BrokerState.DEGRADED
-        ):
+        elif self.consecutive_failures >= 5 and self.status == BrokerState.DEGRADED:
             self.status = BrokerState.UNHEALTHY
-            logger.error(
-                f"Broker {self.broker_data.broker_name} marked as unhealthy"
-            )
+            logger.error(f"Broker {self.broker_data.broker_name} marked as unhealthy")
 
     def get_success_rate(self) -> float:
         """获取成功率"""
@@ -207,33 +195,29 @@ class MessageRouter:
         health_check_interval: float = 30.0,
     ):
         # Topic-Broker映射
-        self.topic_mapping = topic_mapping
+        self.topic_mapping: TopicBrokerMapping = topic_mapping
 
         # 路由策略配置
-        self.default_strategy = default_strategy
+        self.default_strategy: RoutingStrategy = default_strategy
 
         # Broker健康信息
-        self.broker_health: Dict[str, BrokerHealthInfo] = {}
-        self._health_lock = threading.RLock()
+        self.broker_health: dict[str, BrokerHealthInfo] = {}
+        self._health_lock: threading.RLock = threading.RLock()
 
         # 健康检查配置
-        self.health_check_interval = health_check_interval
+        self.health_check_interval: float = health_check_interval
 
         # 统计信息
         self._routing_stats = {
             "total_routing": 0,
             "successful_routing": 0,
             "failed_routing": 0,
-            "strategy_usage": {
-                strategy.value: 0 for strategy in RoutingStrategy
-            },
+            "strategy_usage": {strategy.value: 0 for strategy in RoutingStrategy},
             "broker_usage": {},
         }
-        self._stats_lock = threading.RLock()
+        self._stats_lock: threading.RLock = threading.RLock()
 
-        logger.info(
-            f"MessageRouter initialized with strategy={default_strategy.value}"
-        )
+        logger.info(f"MessageRouter initialized with strategy={default_strategy.value}")
 
     def route_message(
         self,
@@ -258,9 +242,7 @@ class MessageRouter:
         try:
             with self._stats_lock:
                 self._routing_stats["total_routing"] += 1
-                self._routing_stats["strategy_usage"][
-                    routing_strategy.value
-                ] += 1
+                self._routing_stats["strategy_usage"][routing_strategy.value] += 1
 
             # 获取可用队列
             available_queues = self._get_available_queues(topic)
@@ -281,9 +263,7 @@ class MessageRouter:
             selected_result = selector.select(topic, available_queues, message)
 
             if not selected_result:
-                error = QueueNotAvailableError(
-                    f"No queue selected for topic: {topic}"
-                )
+                error = QueueNotAvailableError(f"No queue selected for topic: {topic}")
                 with self._stats_lock:
                     self._routing_stats["failed_routing"] += 1
                 return RoutingResult(
@@ -366,9 +346,7 @@ class MessageRouter:
             if not health_info:
                 # 创建新的健康信息
                 if result.broker_data:
-                    health_info = BrokerHealthInfo(
-                        broker_data=result.broker_data
-                    )
+                    health_info = BrokerHealthInfo(broker_data=result.broker_data)
                     self.broker_health[broker_name] = health_info
                 else:
                     logger.warning(
@@ -439,9 +417,7 @@ class MessageRouter:
                 "total_routing": 0,
                 "successful_routing": 0,
                 "failed_routing": 0,
-                "strategy_usage": {
-                    strategy.value: 0 for strategy in RoutingStrategy
-                },
+                "strategy_usage": {strategy.value: 0 for strategy in RoutingStrategy},
                 "broker_usage": {},
             }
 
@@ -486,9 +462,7 @@ class MessageRouter:
                 health_info.status = BrokerState.HEALTHY
                 health_info.consecutive_failures = 0
                 health_info.consecutive_successes = 0
-                logger.info(
-                    f"Force recovered broker {broker_name} to healthy status"
-                )
+                logger.info(f"Force recovered broker {broker_name} to healthy status")
                 return True
             return False
 
@@ -533,7 +507,7 @@ class MessageRouter:
 
             return RoundRobinSelector()
 
-    def _select_broker_address(self, broker_data: BrokerData) -> Optional[str]:
+    def _select_broker_address(self, broker_data: BrokerData) -> str | None:
         """选择Broker地址"""
         # 简单策略：优先选择master地址
         if broker_data.broker_addresses.get(
@@ -542,8 +516,12 @@ class MessageRouter:
             return broker_data.broker_addresses[MASTER_BROKER_ID]
 
         # 如果没有master，选择第一个可用的地址
-        for broker_id, address in broker_data.broker_addresses.items():
+        for _, address in broker_data.broker_addresses.items():
             if address:
                 return address
 
         return None
+
+    def select_broker_address(self, broker_data: BrokerData) -> str | None:
+        """选择Broker地址"""
+        return self._select_broker_address(broker_data)

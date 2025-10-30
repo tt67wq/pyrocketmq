@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .errors import DeserializationError
 from .message_queue import MessageQueue
+from .message_ext import MessageExt
 
 
 @dataclass
@@ -123,7 +124,7 @@ class PullMessageResult:
     包含从Broker拉取的消息列表和相关信息
     """
 
-    messages: List["MessageExt"]  # 消息列表
+    messages: List[MessageExt]  # 消息列表
     next_begin_offset: int  # 下次拉取的起始偏移量
     min_offset: int  # 最小偏移量
     max_offset: int  # 最大偏移量
@@ -164,8 +165,7 @@ class PullMessageResult:
         from .message_ext import MessageExt  # 避免循环导入
 
         messages = [
-            MessageExt.from_dict(msg_data)
-            for msg_data in data.get("messages", [])
+            MessageExt.from_dict(msg_data) for msg_data in data.get("messages", [])
         ]
 
         return cls(
@@ -239,14 +239,10 @@ class OffsetResult:
             parsed_data = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse OffsetResult from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse OffsetResult from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid OffsetResult format: {e}")
 
     def __str__(self) -> str:
         """字符串表示"""
-        return (
-            f"OffsetResult[offset={self.offset}, retryTimes={self.retry_times}]"
-        )
+        return f"OffsetResult[offset={self.offset}, retryTimes={self.retry_times}]"

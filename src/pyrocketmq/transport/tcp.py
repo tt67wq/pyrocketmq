@@ -25,9 +25,7 @@ class ConnectionStateMachine(StateMachine):
     connect = disconnected.to(connecting)
     connect_success = connecting.to(connected)
     disconnect = connected.to(disconnected) | connecting.to(disconnected)
-    close = (
-        disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
-    )
+    close = disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
 
     def __init__(self, config: TransportConfig):
         self.config = config
@@ -102,9 +100,7 @@ class ConnectionStateMachine(StateMachine):
 
             if hasattr(socket, "TCP_KEEPCNT"):
                 # 探测次数
-                self._socket.setsockopt(
-                    socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3
-                )
+                self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
             self._logger.info(
                 f"TCP KeepAlive已启用: interval={self.config.keep_alive_interval}s, timeout={self.config.keep_alive_timeout}s"
@@ -201,9 +197,7 @@ class ConnectionStateMachine(StateMachine):
                 self.disconnect()
                 return b""
 
-            self._logger.debug(
-                f"接收消息成功: {len(data)} bytes (请求: {size})"
-            )
+            self._logger.debug(f"接收消息成功: {len(data)} bytes (请求: {size})")
             return data
 
         except socket.timeout:
@@ -246,9 +240,7 @@ class ConnectionStateMachine(StateMachine):
                 )
 
             # 2. 解析body长度（大端序）
-            body_length = int.from_bytes(
-                header_data, byteorder="big", signed=False
-            )
+            body_length = int.from_bytes(header_data, byteorder="big", signed=False)
 
             # 3. 验证body长度合理性
             if body_length < 0:
@@ -314,9 +306,7 @@ class ConnectionStateMachine(StateMachine):
                 remaining -= len(chunk)
 
             except socket.timeout:
-                self._logger.debug(
-                    f"接收数据超时，已接收{len(data)}/{size}字节"
-                )
+                self._logger.debug(f"接收数据超时，已接收{len(data)}/{size}字节")
                 raise
             except Exception as e:
                 self._logger.error(f"接收数据失败: {e}")
@@ -358,9 +348,7 @@ class AsyncConnectionStateMachine(StateMachine):
     connect = disconnected.to(connecting)
     connect_success = connecting.to(connected)
     disconnect = connected.to(disconnected) | connecting.to(disconnected)
-    close = (
-        disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
-    )
+    close = disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
 
     def __init__(self, config: TransportConfig):
         self.config = config
@@ -397,9 +385,7 @@ class AsyncConnectionStateMachine(StateMachine):
                 self._socket = self._writer.get_extra_info("socket")
                 if self._socket:
                     # 设置socket选项
-                    self._socket.setsockopt(
-                        socket.IPPROTO_TCP, socket.TCP_NODELAY, 1
-                    )
+                    self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
                     # TCP KeepAlive配置
                     if self.config.keep_alive:
@@ -451,9 +437,7 @@ class AsyncConnectionStateMachine(StateMachine):
 
             if hasattr(socket, "TCP_KEEPCNT"):
                 # 探测次数
-                self._socket.setsockopt(
-                    socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3
-                )
+                self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
             self._logger.info(
                 f"异步TCP KeepAlive已启用: interval={self.config.keep_alive_interval}s, timeout={self.config.keep_alive_timeout}s"
@@ -546,9 +530,7 @@ class AsyncConnectionStateMachine(StateMachine):
                 self._reader.readexactly(size), timeout=self.config.timeout
             )
 
-            self._logger.debug(
-                f"异步接收消息成功: {len(data)} bytes (请求: {size})"
-            )
+            self._logger.debug(f"异步接收消息成功: {len(data)} bytes (请求: {size})")
             return data
 
         except asyncio.IncompleteReadError:
@@ -596,9 +578,7 @@ class AsyncConnectionStateMachine(StateMachine):
                 )
 
             # 2. 解析body长度（大端序）
-            body_length = int.from_bytes(
-                header_data, byteorder="big", signed=False
-            )
+            body_length = int.from_bytes(header_data, byteorder="big", signed=False)
 
             # 3. 验证body长度合理性
             if body_length < 0:
