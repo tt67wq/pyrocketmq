@@ -25,15 +25,22 @@ import asyncio
 import time
 from typing import Dict, Optional
 
+# Local imports - broker
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.broker.async_client import AsyncBrokerClient
-from pyrocketmq.logging import get_logger
+
+# Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
-from pyrocketmq.model.message import Message, encode_batch
+from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.model.nameserver_models import TopicRouteData
+
+# Local imports - nameserver
+from pyrocketmq.nameserver.client import AsyncNameServerClient
+
+# Local imports - producer
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
@@ -47,9 +54,14 @@ from pyrocketmq.producer.errors import (
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
+
+# Local imports - remote
 from pyrocketmq.remote.async_remote import AsyncRemote
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
+
+# Local imports - utilities
+from pyrocketmq.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -917,52 +929,31 @@ class AsyncProducer:
 
         for addr, remote in self._nameserver_connections.items():
             try:
-                # 创建获取路由信息的请求
-                request = RemotingRequestFactory.create_get_route_info_request(topic)
-
-                # 发送请求
-                response = await remote.rpc(
-                    request, self._config.send_msg_timeout / 1000.0
+                # 使用异步NameServer客户端查询路由信息
+                client = AsyncNameServerClient(
+                    remote, self._config.send_msg_timeout / 1000.0
                 )
 
-                if response and response.code == ResponseCode.SUCCESS:
-                    if not response.body:
-                        logger.warning(f"Empty response body from {addr}")
-                        return False
+                # 查询Topic路由信息
+                topic_route_data = await client.query_topic_route_info(topic)
 
-                    # 解析路由数据
-                    topic_route_data = TopicRouteData.from_bytes(response.body)
-
-                    # 维护broker连接
-                    for broker_data in topic_route_data.broker_data_list:
-                        for (
-                            idx,
+                # 维护broker连接
+                for broker_data in topic_route_data.broker_data_list:
+                    for idx, broker_addr in broker_data.broker_addresses.items():
+                        logger.info(f"Adding broker {idx} {broker_addr}")
+                        await self._broker_manager.add_broker(
                             broker_addr,
-                        ) in broker_data.broker_addresses.items():
-                            logger.info(f"Adding broker {idx} {broker_addr}")
-                            await self._broker_manager.add_broker(
-                                broker_addr,
-                                broker_data.broker_name,
-                            )
-
-                    # 更新本地缓存
-                    success = self._topic_mapping.update_route_info(
-                        topic, topic_route_data
-                    )
-
-                    if success:
-                        logger.info(f"Route info updated for topic {topic} from {addr}")
-
-                        return True
-                    else:
-                        logger.warning(
-                            f"Failed to update route cache for topic {topic}"
+                            broker_data.broker_name,
                         )
 
+                # 更新本地缓存
+                success = self._topic_mapping.update_route_info(topic, topic_route_data)
+
+                if success:
+                    logger.info(f"Route info updated for topic {topic} from {addr}")
+                    return True
                 else:
-                    logger.warning(
-                        f"Get route info failed from {addr}, code: {response.code if response else 'None'}"
-                    )
+                    logger.warning(f"Failed to update route cache for topic {topic}")
 
             except Exception as e:
                 logger.error(f"Failed to get async route info from {addr}: {e}")

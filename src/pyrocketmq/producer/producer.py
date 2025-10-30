@@ -25,15 +25,22 @@ import threading
 import time
 from typing import Dict, Optional
 
+# Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
 from pyrocketmq.broker.client import BrokerClient
-from pyrocketmq.logging import get_logger
+
+# Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
-from pyrocketmq.model.message import Message, encode_batch
+from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.model.nameserver_models import TopicRouteData
+
+# Local imports - nameserver
+from pyrocketmq.nameserver.client import SyncNameServerClient
+
+# Local imports - producer
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
@@ -47,9 +54,14 @@ from pyrocketmq.producer.errors import (
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
+
+# Local imports - remote
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.sync_remote import Remote
 from pyrocketmq.transport.config import TransportConfig
+
+# Local imports - utilities
+from pyrocketmq.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -112,9 +124,7 @@ class Producer:
 
         # NameServer连接管理（仅用于路由查询）
         self._nameserver_connections: Dict[str, Remote] = {}
-        self._nameserver_addrs = self._parse_nameserver_addrs(
-            self._config.namesrv_addr
-        )
+        self._nameserver_addrs = self._parse_nameserver_addrs(self._config.namesrv_addr)
 
         # Broker管理器（使用现有的连接池管理）
         transport_config = TransportConfig(
@@ -224,7 +234,9 @@ class Producer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
-        message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
+        message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
         try:
             # 1. 验证消息
@@ -235,13 +247,9 @@ class Producer:
                 self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                message.topic, message
-            )
+            routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}"
-                )
+                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
@@ -326,7 +334,9 @@ class Producer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
-            batch_message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
+            batch_message.set_property(
+                MessageProperty.PRODUCER_GROUP, self._config.producer_group
+            )
             logger.debug(
                 f"Encoded {len(messages)} messages into batch message, "
                 f"batch size: {len(batch_message.body)} bytes"
@@ -407,7 +417,9 @@ class Producer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
-        message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
+        message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
         try:
             # 1. 验证消息
@@ -418,13 +430,9 @@ class Producer:
                 self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                message.topic, message
-            )
+            routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}"
-                )
+                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
@@ -508,7 +516,9 @@ class Producer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
-            batch_message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
+            batch_message.set_property(
+                MessageProperty.PRODUCER_GROUP, self._config.producer_group
+            )
             logger.debug(
                 f"Encoded {len(messages)} messages into batch message, "
                 f"batch size: {len(batch_message.body)} bytes"
@@ -568,9 +578,7 @@ class Producer:
             if isinstance(e, ProducerError):
                 raise
 
-            raise MessageSendError(
-                f"Oneway batch message send failed: {e}"
-            ) from e
+            raise MessageSendError(f"Oneway batch message send failed: {e}") from e
 
     def _parse_nameserver_addrs(self, namesrv_addr: str) -> Dict[str, str]:
         """解析NameServer地址列表
@@ -751,9 +759,7 @@ class Producer:
             ProducerStateError: 当Producer未运行时
         """
         if not self._running:
-            raise ProducerStateError(
-                "Producer is not running. Call start() first."
-            )
+            raise ProducerStateError("Producer is not running. Call start() first.")
 
     def _stop_background_tasks(self) -> None:
         """停止后台任务"""
@@ -815,9 +821,7 @@ class Producer:
             for broker_addr in broker_addrs:
                 try:
                     # 获取或创建Broker连接
-                    with self._broker_manager.connection(
-                        broker_addr
-                    ) as broker_remote:
+                    with self._broker_manager.connection(broker_addr) as broker_remote:
                         # 发送单向心跳请求（不等待响应）
                         broker_remote.oneway(heartbeat_request)
                         success_count += 1
@@ -825,9 +829,7 @@ class Producer:
 
                 except Exception as e:
                     failed_count += 1
-                    logger.debug(
-                        f"Failed to send heartbeat to {broker_addr}: {e}"
-                    )
+                    logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
 
             if success_count > 0 or failed_count > 0:
                 logger.debug(
@@ -861,9 +863,7 @@ class Producer:
                     )
                     failed_count += 1
             except Exception as e:
-                logger.error(
-                    f"Failed to close NameServer connection {addr}: {e}"
-                )
+                logger.error(f"Failed to close NameServer connection {addr}: {e}")
                 failed_count += 1
 
         # 清空连接字典
@@ -912,56 +912,31 @@ class Producer:
 
         for addr, remote in self._nameserver_connections.items():
             try:
-                # 创建获取路由信息的请求
-                request = RemotingRequestFactory.create_get_route_info_request(
-                    topic
+                # 使用NameServer客户端查询路由信息
+                client = SyncNameServerClient(
+                    remote, self._config.send_msg_timeout / 1000.0
                 )
 
-                # 发送请求
-                response = remote.rpc(
-                    request, self._config.send_msg_timeout / 1000.0
-                )
+                # 查询Topic路由信息
+                topic_route_data = client.query_topic_route_info(topic)
 
-                if response and response.code == ResponseCode.SUCCESS:
-                    if not response.body:
-                        logger.warning(f"Empty response body from {addr}")
-                        return False
-
-                    # 解析路由数据
-                    topic_route_data = TopicRouteData.from_bytes(response.body)
-
-                    # 维护broker连接
-                    for broker_data in topic_route_data.broker_data_list:
-                        for (
-                            idx,
+                # 维护broker连接
+                for broker_data in topic_route_data.broker_data_list:
+                    for idx, broker_addr in broker_data.broker_addresses.items():
+                        logger.info(f"Adding broker {idx} {broker_addr}")
+                        self._broker_manager.add_broker(
                             broker_addr,
-                        ) in broker_data.broker_addresses.items():
-                            logger.info(f"Adding broker {idx} {broker_addr}")
-                            self._broker_manager.add_broker(
-                                broker_addr,
-                                broker_data.broker_name,
-                            )
-
-                    # 更新本地缓存
-                    success = self._topic_mapping.update_route_info(
-                        topic, topic_route_data
-                    )
-
-                    if success:
-                        logger.info(
-                            f"Route info updated for topic {topic} from {addr}"
+                            broker_data.broker_name,
                         )
 
-                        return True
-                    else:
-                        logger.warning(
-                            f"Failed to update route cache for topic {topic}"
-                        )
+                # 更新本地缓存
+                success = self._topic_mapping.update_route_info(topic, topic_route_data)
 
+                if success:
+                    logger.info(f"Route info updated for topic {topic} from {addr}")
+                    return True
                 else:
-                    logger.warning(
-                        f"Get route info failed from {addr}, code: {response.code if response else 'None'}"
-                    )
+                    logger.warning(f"Failed to update route cache for topic {topic}")
 
             except Exception as e:
                 logger.error(f"Failed to get route info from {addr}: {e}")
