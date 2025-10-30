@@ -121,6 +121,10 @@ class BrokerClient:
 
         # 从响应扩展字段中提取信息
         ext_fields = response.ext_fields or {}
+        # print("***" * 10)
+        # print(properties)
+        # print(ext_fields)
+        # print("***" * 10)
 
         # 获取消息ID（从UNIQ_KEY属性或msgId字段）
         msg_id = ""

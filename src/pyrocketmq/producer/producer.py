@@ -224,6 +224,7 @@ class Producer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
+        message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
 
         try:
             # 1. 验证消息
@@ -325,6 +326,7 @@ class Producer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
+            batch_message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
             logger.debug(
                 f"Encoded {len(messages)} messages into batch message, "
                 f"batch size: {len(batch_message.body)} bytes"
@@ -405,6 +407,7 @@ class Producer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
+        message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
 
         try:
             # 1. 验证消息
@@ -505,6 +508,7 @@ class Producer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
+            batch_message.set_property(MessageProperty.PRODUCER_GROUP, self._config.producer_group)
             logger.debug(
                 f"Encoded {len(messages)} messages into batch message, "
                 f"batch size: {len(batch_message.body)} bytes"

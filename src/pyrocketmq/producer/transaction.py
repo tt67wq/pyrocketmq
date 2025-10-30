@@ -14,6 +14,7 @@ MVP版本特性:
 - 基础的本地事务执行和回查
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -23,6 +24,8 @@ from pyrocketmq.model.enums import LocalTransactionState
 from pyrocketmq.model.result_data import SendMessageResult
 
 from ..model.message import Message
+
+logger = logging.getLogger(__name__)
 
 
 class TransactionState(Enum):
@@ -183,31 +186,52 @@ class SimpleTransactionListener(TransactionListener):
         self, message: Message, transaction_id: str, arg: Any = None
     ) -> LocalTransactionState:
         """执行本地事务"""
+        logger.info(
+            f"执行本地事务，事务ID: {transaction_id}, 主题: {message.topic}"
+        )
+
         if self.always_commit:
+            logger.info(f"事务 {transaction_id} 配置为总是提交")
             return LocalTransactionState.COMMIT_MESSAGE_STATE
         elif self.always_rollback:
+            logger.info(f"事务 {transaction_id} 配置为总是回滚")
             return LocalTransactionState.ROLLBACK_MESSAGE_STATE
         elif self.always_UNKNOW_STATEn:
+            logger.info(f"事务 {transaction_id} 配置为总是未知状态")
             return LocalTransactionState.UNKNOW_STATE
         else:
             # 默认情况下基于消息体内容做简单判断
             try:
                 body_str = message.body.decode("utf-8")
+                logger.debug(f"事务 {transaction_id} 解析消息体: {body_str}")
+
                 if body_str.startswith("commit"):
+                    logger.info(f"事务 {transaction_id} 根据消息体内容决定提交")
                     return LocalTransactionState.COMMIT_MESSAGE_STATE
                 elif body_str.startswith("rollback"):
+                    logger.info(f"事务 {transaction_id} 根据消息体内容决定回滚")
                     return LocalTransactionState.ROLLBACK_MESSAGE_STATE
                 else:
+                    logger.info(
+                        f"事务 {transaction_id} 消息体内容无法识别，返回未知状态"
+                    )
                     return LocalTransactionState.UNKNOW_STATE
-            except Exception:
+            except Exception as e:
+                logger.error(f"事务 {transaction_id} 解析消息体失败: {e}")
                 return LocalTransactionState.ROLLBACK_MESSAGE_STATE
 
     def check_local_transaction(
         self, message: Message, transaction_id: str
     ) -> LocalTransactionState:
         """检查本地事务状态"""
+        logger.info(
+            f"回查本地事务状态，事务ID: {transaction_id}, 主题: {message.topic}"
+        )
+
         # 对于简单实现，回查时返回同样的逻辑
-        return self.execute_local_transaction(message, transaction_id)
+        state = self.execute_local_transaction(message, transaction_id)
+        logger.info(f"事务 {transaction_id} 回查结果: {state.name}")
+        return state
 
 
 @dataclass

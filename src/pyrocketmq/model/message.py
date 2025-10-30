@@ -628,6 +628,11 @@ def encode_batch(*messages: Message) -> Message:
     batch_msg.body = marshal_message_batch(*messages)
     batch_msg.batch = True
 
+    # unique key
+    msg_ids = [msg.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX) for msg in messages]
+    msg_ids = [msg_id for msg_id in msg_ids if msg_id is not None]
+    batch_msg.set_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ",".join(msg_ids))
+
     return batch_msg
 
 
