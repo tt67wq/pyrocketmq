@@ -43,7 +43,7 @@ def main():
     print("=== 事务消息Producer示例 ===")
 
     # 创建事务监听器
-    transaction_listener = SimpleTransactionListener(always_rollback=True)
+    transaction_listener = SimpleTransactionListener(always_unknow=True)
 
     # 创建事务Producer
     producer = create_transactional_producer(

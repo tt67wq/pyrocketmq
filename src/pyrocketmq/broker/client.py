@@ -17,6 +17,7 @@ from ..model import (
     MessageExt,
     MessageQueue,
     PullMessageResult,
+    RemotingCommand,
     SendMessageResult,
     transaction_state,
 )
@@ -85,9 +86,9 @@ class BrokerClient:
 
     def _process_send_response(
         self,
-        response,
+        response: RemotingCommand,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: dict[str, str] | None = None,
     ) -> SendMessageResult:
         """处理发送消息的响应结果（参考Go语言实现）
 
@@ -119,10 +120,6 @@ class BrokerClient:
 
         # 从响应扩展字段中提取信息
         ext_fields = response.ext_fields or {}
-        # print("***" * 10)
-        # print(properties)
-        # print(ext_fields)
-        # print("***" * 10)
 
         # 获取消息ID（从UNIQ_KEY属性或msgId字段）
         msg_id = ""
@@ -257,7 +254,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """单向发送消息（不等待响应）
@@ -316,7 +313,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """批量发送消息
@@ -407,7 +404,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """单向批量发送消息（不等待响应）

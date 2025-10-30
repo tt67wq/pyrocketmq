@@ -181,7 +181,10 @@ class TransactionProducer(Producer):
 
             # 4. 发送事务状态确认
             self._send_transaction_confirmation(
-                send_result, local_state, send_result.message_queue
+                send_result,
+                local_state,
+                send_result.message_queue,
+                transaction_id or "",
             )
 
             # 5. 构造事务发送结果
@@ -235,7 +238,7 @@ class TransactionProducer(Producer):
     ) -> None:
         """注册事务检查处理器，包含详细的错误处理"""
         try:
-            broker_remote.register_request_processor_lazy(
+            _ = broker_remote.register_request_processor_lazy(
                 self._transaction_check_code,
                 self._handle_transaction_check,
             )
@@ -401,6 +404,7 @@ class TransactionProducer(Producer):
         result: SendMessageResult,
         local_state: LocalTransactionState,
         message_queue: MessageQueue,
+        transaction_id: str,
     ) -> None:
         """发送事务状态确认
 
@@ -416,8 +420,6 @@ class TransactionProducer(Producer):
             msg_id = unmarshal_msg_id(result.msg_id)
         else:
             raise ValueError("Invalid message ID")
-
-        transaction_id = result.transaction_id or ""
 
         try:
             # 获取Broker地址
