@@ -32,9 +32,7 @@ class Remote:
     """同步远程通信类"""
 
     def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig):
-        self.transport: ConnectionStateMachine = ConnectionStateMachine(
-            transport_cfg
-        )
+        self.transport: ConnectionStateMachine = ConnectionStateMachine(transport_cfg)
         self.config = config
         self._logger = get_logger("remote.sync")
 
@@ -174,9 +172,7 @@ class Remote:
             raise ConnectionError("连接未建立")
 
         # 使用传入的超时或配置的超时
-        rpc_timeout = (
-            timeout if timeout is not None else self.config.rpc_timeout
-        )
+        rpc_timeout = timeout if timeout is not None else self.config.rpc_timeout
 
         # 生成opaque并设置为请求
         opaque = self._generate_opaque()
@@ -197,9 +193,7 @@ class Remote:
             data = self._serializer.serialize(command)
             self.transport.output(data)
 
-            self._logger.debug(
-                f"发送RPC请求: opaque={opaque}, code={command.code}"
-            )
+            self._logger.debug(f"发送RPC请求: opaque={opaque}, code={command.code}")
 
             # 等待响应
             if not event.wait(rpc_timeout):
@@ -212,9 +206,7 @@ class Remote:
             if response is None:
                 raise ProtocolError(f"未收到有效响应: opaque={opaque}")
 
-            self._logger.debug(
-                f"收到RPC响应: opaque={opaque}, code={response.code}"
-            )
+            self._logger.debug(f"收到RPC响应: opaque={opaque}, code={response.code}")
             return response
 
         except SerializationError:
@@ -254,9 +246,7 @@ class Remote:
             data = self._serializer.serialize(command)
             self.transport.output(data)
 
-            self._logger.debug(
-                f"发送单向消息: opaque={opaque}, code={command.code}"
-            )
+            self._logger.debug(f"发送单向消息: opaque={opaque}, code={command.code}")
         except SerializationError:
             raise
         except (ConnectionError, TransportError):
@@ -307,9 +297,7 @@ class Remote:
                 return response
             return None
 
-    def _set_waiter_response(
-        self, opaque: int, response: RemotingCommand
-    ) -> bool:
+    def _set_waiter_response(self, opaque: int, response: RemotingCommand) -> bool:
         """设置等待者的响应
 
         Returns:
@@ -367,9 +355,7 @@ class Remote:
                     event.set()
 
         if expired_opaques:
-            self._logger.warning(
-                f"清理了 {len(expired_opaques)} 个过期的等待者"
-            )
+            self._logger.warning(f"清理了 {len(expired_opaques)} 个过期的等待者")
 
     def __enter__(self):
         """上下文管理器入口"""
