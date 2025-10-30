@@ -634,9 +634,11 @@ class Producer:
         # 记录各任务的执行时间
         last_route_refresh_time = 0
         last_heartbeat_time = 0
+        loop_count = 0
 
         while not self._shutdown_event.wait(1.0):  # 每秒检查一次
             current_time = time.time()
+            loop_count += 1
 
             try:
                 # 检查是否需要刷新路由信息
@@ -644,8 +646,9 @@ class Producer:
                     current_time - last_route_refresh_time
                     >= self._config.update_topic_route_info_interval / 1000.0
                 ):
+                    logger.info(f"Refreshing routes (loop #{loop_count})")
                     self._refresh_all_routes()
-                    self._topic_mapping.clear_expired_routes()
+                    _ = self._topic_mapping.clear_expired_routes()
                     last_route_refresh_time = current_time
 
                 # 检查是否需要发送心跳
@@ -653,8 +656,18 @@ class Producer:
                     current_time - last_heartbeat_time
                     >= self._config.heartbeat_broker_interval / 1000.0
                 ):
-                    self.send_heartbeat_to_all_broker()
+                    logger.info(
+                        f"Sending heartbeat (loop #{loop_count}, {current_time - last_heartbeat_time:.1f}s since last heartbeat)"
+                    )
+                    self._send_heartbeat_to_all_broker()
                     last_heartbeat_time = current_time
+
+                # 每10次循环记录一次状态
+                if loop_count % 10 == 0:
+                    topics = list(self._topic_mapping.get_all_topics())
+                    logger.debug(
+                        f"Background task active (loop #{loop_count}, cached topics: {len(topics)})"
+                    )
 
             except Exception as e:
                 logger.error(f"Background task error: {e}")
@@ -774,9 +787,9 @@ class Producer:
             else:
                 logger.info("Background tasks stopped")
 
-    def send_heartbeat_to_all_broker(self) -> None:
+    def _send_heartbeat_to_all_broker(self) -> None:
         """向所有Broker发送心跳"""
-        logger.debug("!!!!!!!!!!!!!!!!!!!!!!!!Sending heartbeat to all brokers...")
+        logger.debug("Sending heartbeat to all brokers...")
 
         try:
             # 获取所有已知的Broker地址
@@ -827,7 +840,7 @@ class Producer:
                     logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
 
             if success_count > 0 or failed_count > 0:
-                logger.debug(
+                logger.info(
                     f"Heartbeat sent: {success_count} succeeded, {failed_count} failed"
                 )
 
@@ -869,7 +882,7 @@ class Producer:
             f"{failed_count} failed"
         )
 
-    def get_stats(self) -> dict:
+    def get_stats(self):
         """获取Producer统计信息
 
         Returns:

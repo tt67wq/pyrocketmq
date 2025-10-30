@@ -23,7 +23,7 @@ MVP版本功能:
 
 import asyncio
 import time
-from typing import Dict, Optional
+from typing import Dict
 
 # Local imports - broker
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
@@ -98,7 +98,7 @@ class AsyncProducer:
         >>> asyncio.run(main())
     """
 
-    def __init__(self, config: Optional[ProducerConfig] = None):
+    def __init__(self, config: ProducerConfig | None = None):
         """初始化AsyncProducer实例
 
         Args:
@@ -140,7 +140,7 @@ class AsyncProducer:
         )
 
         # 后台任务管理
-        self._background_task: Optional[asyncio.Task] = None
+        self._background_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
 
         logger.info(
@@ -636,6 +636,7 @@ class AsyncProducer:
         # 记录各任务的执行时间
         last_route_refresh_time = 0
         last_heartbeat_time = 0
+        loop_count = 0
 
         while not self._shutdown_event.is_set():
             try:
@@ -647,6 +648,7 @@ class AsyncProducer:
                 pass
 
             current_time = time.time()
+            loop_count += 1
 
             try:
                 # 检查是否需要刷新路由信息
@@ -654,8 +656,9 @@ class AsyncProducer:
                     current_time - last_route_refresh_time
                     >= self._config.update_topic_route_info_interval / 1000.0
                 ):
+                    logger.info(f"Async refreshing routes (loop #{loop_count})")
                     await self._refresh_all_routes()
-                    self._topic_mapping.clear_expired_routes()
+                    _ = self._topic_mapping.clear_expired_routes()
                     last_route_refresh_time = current_time
 
                 # 检查是否需要发送心跳
@@ -663,8 +666,18 @@ class AsyncProducer:
                     current_time - last_heartbeat_time
                     >= self._config.heartbeat_broker_interval / 1000.0
                 ):
-                    await self.send_heartbeat_to_all_broker_async()
+                    logger.info(
+                        f"Async sending heartbeat (loop #{loop_count}, {current_time - last_heartbeat_time:.1f}s since last heartbeat)"
+                    )
+                    await self._send_heartbeat_to_all_broker_async()
                     last_heartbeat_time = current_time
+
+                # 每10次循环记录一次状态
+                if loop_count % 10 == 0:
+                    topics = list(self._topic_mapping.get_all_topics())
+                    logger.debug(
+                        f"Async background task active (loop #{loop_count}, cached topics: {len(topics)})"
+                    )
 
             except Exception as e:
                 logger.error(f"Async background task error: {e}")
@@ -791,13 +804,13 @@ class AsyncProducer:
 
             logger.info("Async background tasks stopped")
 
-    async def send_heartbeat_to_all_broker_async(self) -> None:
+    async def _send_heartbeat_to_all_broker_async(self) -> None:
         """异步向所有Broker发送心跳"""
         logger.debug("Sending async heartbeat to all brokers...")
 
         try:
             # 获取所有已知的Broker地址
-            broker_addrs = set()
+            broker_addrs: set[str] = set()
             all_topics = self._topic_mapping.get_all_topics()
 
             for topic in all_topics:
@@ -848,8 +861,8 @@ class AsyncProducer:
                     logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
 
             if success_count > 0 or failed_count > 0:
-                logger.debug(
-                    f"Heartbeat sent: {success_count} succeeded, {failed_count} failed"
+                logger.info(
+                    f"Async heartbeat sent: {success_count} succeeded, {failed_count} failed"
                 )
 
         except Exception as e:
@@ -890,7 +903,7 @@ class AsyncProducer:
             f"{failed_count} failed"
         )
 
-    def get_stats(self) -> dict:
+    def get_stats(self):
         """获取Producer统计信息
 
         Returns:
