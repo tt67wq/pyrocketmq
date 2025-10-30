@@ -23,7 +23,7 @@ MVP版本功能:
 
 import threading
 import time
-from typing import Dict, Optional
+from typing import Dict
 
 # Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
@@ -31,11 +31,9 @@ from pyrocketmq.broker.client import BrokerClient
 
 # Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
-from pyrocketmq.model.enums import ResponseCode
 from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
-from pyrocketmq.model.nameserver_models import TopicRouteData
 
 # Local imports - nameserver
 from pyrocketmq.nameserver.client import SyncNameServerClient
@@ -98,7 +96,7 @@ class Producer:
         >>> producer.shutdown()
     """
 
-    def __init__(self, config: Optional[ProducerConfig] = None):
+    def __init__(self, config: ProducerConfig | None = None):
         """初始化Producer实例
 
         Args:
@@ -140,7 +138,7 @@ class Producer:
         )
 
         # 后台任务线程
-        self._background_thread: Optional[threading.Thread] = None
+        self._background_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
 
         logger.info(

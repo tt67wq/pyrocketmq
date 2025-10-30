@@ -56,7 +56,7 @@ def main():
     producer.start()
     print("事务Producer启动成功")
 
-    for _ in range(10):
+    while 1:
         try:
             message = Message(
                 topic="test_im_015",
@@ -70,8 +70,6 @@ def main():
             time.sleep(5)
         else:
             time.sleep(1)
-
-    time.sleep(600)
 
 
 if __name__ == "__main__":
