@@ -112,9 +112,7 @@ class AsyncProducer:
 
         # NameServer连接管理（仅用于路由查询）
         self._nameserver_connections: Dict[str, AsyncRemote] = {}
-        self._nameserver_addrs = self._parse_nameserver_addrs(
-            self._config.namesrv_addr
-        )
+        self._nameserver_addrs = self._parse_nameserver_addrs(self._config.namesrv_addr)
 
         # Broker管理器（使用异步连接池管理）
         transport_config = TransportConfig(
@@ -224,6 +222,9 @@ class AsyncProducer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
+        message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
         try:
             # 1. 验证消息
@@ -234,13 +235,9 @@ class AsyncProducer:
                 await self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                message.topic, message
-            )
+            routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}"
-                )
+                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
@@ -325,6 +322,9 @@ class AsyncProducer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
+            batch_message.set_property(
+                MessageProperty.PRODUCER_GROUP, self._config.producer_group
+            )
             logger.debug(
                 f"Encoded {len(messages)} messages into async batch message, "
                 f"batch size: {len(batch_message.body)} bytes"
@@ -387,9 +387,7 @@ class AsyncProducer:
             if isinstance(e, ProducerError):
                 raise
 
-            raise MessageSendError(
-                f"Async batch message send failed: {e}"
-            ) from e
+            raise MessageSendError(f"Async batch message send failed: {e}") from e
 
     async def oneway(self, message: Message) -> None:
         """异步单向发送消息
@@ -407,6 +405,9 @@ class AsyncProducer:
             MessageSendError: 当消息发送失败时
         """
         self._check_running()
+        message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
         try:
             # 1. 验证消息
@@ -417,13 +418,9 @@ class AsyncProducer:
                 await self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                message.topic, message
-            )
+            routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}"
-                )
+                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
@@ -463,9 +460,7 @@ class AsyncProducer:
             if isinstance(e, ProducerError):
                 raise
 
-            raise MessageSendError(
-                f"Async oneway message send failed: {e}"
-            ) from e
+            raise MessageSendError(f"Async oneway message send failed: {e}") from e
 
     async def oneway_batch(self, *messages: Message) -> None:
         """异步单向批量发送消息
@@ -509,6 +504,9 @@ class AsyncProducer:
 
             # 2. 将多个消息编码为批量消息
             batch_message = encode_batch(*messages)
+            batch_message.set_property(
+                MessageProperty.PRODUCER_GROUP, self._config.producer_group
+            )
             logger.debug(
                 f"Encoded {len(messages)} messages into batch message, "
                 f"batch size: {len(batch_message.body)} bytes"
@@ -686,9 +684,7 @@ class AsyncProducer:
             SendResult: 发送结果
         """
 
-        async with self._broker_manager.connection(
-            broker_addr
-        ) as broker_remote:
+        async with self._broker_manager.connection(broker_addr) as broker_remote:
             return await AsyncBrokerClient(broker_remote).async_send_message(
                 self._config.producer_group, message.body, message_queue
             )
@@ -705,9 +701,7 @@ class AsyncProducer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        async with self._broker_manager.connection(
-            broker_addr
-        ) as broker_remote:
+        async with self._broker_manager.connection(broker_addr) as broker_remote:
             await AsyncBrokerClient(broker_remote).async_oneway_message(
                 self._config.producer_group, message.body, message_queue
             )
@@ -728,12 +722,8 @@ class AsyncProducer:
         Returns:
             SendMessageResult: 发送结果
         """
-        async with self._broker_manager.connection(
-            broker_addr
-        ) as broker_remote:
-            return await AsyncBrokerClient(
-                broker_remote
-            ).async_batch_send_message(
+        async with self._broker_manager.connection(broker_addr) as broker_remote:
+            return await AsyncBrokerClient(broker_remote).async_batch_send_message(
                 self._config.producer_group, batch_message.body, message_queue
             )
 
@@ -752,9 +742,7 @@ class AsyncProducer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        async with self._broker_manager.connection(
-            broker_addr
-        ) as broker_remote:
+        async with self._broker_manager.connection(broker_addr) as broker_remote:
             await AsyncBrokerClient(broker_remote).async_batch_oneway_message(
                 self._config.producer_group, batch_message.body, message_queue
             )
@@ -846,9 +834,7 @@ class AsyncProducer:
 
                 except Exception as e:
                     failed_count += 1
-                    logger.debug(
-                        f"Failed to send heartbeat to {broker_addr}: {e}"
-                    )
+                    logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
 
             if success_count > 0 or failed_count > 0:
                 logger.debug(
@@ -882,9 +868,7 @@ class AsyncProducer:
                     )
                     failed_count += 1
             except Exception as e:
-                logger.error(
-                    f"Failed to close NameServer connection {addr}: {e}"
-                )
+                logger.error(f"Failed to close NameServer connection {addr}: {e}")
                 failed_count += 1
 
         # 清空连接字典
@@ -934,9 +918,7 @@ class AsyncProducer:
         for addr, remote in self._nameserver_connections.items():
             try:
                 # 创建获取路由信息的请求
-                request = RemotingRequestFactory.create_get_route_info_request(
-                    topic
-                )
+                request = RemotingRequestFactory.create_get_route_info_request(topic)
 
                 # 发送请求
                 response = await remote.rpc(
@@ -969,9 +951,7 @@ class AsyncProducer:
                     )
 
                     if success:
-                        logger.info(
-                            f"Route info updated for topic {topic} from {addr}"
-                        )
+                        logger.info(f"Route info updated for topic {topic} from {addr}")
 
                         return True
                     else:
