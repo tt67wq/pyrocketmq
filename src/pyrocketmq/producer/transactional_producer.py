@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple
+from typing import Any
 
 from pyrocketmq.broker.client import BrokerClient
 from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError
@@ -34,6 +34,8 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
 )
 from pyrocketmq.nameserver.client import SyncNameServerClient
+from pyrocketmq.producer.router import RoutingResult
+from pyrocketmq.remote.sync_remote import Remote
 
 from .producer import Producer
 from .transaction import (
@@ -97,7 +99,7 @@ class TransactionProducer(Producer):
     def __init__(
         self,
         config=None,
-        transaction_listener: Optional[TransactionListener] = None,
+        transaction_listener: TransactionListener | None = None,
     ):
         """初始化TransactionProducer
 
@@ -115,6 +117,8 @@ class TransactionProducer(Producer):
         # 事务相关的配置
         self._transaction_timeout = 60000  # 默认60秒超时
         self._max_check_times = 15  # 最大回查次数
+
+        self._failed_registrations: set[str] = set()
 
     def start(self) -> None:
         """启动TransactionProducer"""
@@ -147,11 +151,6 @@ class TransactionProducer(Producer):
                 "TransactionListener is required for transactional producer"
             )
 
-        message.set_property(MessageProperty.TRANSACTION_PREPARED, "true")
-        message.set_property(
-            MessageProperty.PRODUCER_GROUP, self._config.producer_group
-        )
-
         try:
             # 1. 发送带有事务标记的消息
             send_result = self._send_message_with_transaction_flag(message)
@@ -169,14 +168,16 @@ class TransactionProducer(Producer):
                     MessageProperty.TRANSACTION_ID, send_result.transaction_id
                 )
 
-            transaction_id: str = message.get_property(
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ""
+            transaction_id: str | None = message.get_property(
+                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
             )
             if transaction_id:
                 message.transaction_id = transaction_id
 
             # 3. 执行本地事务
-            local_state = self._execute_local_transaction(message, transaction_id, arg)
+            local_state = self._execute_local_transaction(
+                message, transaction_id or "", arg
+            )
 
             # 4. 发送事务状态确认
             self._send_transaction_confirmation(
@@ -200,7 +201,7 @@ class TransactionProducer(Producer):
                 topic=message.topic,
             )
 
-    def _prepare_message_routing(self, message: Message) -> tuple:
+    def _prepare_message_routing(self, message: Message) -> RoutingResult:
         """准备消息路由：验证消息、更新路由信息、选择队列"""
         # 1. 验证消息
         from .utils import validate_message
@@ -209,7 +210,7 @@ class TransactionProducer(Producer):
 
         # 2. 更新路由信息
         if message.topic not in self._topic_mapping.get_all_topics():
-            self.update_route_info(message.topic)
+            _ = self.update_route_info(message.topic)
 
         # 3. 获取路由结果
         routing_result = self._message_router.route_message(message.topic, message)
@@ -230,7 +231,7 @@ class TransactionProducer(Producer):
         return routing_result
 
     def _register_transaction_check_handler(
-        self, broker_remote, broker_addr: str
+        self, broker_remote: Remote, broker_addr: str
     ) -> None:
         """注册事务检查处理器，包含详细的错误处理"""
         try:
@@ -252,17 +253,22 @@ class TransactionProducer(Producer):
         except Exception as e:
             self._logger.error(f"注册事务检查处理器失败 {broker_addr}: {e}")
             # 事务检查处理器注册失败继续发送，但记录失败信息
-            if not hasattr(self, "_failed_registrations"):
-                self._failed_registrations = set()
             self._failed_registrations.add(broker_addr)
 
     def _send_to_broker(
-        self, broker_remote, message: Message, message_queue, broker_addr: str
+        self,
+        broker_remote: Remote,
+        message: Message,
+        message_queue: MessageQueue,
+        broker_addr: str,
     ) -> SendMessageResult:
         """发送消息到指定Broker"""
         try:
             result = BrokerClient(broker_remote).sync_send_message(
-                self._config.producer_group, message.body, message_queue
+                self._config.producer_group,
+                message.body,
+                message_queue,
+                message.properties,
             )
 
             if not result:
@@ -293,10 +299,21 @@ class TransactionProducer(Producer):
         """发送带有事务标记的消息，按需注册事务检查处理器"""
         self._check_running()
 
+        # 设置事务消息属性
+        message.set_property(MessageProperty.TRANSACTION_PREPARED, "true")
+        message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
+
         try:
             # 准备消息路由
             routing_result = self._prepare_message_routing(message)
             broker_addr = routing_result.broker_address
+            if not broker_addr:
+                raise BrokerNotAvailableError()
+
+            if not routing_result.message_queue:
+                raise QueueNotAvailableError(topic=message.topic)
 
             # 发送事务消息
             with self._broker_manager.connection(broker_addr) as broker_remote:
@@ -407,6 +424,8 @@ class TransactionProducer(Producer):
             broker_addr = self._get_broker_addr_by_name(
                 message_queue.broker_name, message_queue.topic
             )
+            if not broker_addr:
+                raise ValueError("Broker address not found")
 
             with self._broker_manager.connection(broker_addr) as broker_remote:
                 broker_client = BrokerClient(broker_remote)
@@ -447,7 +466,7 @@ class TransactionProducer(Producer):
                 )
 
     def _handle_transaction_check(
-        self, request: RemotingCommand, remote_addr: Tuple[str, int]
+        self, request: RemotingCommand, remote_addr: tuple[str, int]
     ) -> None:
         """处理Broker的事务状态检查请求
 
@@ -456,7 +475,7 @@ class TransactionProducer(Producer):
             remote_addr: Broker地址信息
 
         Returns:
-            Optional[RemotingCommand]: 检查结果响应
+            RemotingCommand | None: 检查结果响应
         """
         try:
             # 解析事务检查回调数据
@@ -527,7 +546,7 @@ class TransactionProducer(Producer):
 
     def _parse_original_message_from_request(
         self, request: RemotingCommand, addr: str
-    ) -> Optional[CheckTransactionStateCallback]:
+    ) -> CheckTransactionStateCallback | None:
         """从检查请求中解析原始消息
 
         Args:
@@ -535,7 +554,7 @@ class TransactionProducer(Producer):
             addr: notify的broker服务端地址
 
         Returns:
-            Optional[CheckTransactionStateCallback]: 解析出的事务状态检查回调数据
+            CheckTransactionStateCallback | None: 解析出的事务状态检查回调数据
         """
         try:
             # 解析请求头
@@ -585,8 +604,8 @@ class TransactionProducer(Producer):
         self._logger.info(f"设置最大回查次数: {max_times}")
 
     def _get_broker_addr_by_name(
-        self, broker_name: str, topic: Optional[str] = None
-    ) -> Optional[str]:
+        self, broker_name: str, topic: str | None = None
+    ) -> str | None:
         """根据broker名称查询broker地址
 
         通过查询NameServer获取指定broker名称的地址信息。
@@ -597,7 +616,7 @@ class TransactionProducer(Producer):
             topic: 可选的topic名称，用于缩小搜索范围
 
         Returns:
-            Optional[str]: 找到的broker地址，格式为"host:port"，未找到则返回None
+            str | None: 找到的broker地址，格式为"host:port"，未找到则返回None
 
         Raises:
             ProducerError: 当NameServer连接不可用或查询失败时抛出
@@ -649,7 +668,7 @@ class TransactionProducer(Producer):
         self._logger.warning(f"未找到broker {broker_name} 的地址信息")
         return None
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, int]:
         """获取TransactionProducer统计信息
 
         Returns:

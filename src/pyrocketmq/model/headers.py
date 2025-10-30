@@ -5,7 +5,6 @@ RocketMQ请求Header数据结构定义
 
 import time
 from dataclasses import dataclass
-from typing import Dict
 
 
 @dataclass
@@ -30,7 +29,7 @@ class SendMessageRequestHeader:
         if self.born_timestamp == 0:
             self.born_timestamp = int(time.time() * 1000)
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "producerGroup": self.producer_group,
@@ -71,7 +70,7 @@ class SendMessageRequestV2Header:
         if self.born_timestamp == 0:
             self.born_timestamp = int(time.time() * 1000)
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典 - 使用单字母字段名"""
         return {
             "a": self.producer_group,  # producerGroup
@@ -102,7 +101,7 @@ class EndTransactionRequestHeader:
     msg_id: str = ""
     transaction_id: str = ""
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "producerGroup": self.producer_group,
@@ -125,7 +124,7 @@ class CheckTransactionStateRequestHeader:
     transaction_id: str = ""
     offset_msg_id: str = ""
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "tranStateTableOffset": str(self.tran_state_table_offset),
@@ -136,14 +135,10 @@ class CheckTransactionStateRequestHeader:
         }
 
     @classmethod
-    def decode(
-        cls, properties: Dict[str, str]
-    ) -> "CheckTransactionStateRequestHeader":
+    def decode(cls, properties: dict[str, str]) -> "CheckTransactionStateRequestHeader":
         """从属性字典解码"""
         return cls(
-            tran_state_table_offset=int(
-                properties.get("tranStateTableOffset", 0)
-            ),
+            tran_state_table_offset=int(properties.get("tranStateTableOffset", 0)),
             commit_log_offset=int(properties.get("commitLogOffset", 0)),
             msg_id=properties.get("msgId", ""),
             transaction_id=properties.get("transactionId", ""),
@@ -163,7 +158,7 @@ class ConsumerSendMsgBackRequestHeader:
     unit_mode: bool = False
     max_reconsume_times: int = 16
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "group": self.group,
@@ -193,7 +188,7 @@ class PullMessageRequestHeader:
     expression_type: str = "TAG"
     support_compression_type: int = 0
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -217,7 +212,7 @@ class GetConsumerListRequestHeader:
 
     consumer_group: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -231,7 +226,7 @@ class GetMaxOffsetRequestHeader:
     topic: str
     queue_id: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -247,7 +242,7 @@ class QueryConsumerOffsetRequestHeader:
     topic: str
     queue_id: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -264,7 +259,7 @@ class SearchOffsetRequestHeader:
     queue_id: int
     timestamp: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -282,7 +277,7 @@ class UpdateConsumerOffsetRequestHeader:
     queue_id: int
     commit_offset: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -298,7 +293,7 @@ class GetRouteInfoRequestHeader:
 
     topic: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -312,7 +307,7 @@ class GetConsumerRunningInfoHeader:
     consumer_group: str
     client_id: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -320,9 +315,7 @@ class GetConsumerRunningInfoHeader:
         }
 
     @classmethod
-    def decode(
-        cls, properties: Dict[str, str]
-    ) -> "GetConsumerRunningInfoHeader":
+    def decode(cls, properties: dict[str, str]) -> "GetConsumerRunningInfoHeader":
         """从属性字典解码"""
         return cls(
             consumer_group=properties.get("consumerGroup", ""),
@@ -340,7 +333,7 @@ class QueryMessageRequestHeader:
     begin_timestamp: int
     end_timestamp: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -357,7 +350,7 @@ class ViewMessageRequestHeader:
 
     offset: int
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "offset": str(self.offset),
@@ -377,7 +370,7 @@ class CreateTopicRequestHeader:
     topic_sys_flag: int = 0
     order: bool = False
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -397,7 +390,7 @@ class TopicListRequestHeader:
 
     topic: str = ""
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -410,7 +403,7 @@ class DeleteTopicRequestHeader:
 
     topic: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -426,7 +419,7 @@ class ResetOffsetHeader:
     timestamp: int
     is_force: bool = False
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "topic": self.topic,
@@ -436,7 +429,7 @@ class ResetOffsetHeader:
         }
 
     @classmethod
-    def decode(cls, properties: Dict[str, str]) -> "ResetOffsetHeader":
+    def decode(cls, properties: dict[str, str]) -> "ResetOffsetHeader":
         """从属性字典解码"""
         return cls(
             topic=properties.get("topic", ""),
@@ -455,7 +448,7 @@ class ConsumeMessageDirectlyHeader:
     msg_id: str
     broker_name: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "consumerGroup": self.consumer_group,
@@ -465,9 +458,7 @@ class ConsumeMessageDirectlyHeader:
         }
 
     @classmethod
-    def decode(
-        cls, properties: Dict[str, str]
-    ) -> "ConsumeMessageDirectlyHeader":
+    def decode(cls, properties: dict[str, str]) -> "ConsumeMessageDirectlyHeader":
         """从属性字典解码"""
         return cls(
             consumer_group=properties.get("consumerGroup", ""),
@@ -483,7 +474,7 @@ class SaveOrGetMsgNoHeader:
 
     msg_no: str
 
-    def encode(self) -> Dict[str, str]:
+    def encode(self) -> dict[str, str]:
         """编码为字符串字典"""
         return {
             "msgNo": self.msg_no,

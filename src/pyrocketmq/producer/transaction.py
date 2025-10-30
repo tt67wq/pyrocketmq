@@ -47,9 +47,7 @@ class TransactionSendResult(SendMessageResult):
     继承SendMessageResult，添加事务相关的状态信息。
     """
 
-    local_transaction_state: Optional[LocalTransactionState] = (
-        None  # 本地事务状态
-    )
+    local_transaction_state: Optional[LocalTransactionState] = None  # 本地事务状态
     transaction_timeout: bool = False  # 是否事务超时
     check_times: int = 0  # 回查次数
 
@@ -63,24 +61,20 @@ class TransactionSendResult(SendMessageResult):
     def is_commit(self) -> bool:
         """检查是否为提交状态"""
         return (
-            self.local_transaction_state
-            == LocalTransactionState.COMMIT_MESSAGE_STATE
+            self.local_transaction_state == LocalTransactionState.COMMIT_MESSAGE_STATE
         )
 
     @property
     def is_rollback(self) -> bool:
         """检查是否为回滚状态"""
         return (
-            self.local_transaction_state
-            == LocalTransactionState.ROLLBACK_MESSAGE_STATE
+            self.local_transaction_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE
         )
 
     @property
     def is_UNKNOW_STATEn(self) -> bool:
         """检查是否为未知状态"""
-        return (
-            self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
-        )
+        return self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
@@ -169,26 +163,24 @@ class SimpleTransactionListener(TransactionListener):
         self,
         always_commit: bool = False,
         always_rollback: bool = False,
-        always_UNKNOW_STATEn: bool = False,
+        always_unknow: bool = False,
     ):
         """初始化简单事务监听器
 
         Args:
             always_commit: 总是返回COMMIT_MESSAGE_STATE
             always_rollback: 总是返回ROLLBACK_MESSAGE_STATE
-            always_UNKNOW_STATEn: 总是返回UNKNOW_STATE
+            always_unknow: 总是返回UNKNOW_STATE
         """
-        self.always_commit = always_commit
-        self.always_rollback = always_rollback
-        self.always_UNKNOW_STATEn = always_UNKNOW_STATEn
+        self.always_commit: bool = always_commit
+        self.always_rollback: bool = always_rollback
+        self.always_unknow: bool = always_unknow
 
     def execute_local_transaction(
-        self, message: Message, transaction_id: str, arg: Any = None
+        self, message: Message, transaction_id: str, arg: None = None
     ) -> LocalTransactionState:
         """执行本地事务"""
-        logger.info(
-            f"执行本地事务，事务ID: {transaction_id}, 主题: {message.topic}"
-        )
+        logger.info(f"执行本地事务，事务ID: {transaction_id}, 主题: {message.topic}")
 
         if self.always_commit:
             logger.info(f"事务 {transaction_id} 配置为总是提交")
@@ -196,7 +188,7 @@ class SimpleTransactionListener(TransactionListener):
         elif self.always_rollback:
             logger.info(f"事务 {transaction_id} 配置为总是回滚")
             return LocalTransactionState.ROLLBACK_MESSAGE_STATE
-        elif self.always_UNKNOW_STATEn:
+        elif self.always_unknow:
             logger.info(f"事务 {transaction_id} 配置为总是未知状态")
             return LocalTransactionState.UNKNOW_STATE
         else:

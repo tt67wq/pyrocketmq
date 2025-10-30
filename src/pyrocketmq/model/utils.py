@@ -3,8 +3,10 @@ RocketMQ模型层工具函数
 """
 
 import json
+import struct
 import time
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Dict, List, Optional, Final
 
 from .command import RemotingCommand
 from .enums import (
@@ -15,6 +17,22 @@ from .enums import (
     ResponseCode,
 )
 from .errors import ValidationError
+
+
+# ============================================================================
+# 唯一ID生成相关常量和变量
+# ============================================================================
+
+# ID前缀
+ID_PREFIX: Final[str] = "PYRMQ"
+
+# 起始时间戳（程序启动时记录）
+START_TIMESTAMP: Final[int] = int(time.time())
+
+# 全局变量用于ID生成
+_counter: int = 0
+_next_timestamp: int = 0
+_counter_lock: threading.Lock = threading.Lock()
 
 
 def validate_command(command: RemotingCommand) -> bool:
@@ -48,9 +66,7 @@ def validate_command(command: RemotingCommand) -> bool:
         raise ValidationError(f"无效的remark类型: {type(command.remark)}")
 
     if not isinstance(command.ext_fields, dict):
-        raise ValidationError(
-            f"无效的ext_fields类型: {type(command.ext_fields)}"
-        )
+        raise ValidationError(f"无效的ext_fields类型: {type(command.ext_fields)}")
 
     # 验证ext_fields中的值类型
     for key, value in command.ext_fields.items():
@@ -345,8 +361,7 @@ def command_to_dict(command: RemotingCommand) -> Dict[str, Any]:
         "remark": command.remark,
         "ext_fields": command.ext_fields,
         "body_size": len(command.body) if command.body else 0,
-        "body_preview": command.body[:100].decode("utf-8", errors="ignore")
-        + "..."
+        "body_preview": command.body[:100].decode("utf-8", errors="ignore") + "..."
         if command.body and len(command.body) > 100
         else command.body.decode("utf-8", errors="ignore")
         if command.body
@@ -354,9 +369,7 @@ def command_to_dict(command: RemotingCommand) -> Dict[str, Any]:
     }
 
 
-def commands_to_json(
-    commands: List[RemotingCommand], indent: Optional[int] = 2
-) -> str:
+def commands_to_json(commands: List[RemotingCommand], indent: Optional[int] = 2) -> str:
     """将命令列表转换为JSON格式
 
     Args:
@@ -481,3 +494,119 @@ def transaction_state(state: LocalTransactionState) -> int:
         return TRANSACTION_NOT_TYPE
     else:
         return TRANSACTION_NOT_TYPE
+
+
+# ============================================================================
+# 唯一ID生成相关函数
+# ============================================================================
+
+
+def _update_timestamp() -> None:
+    """更新时间戳记录"""
+    global _next_timestamp
+    _next_timestamp = int(time.time())
+
+
+def create_uniq_id() -> str:
+    """
+    创建唯一ID
+
+    参考Go实现逻辑：
+    1. 检查时间戳是否需要更新
+    2. 增加计数器
+    3. 将时间差和计数器转换为字节数组
+    4. 编码为十六进制字符串并添加前缀
+
+    Returns:
+        str: 格式为 "PYRMQ" + 十六进制编码的唯一ID
+    """
+    global _counter, _next_timestamp
+
+    with _counter_lock:
+        current_time = int(time.time())
+
+        # 如果当前时间超过了记录的时间戳，更新时间戳
+        if current_time > _next_timestamp:
+            _update_timestamp()
+
+        # 增加计数器
+        _counter += 1
+
+        # 计算时间差（毫秒）
+        time_diff_ms = (current_time - START_TIMESTAMP) * 1000
+
+        # 使用struct打包数据（大端序）
+        # int32时间差 + int32计数器 = 8字节
+        buf = struct.pack(">ii", time_diff_ms, _counter)
+
+        # 编码为十六进制字符串
+        hex_str = buf.hex()
+
+        # 返回带前缀的唯一ID
+        return f"{ID_PREFIX}{hex_str}"
+
+
+def parse_uniq_id(uniq_id: str) -> tuple[int, int] | None:
+    """
+    解析唯一ID，提取时间戳和计数器信息
+
+    Args:
+        uniq_id: 唯一ID字符串
+
+    Returns:
+        tuple[int, int] | None: (时间差毫秒, 计数器) 的元组，解析失败返回None
+    """
+    if not uniq_id.startswith(ID_PREFIX):
+        return None
+
+    try:
+        # 移除前缀
+        hex_part = uniq_id[len(ID_PREFIX) :]
+
+        # 确保hex字符串长度正确（16进制，8字节=16字符）
+        if len(hex_part) != 16:
+            return None
+
+        # 将十六进制字符串转换为字节
+        buf = bytes.fromhex(hex_part)
+
+        # 解包数据（大端序）
+        time_diff_ms, counter = struct.unpack(">ii", buf)
+
+        return time_diff_ms, counter
+
+    except (ValueError, struct.error):
+        return None
+
+
+def get_timestamp_from_uniq_id(uniq_id: str) -> int | None:
+    """
+    从唯一ID中提取时间戳
+
+    Args:
+        uniq_id: 唯一ID字符串
+
+    Returns:
+        int | None: Unix时间戳，解析失败返回None
+    """
+    result = parse_uniq_id(uniq_id)
+    if result is None:
+        return None
+
+    time_diff_ms, _ = result
+
+    # 转换为秒并加上起始时间戳
+    return START_TIMESTAMP + (time_diff_ms // 1000)
+
+
+def is_valid_uniq_id(uniq_id: str) -> bool:
+    """
+    验证唯一ID格式是否有效
+
+    Args:
+        uniq_id: 待验证的唯一ID
+
+    Returns:
+        bool: 是否有效
+    """
+    return parse_uniq_id(uniq_id) is not None

@@ -66,9 +66,7 @@ class BrokerClient:
     def disconnect(self) -> None:
         """断开连接"""
         try:
-            logger.info(
-                f"Disconnecting from Broker, client_id: {self._client_id}"
-            )
+            logger.info(f"Disconnecting from Broker, client_id: {self._client_id}")
             self.remote.close()
             logger.info("Disconnected from Broker successfully")
         except Exception as e:
@@ -132,9 +130,7 @@ class BrokerClient:
             properties
             and MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX in properties
         ):
-            msg_id = properties[
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
-            ]
+            msg_id = properties[MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX]
 
         # 获取区域ID和Trace开关
         region_id = ext_fields.get(MessageProperty.MSG_REGION, "DefaultRegion")
@@ -176,7 +172,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """发送消息
@@ -224,9 +220,7 @@ class BrokerClient:
             if response.code != ResponseCode.SUCCESS:
                 error_msg = f"Send message failed with code {response.code}"
                 if response.language and response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -256,9 +250,7 @@ class BrokerClient:
                 raise
 
             logger.error(f"Unexpected error during send_message: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during send_message: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during send_message: {e}")
 
     def oneway_send_message(
         self,
@@ -464,9 +456,7 @@ class BrokerClient:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(
-                f"Unexpected error during oneway_batch_send_message: {e}"
-            )
+            logger.error(f"Unexpected error during oneway_batch_send_message: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during oneway_batch_send_message: {e}"
             )
@@ -554,9 +544,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.PULL_NOT_FOUND:
                 # 没有找到消息
-                logger.info(
-                    f"No messages found in topic={topic}, queueId={queue_id}"
-                )
+                logger.info(f"No messages found in topic={topic}, queueId={queue_id}")
                 return PullMessageResult(
                     messages=[],
                     next_begin_offset=queue_offset,
@@ -589,9 +577,7 @@ class BrokerClient:
 
             else:
                 # 其他错误响应
-                error_msg = (
-                    response.remark or f"Unknown pull error: {response.code}"
-                )
+                error_msg = response.remark or f"Unknown pull error: {response.code}"
                 logger.error(f"Pull message failed: {error_msg}")
                 raise BrokerResponseError(
                     f"Pull message failed: {error_msg}",
@@ -649,12 +635,10 @@ class BrokerClient:
             )
 
             # 创建查询消费者偏移量请求
-            request = (
-                RemotingRequestFactory.create_query_consumer_offset_request(
-                    consumer_group=consumer_group,
-                    topic=topic,
-                    queue_id=queue_id,
-                )
+            request = RemotingRequestFactory.create_query_consumer_offset_request(
+                consumer_group=consumer_group,
+                topic=topic,
+                queue_id=queue_id,
             )
 
             # 发送请求并获取响应
@@ -679,9 +663,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -737,8 +719,7 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown query offset error: {response.code}"
+                    response.remark or f"Unknown query offset error: {response.code}"
                 )
                 logger.error(f"Query consumer offset failed: {error_msg}")
                 raise BrokerResponseError(
@@ -794,13 +775,11 @@ class BrokerClient:
             )
 
             # 创建更新消费者偏移量请求（使用oneway模式）
-            request = (
-                RemotingRequestFactory.create_update_consumer_offset_request(
-                    consumer_group=consumer_group,
-                    topic=topic,
-                    queue_id=queue_id,
-                    commit_offset=commit_offset,
-                )
+            request = RemotingRequestFactory.create_update_consumer_offset_request(
+                consumer_group=consumer_group,
+                topic=topic,
+                queue_id=queue_id,
+                commit_offset=commit_offset,
             )
 
             # 发送oneway请求，不等待响应
@@ -884,9 +863,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -941,8 +918,7 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown search offset error: {response.code}"
+                    response.remark or f"Unknown search offset error: {response.code}"
                 )
                 logger.error(f"Search offset by timestamp failed: {error_msg}")
                 raise BrokerResponseError(
@@ -962,9 +938,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
-                f"Unexpected error during search_offset_by_timestamp: {e}"
-            )
+            logger.error(f"Unexpected error during search_offset_by_timestamp: {e}")
             raise OffsetError(
                 f"Unexpected error during search_offset_by_timestamp: {e}",
                 topic=topic,
@@ -991,9 +965,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
-                f"Getting max offset: topic={topic}, queueId={queue_id}"
-            )
+            logger.debug(f"Getting max offset: topic={topic}, queueId={queue_id}")
 
             # 创建获取最大偏移量请求
             request = RemotingRequestFactory.create_get_max_offset_request(
@@ -1023,9 +995,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -1034,8 +1004,7 @@ class BrokerClient:
                 else:
                     # 响应成功但没有offset字段
                     logger.error(
-                        f"No offset field found for topic={topic}, "
-                        f"queueId={queue_id}"
+                        f"No offset field found for topic={topic}, queueId={queue_id}"
                     )
                     raise OffsetError(
                         f"No offset field found in response: topic={topic}, "
@@ -1072,8 +1041,7 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown get max offset error: {response.code}"
+                    response.remark or f"Unknown get max offset error: {response.code}"
                 )
                 logger.error(f"Get max offset failed: {error_msg}")
                 raise BrokerResponseError(
@@ -1122,9 +1090,7 @@ class BrokerClient:
             )
 
             # 创建心跳请求
-            request = RemotingRequestFactory.create_heartbeat_request(
-                heartbeat_data
-            )
+            request = RemotingRequestFactory.create_heartbeat_request(heartbeat_data)
 
             # 发送请求并获取响应
             start_time = time.time()
@@ -1163,8 +1129,7 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown heartbeat error: {response.code}"
+                    response.remark or f"Unknown heartbeat error: {response.code}"
                 )
                 logger.error(f"Heartbeat failed: {error_msg}")
                 raise BrokerResponseError(
@@ -1184,9 +1149,7 @@ class BrokerClient:
                 raise
 
             logger.error(f"Unexpected error during send_heartbeat: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during send_heartbeat: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during send_heartbeat: {e}")
 
     def consumer_send_msg_back(
         self,
@@ -1219,15 +1182,13 @@ class BrokerClient:
             )
 
             # 创建消费者发送消息回退请求
-            request = (
-                RemotingRequestFactory.create_consumer_send_msg_back_request(
-                    group=consumer_group,
-                    offset=message_ext.commit_log_offset or 0,
-                    delay_level=delay_level,
-                    origin_msg_id=message_ext.msg_id or "",
-                    origin_topic=message_ext.topic,
-                    max_reconsume_times=max_reconsume_times,
-                )
+            request = RemotingRequestFactory.create_consumer_send_msg_back_request(
+                group=consumer_group,
+                offset=message_ext.commit_log_offset or 0,
+                delay_level=delay_level,
+                origin_msg_id=message_ext.msg_id or "",
+                origin_topic=message_ext.topic,
+                max_reconsume_times=max_reconsume_times,
             )
 
             # 发送请求并获取响应
@@ -1325,8 +1286,7 @@ class BrokerClient:
 
             action = (
                 "commit"
-                if local_transaction_state
-                == LocalTransactionState.COMMIT_MESSAGE_STATE
+                if local_transaction_state == LocalTransactionState.COMMIT_MESSAGE_STATE
                 else "rollback"
                 if local_transaction_state
                 == LocalTransactionState.ROLLBACK_MESSAGE_STATE
@@ -1372,9 +1332,7 @@ class BrokerClient:
                 raise
 
             logger.error(f"Unexpected error during end_transaction: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during end_transaction: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
     def get_consumers_by_group(self, consumer_group: str) -> list:
         """获取指定消费者组的消费者列表
@@ -1417,9 +1375,7 @@ class BrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的消费者列表通常是JSON格式
-                        consumer_data = json.loads(
-                            response.body.decode("utf-8")
-                        )
+                        consumer_data = json.loads(response.body.decode("utf-8"))
 
                         # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
                         if (
@@ -1443,9 +1399,7 @@ class BrokerClient:
                         return consumer_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
-                            f"Failed to parse consumer list response: {e}"
-                        )
+                        logger.error(f"Failed to parse consumer list response: {e}")
                         # 如果解析失败，返回空列表而不是抛出异常
                         logger.warning(
                             "Returning empty consumer list due to parsing failure"
@@ -1558,9 +1512,7 @@ class BrokerClient:
                         return locked_queue_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
-                            f"Failed to parse lock batch response: {e}"
-                        )
+                        logger.error(f"Failed to parse lock batch response: {e}")
                         raise BrokerResponseError(
                             f"Failed to parse lock batch response: {e}",
                             response_code=response.code,
@@ -1588,13 +1540,9 @@ class BrokerClient:
                 raise
 
             logger.error(f"Unexpected error during lock_batch_mq: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during lock_batch_mq: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during lock_batch_mq: {e}")
 
-    def unlock_batch_mq(
-        self, consumer_group: str, client_id: str, mqs: list
-    ) -> None:
+    def unlock_batch_mq(self, consumer_group: str, client_id: str, mqs: list) -> None:
         """批量解锁消息队列
 
         Args:
@@ -1656,9 +1604,7 @@ class BrokerClient:
                 raise
 
             logger.error(f"Unexpected error during unlock_batch_mq: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during unlock_batch_mq: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during unlock_batch_mq: {e}")
 
 
 def create_broker_client(
@@ -1686,9 +1632,7 @@ def create_broker_client(
     remote_config = RemoteConfig(rpc_timeout=timeout)
 
     # 创建同步远程通信实例
-    remote = create_sync_remote(
-        f"{host}:{port}", remote_config, transport_config
-    )
+    remote = create_sync_remote(f"{host}:{port}", remote_config, transport_config)
 
     # 创建并返回Broker客户端
     return BrokerClient(remote=remote, timeout=timeout)

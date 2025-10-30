@@ -698,7 +698,10 @@ class AsyncProducer:
 
         async with self._broker_manager.connection(broker_addr) as broker_remote:
             return await AsyncBrokerClient(broker_remote).async_send_message(
-                self._config.producer_group, message.body, message_queue
+                self._config.producer_group,
+                message.body,
+                message_queue,
+                message.properties,
             )
 
     async def _send_message_to_broker_oneway_async(

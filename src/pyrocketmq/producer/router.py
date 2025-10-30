@@ -15,12 +15,11 @@ MVP版本功能:
 版本: MVP 1.0
 """
 
-from sys import flags
 import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from pyrocketmq.broker.broker_manager import BrokerState
 from pyrocketmq.logging import get_logger
@@ -158,12 +157,12 @@ class RoutingResult:
     """路由结果"""
 
     success: bool
-    message_queue: Optional[MessageQueue] = None
-    broker_data: Optional[BrokerData] = None
-    broker_address: Optional[str] = None
-    error: Optional[Exception] = None
+    message_queue: MessageQueue | None = None
+    broker_data: BrokerData | None = None
+    broker_address: str | None = None
+    error: Exception | None = None
     retry_count: int = 0
-    routing_strategy: Optional[RoutingStrategy] = None
+    routing_strategy: RoutingStrategy | None = None
 
     def __post_init__(self):
         if self.success and (not self.message_queue or not self.broker_data):
@@ -171,7 +170,7 @@ class RoutingResult:
                 "Successful routing must have message_queue and broker_data"
             )
 
-    def get_broker_name(self) -> Optional[str]:
+    def get_broker_name(self) -> str | None:
         """获取Broker名称"""
         return self.broker_data.broker_name if self.broker_data else None
 
@@ -222,8 +221,8 @@ class MessageRouter:
     def route_message(
         self,
         topic: str,
-        message: Optional[Message] = None,
-        strategy: Optional[RoutingStrategy] = None,
+        message: Message | None = None,
+        strategy: RoutingStrategy | None = None,
     ) -> RoutingResult:
         """
         为消息进行路由决策
@@ -324,7 +323,7 @@ class MessageRouter:
     def report_routing_result(
         self,
         result: RoutingResult,
-        latency_ms: Optional[float] = None,
+        latency_ms: float | None = None,
     ) -> None:
         """
         报告路由结果（用于性能监控和故障检测）
@@ -364,7 +363,7 @@ class MessageRouter:
         self,
         broker_name: str,
         error: Exception,
-        broker_data: Optional[BrokerData] = None,
+        broker_data: BrokerData | None = None,
     ) -> None:
         """
         报告路由失败（用于故障检测）

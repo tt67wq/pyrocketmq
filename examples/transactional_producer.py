@@ -43,7 +43,7 @@ def main():
     print("=== 事务消息Producer示例 ===")
 
     # 创建事务监听器
-    transaction_listener = SimpleTransactionListener(always_commit=True)
+    transaction_listener = SimpleTransactionListener(always_rollback=True)
 
     # 创建事务Producer
     producer = create_transactional_producer(
@@ -56,11 +56,11 @@ def main():
     producer.start()
     print("事务Producer启动成功")
 
-    while True:
+    for _ in range(10):
         try:
             message = Message(
                 topic="test_im_015",
-                body=b"Hello, RocketMQ From Python's Transactional Producer!",
+                body=b"Hello, RocketMQ From Python's Transactional Producer",
             )
 
             ret = producer.send_message_in_transaction(message)
@@ -70,6 +70,8 @@ def main():
             time.sleep(5)
         else:
             time.sleep(1)
+
+    time.sleep(600)
 
 
 if __name__ == "__main__":

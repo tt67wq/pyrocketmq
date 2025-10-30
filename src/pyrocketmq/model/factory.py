@@ -5,7 +5,6 @@ RocketMQ远程命令工厂和构建器
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from pyrocketmq.model.message_queue import MessageQueue
 
@@ -16,14 +15,13 @@ from .enums import (
     LanguageCode,
     RequestCode,
 )
-from .headers import (
+from pyrocketmq.model.headers import (
     CheckTransactionStateRequestHeader,
     ConsumeMessageDirectlyHeader,
     ConsumerSendMsgBackRequestHeader,
     CreateTopicRequestHeader,
     DeleteTopicRequestHeader,
     EndTransactionRequestHeader,
-    GetConsumerListRequestHeader,
     GetConsumerRunningInfoHeader,
     GetMaxOffsetRequestHeader,
     GetRouteInfoRequestHeader,
@@ -37,6 +35,7 @@ from .headers import (
     SendMessageRequestV2Header,
     UpdateConsumerOffsetRequestHeader,
     ViewMessageRequestHeader,
+    GetConsumerListRequestHeader,
 )
 from .heart_beat import HeartbeatData
 from .message import Message, MessageProperty
@@ -54,9 +53,9 @@ class RemotingCommandBuilder:
     version: int = 1
     opaque: int = 0
     flag: int = 0
-    remark: Optional[str] = None
-    ext_fields: Dict[str, str] = field(default_factory=dict)
-    body: Optional[bytes] = None
+    remark: str | None = None
+    ext_fields: dict[str, str] = field(default_factory=dict)
+    body: bytes | None = None
 
     def build(self) -> RemotingCommand:
         """构建命令对象
@@ -160,9 +159,7 @@ class RemotingCommandBuilder:
         self.ext_fields[key] = value
         return self
 
-    def with_ext_fields(
-        self, ext_fields: Dict[str, str]
-    ) -> "RemotingCommandBuilder":
+    def with_ext_fields(self, ext_fields: dict[str, str]) -> "RemotingCommandBuilder":
         """批量添加扩展字段
 
         Args:
@@ -360,7 +357,7 @@ class RemotingRequestFactory:
         topic: str,
         body: bytes,
         queue_id: int = 0,
-        properties: Optional[Dict[str, str]] = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> RemotingCommand:
         """创建发送消息请求
@@ -388,9 +385,7 @@ class RemotingRequestFactory:
         sys_flag = 0
         if properties and MessageProperty.TRANSACTION_PREPARED in properties:
             # 检查事务准备标志
-            tran_msg_value = properties.get(
-                MessageProperty.TRANSACTION_PREPARED, ""
-            )
+            tran_msg_value = properties.get(MessageProperty.TRANSACTION_PREPARED, "")
             if tran_msg_value.lower() == "true":
                 sys_flag |= TRANSACTION_PREPARED_TYPE
 
@@ -418,7 +413,7 @@ class RemotingRequestFactory:
         topic: str,
         body: bytes,
         queue_id: int = 0,
-        properties: Optional[Dict[str, str]] = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> RemotingCommand:
         """创建发送消息V2请求（使用单字母字段名）
@@ -446,9 +441,7 @@ class RemotingRequestFactory:
         sys_flag = 0
         if properties and MessageProperty.TRANSACTION_PREPARED in properties:
             # 检查事务准备标志
-            tran_msg_value = properties.get(
-                MessageProperty.TRANSACTION_PREPARED, ""
-            )
+            tran_msg_value = properties.get(MessageProperty.TRANSACTION_PREPARED, "")
             if tran_msg_value.lower() == "true":
                 sys_flag |= TRANSACTION_PREPARED_TYPE
 
@@ -530,9 +523,7 @@ class RemotingRequestFactory:
         )
 
     @staticmethod
-    def create_get_max_offset_request(
-        topic: str, queue_id: int
-    ) -> RemotingCommand:
+    def create_get_max_offset_request(topic: str, queue_id: int) -> RemotingCommand:
         """创建获取最大偏移量请求
 
         Args:
@@ -963,7 +954,7 @@ class RemotingRequestFactory:
         topic: str,
         body: bytes,
         queue_id: int = 0,
-        properties: Optional[Dict[str, str]] = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> RemotingCommand:
         """创建发送批量消息请求
@@ -1044,7 +1035,7 @@ class RemotingRequestFactory:
 
     @staticmethod
     def create_lock_batch_mq_request(
-        consumer_group: str, client_id: str, mqs: List[MessageQueue]
+        consumer_group: str, client_id: str, mqs: list[MessageQueue]
     ) -> RemotingCommand:
         """创建批量锁定消息队列请求
 
@@ -1075,7 +1066,7 @@ class RemotingRequestFactory:
 
     @staticmethod
     def create_unlock_batch_mq_request(
-        consumer_group: str, client_id: str, mqs: List[MessageQueue]
+        consumer_group: str, client_id: str, mqs: list[MessageQueue]
     ) -> RemotingCommand:
         """创建批量解锁消息队列请求
 

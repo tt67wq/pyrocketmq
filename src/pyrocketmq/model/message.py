@@ -5,7 +5,8 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
+from pyrocketmq.model.utils import create_uniq_id
 
 from .message_queue import MessageQueue
 
@@ -25,15 +26,15 @@ class Message:
     topic: str  # 主题名称
     body: bytes  # 消息体
     flag: int = 0  # 消息标志
-    transaction_id: Optional[str] = None  # 事务ID
+    transaction_id: str | None = None  # 事务ID
     batch: bool = False  # 是否为批量消息
     compress: bool = False  # 是否压缩
 
     # 消息队列（可选）
-    queue: Optional[MessageQueue] = None  # 指定的消息队列
+    queue: MessageQueue | None = None  # 指定的消息队列
 
     # 消息属性
-    properties: Dict[str, str] = field(default_factory=dict)  # 消息属性字典
+    properties: dict[str, str] = field(default_factory=dict)  # 消息属性字典
 
     def __post_init__(self):
         """后处理，确保数据类型正确"""
@@ -47,10 +48,14 @@ class Message:
         if self.properties is None:
             self.properties = {}
 
+        # 设置unique_id
+        if not self.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX):
+            self.set_property(
+                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, create_uniq_id()
+            )
+
     # 属性管理便利方法
-    def get_property(
-        self, key: str, default: Optional[str] = None
-    ) -> Optional[str]:
+    def get_property(self, key: str, default: str | None = None) -> str | None:
         """获取消息属性
 
         Args:
@@ -71,7 +76,7 @@ class Message:
         """
         self.properties[key] = value
 
-    def remove_property(self, key: str) -> Optional[str]:
+    def remove_property(self, key: str) -> str | None:
         """移除消息属性
 
         Args:
@@ -97,7 +102,7 @@ class Message:
         """清空所有消息属性"""
         self.properties.clear()
 
-    def get_property_keys(self) -> List[str]:
+    def get_property_keys(self) -> list[str]:
         """获取所有属性键
 
         Returns:
@@ -124,9 +129,7 @@ class Message:
         parts = []
         for key, value in self.properties.items():
             # 添加键值对，格式为 key + 分隔符 + value + 属性分隔符
-            parts.append(
-                f"{key}{NAME_VALUE_SEPARATOR}{value}{PROPERTY_SEPARATOR}"
-            )
+            parts.append(f"{key}{NAME_VALUE_SEPARATOR}{value}{PROPERTY_SEPARATOR}")
 
         # 将所有部分连接成字符串
         return "".join(parts)
@@ -163,7 +166,7 @@ class Message:
                 self.properties[key] = value
 
     # 标签和键的便利方法
-    def get_tags(self) -> Optional[str]:
+    def get_tags(self) -> str | None:
         """获取消息标签
 
         Returns:
@@ -179,7 +182,7 @@ class Message:
         """
         self.set_property("TAGS", tags)
 
-    def get_keys(self) -> Optional[str]:
+    def get_keys(self) -> str | None:
         """获取消息键
 
         Returns:
@@ -227,7 +230,7 @@ class Message:
         self.set_property("DELAY", str(level))
 
     # 重试消息便利方法
-    def get_retry_topic(self) -> Optional[str]:
+    def get_retry_topic(self) -> str | None:
         """获取重试主题
 
         Returns:
@@ -265,7 +268,7 @@ class Message:
         self.set_property("TRAN_MSG", "true")
 
     # 序列化方法
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式
 
         Returns:
@@ -297,7 +300,7 @@ class Message:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Message":
+    def from_dict(cls, data: dict[str, Any]) -> "Message":
         """从字典创建消息实例
 
         Args:
@@ -420,9 +423,7 @@ class Message:
         properties_bytes = properties_str.encode("utf-8")
 
         # 计算存储大小：TOTALSIZE + MAGICCODE + BODYCRC + FLAG + BODYSIZE + BODY + PROPERTYSIZE + PROPERTY
-        store_size = (
-            4 + 4 + 4 + 4 + 4 + len(self.body) + 2 + len(properties_bytes)
-        )
+        store_size = 4 + 4 + 4 + 4 + 4 + len(self.body) + 2 + len(properties_bytes)
 
         # 创建缓冲区
         buffer = bytearray(store_size)
@@ -480,9 +481,9 @@ class Message:
 def create_message(
     topic: str,
     body: Any,
-    tags: Optional[str] = None,
-    keys: Optional[str] = None,
-    properties: Optional[Dict[str, str]] = None,
+    tags: str | None = None,
+    keys: str | None = None,
+    properties: dict[str, str] | None = None,
 ) -> Message:
     """创建消息的便利函数
 
@@ -513,9 +514,9 @@ def create_transaction_message(
     topic: str,
     body: Any,
     transaction_id: str,
-    tags: Optional[str] = None,
-    keys: Optional[str] = None,
-    properties: Optional[Dict[str, str]] = None,
+    tags: str | None = None,
+    keys: str | None = None,
+    properties: dict[str, str] | None = None,
 ) -> Message:
     """创建事务消息的便利函数
 
@@ -540,9 +541,9 @@ def create_delay_message(
     topic: str,
     body: Any,
     delay_level: int,
-    tags: Optional[str] = None,
-    keys: Optional[str] = None,
-    properties: Optional[Dict[str, str]] = None,
+    tags: str | None = None,
+    keys: str | None = None,
+    properties: dict[str, str] | None = None,
 ) -> Message:
     """创建延时消息的便利函数
 
@@ -629,9 +630,14 @@ def encode_batch(*messages: Message) -> Message:
     batch_msg.batch = True
 
     # unique key
-    msg_ids = [msg.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX) for msg in messages]
+    msg_ids = [
+        msg.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX)
+        for msg in messages
+    ]
     msg_ids = [msg_id for msg_id in msg_ids if msg_id is not None]
-    batch_msg.set_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ",".join(msg_ids))
+    batch_msg.set_property(
+        MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ",".join(msg_ids)
+    )
 
     return batch_msg
 
