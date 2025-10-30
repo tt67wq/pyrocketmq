@@ -6,7 +6,7 @@
 import struct
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Any
 
 from pyrocketmq.model.message_queue import MessageQueue
 
@@ -29,28 +29,26 @@ class MessageExt(Message):
     """
 
     # 系统属性
-    msg_id: Optional[str] = None  # 消息ID
-    offset_msg_id: Optional[str] = None  # 偏移消息ID
-    store_size: Optional[int] = None  # 存储大小
-    queue_offset: Optional[int] = None  # 队列偏移量
+    msg_id: str | None = None  # 消息ID
+    offset_msg_id: str | None = None  # 偏移消息ID
+    store_size: int | None = None  # 存储大小
+    queue_offset: int | None = None  # 队列偏移量
     sys_flag: int = 0  # 系统标志
-    born_timestamp: Optional[int] = None  # 生产时间戳
-    born_host: Optional[str] = None  # 生产主机
-    store_timestamp: Optional[int] = None  # 存储时间戳
-    store_host: Optional[str] = None  # 存储主机
-    commit_log_offset: Optional[int] = None  # 提交日志偏移量
-    body_crc: Optional[int] = None  # 消息体CRC32校验码
+    born_timestamp: int | None = None  # 生产时间戳
+    born_host: str | None = None  # 生产主机
+    store_timestamp: int | None = None  # 存储时间戳
+    store_host: str | None = None  # 存储主机
+    commit_log_offset: int | None = None  # 提交日志偏移量
+    body_crc: int | None = None  # 消息体CRC32校验码
     reconsume_times: int = 0  # 重新消费次数
-    prepared_transaction_offset: Optional[int] = None  # 预提交事务偏移量
+    prepared_transaction_offset: int | None = None  # 预提交事务偏移量
 
     def __post_init__(self):
         """后处理，确保类型正确"""
         if self.born_timestamp is None:
             self.born_timestamp = int(time.time() * 1000)
 
-    def get_property(
-        self, key: str, default: Optional[str] = None
-    ) -> Optional[str]:
+    def get_property(self, key: str, default: str | None = None) -> str | None:
         """获取用户属性"""
         return self.properties.get(key, default)
 
@@ -63,7 +61,7 @@ class MessageExt(Message):
         return key in self.properties
 
     @classmethod
-    def from_dict(cls, data: dict) -> "MessageExt":
+    def from_dict(cls, data: dict[str, Any]) -> "MessageExt":
         """从字典创建MessageExt对象"""
         return cls(
             topic=data.get("topic", ""),
@@ -112,7 +110,7 @@ class MessageExt(Message):
         # 1. total size (4 bytes)
         store_size = struct.unpack(">I", buf[0:4])[0]
         pos += 4
-        if len(data) < pos + store_size:
+        if len(data) + 4 < pos + store_size:
             raise ValueError(
                 f"Data too short to contain complete message: expected {store_size}, available {len(data) - pos}"
             )
@@ -162,9 +160,7 @@ class MessageExt(Message):
 
         # 转换IP地址为字符串
         if sys_flag & MessageSysFlag.BORN_HOST_V6:
-            ip_parts = [
-                str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)
-            ]
+            ip_parts = [str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)]
             born_host = ":".join(
                 [
                     ip_parts[0] + ip_parts[1],
@@ -175,9 +171,7 @@ class MessageExt(Message):
             )
         else:
             ip_parts = struct.unpack(">BBBB", host_bytes)
-            born_host = (
-                f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
-            )
+            born_host = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
         born_host += f":{port}"
 
         # 11. store timestamp (8 bytes)
@@ -198,9 +192,7 @@ class MessageExt(Message):
 
         # 转换IP地址为字符串
         if sys_flag & MessageSysFlag.STORE_HOST_V6:
-            ip_parts = [
-                str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)
-            ]
+            ip_parts = [str(x) for x in struct.unpack(">" + "H" * 8, host_bytes)]
             store_host = ":".join(
                 [
                     ip_parts[0] + ip_parts[1],
@@ -211,9 +203,7 @@ class MessageExt(Message):
             )
         else:
             ip_parts = struct.unpack(">BBBB", host_bytes)
-            store_host = (
-                f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
-            )
+            store_host = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
         store_host += f":{port}"
 
         # 13. reconsume times (4 bytes)
@@ -221,9 +211,7 @@ class MessageExt(Message):
         pos += 4
 
         # 14. prepared transaction offset (8 bytes)
-        prepared_transaction_offset = struct.unpack(">q", data[pos : pos + 8])[
-            0
-        ]
+        prepared_transaction_offset = struct.unpack(">q", data[pos : pos + 8])[0]
         pos += 8
 
         # 15. body (4 bytes length + body bytes)
