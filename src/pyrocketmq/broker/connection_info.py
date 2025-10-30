@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List
 
 from pyrocketmq.remote.async_remote import AsyncRemote
 
@@ -23,12 +23,10 @@ class BrokerConnectionInfo:
     """Broker连接信息"""
 
     broker_addr: str  # Broker地址
-    broker_name: Optional[str] = ""  # Broker名称
-    connections: List[AsyncRemote] = field(default_factory=list)  # 连接池
+    broker_name: str | None = ""  # Broker名称
+    connections: list[AsyncRemote] = field(default_factory=list)  # 连接池
     state: BrokerState = BrokerState.UNKNOWN  # 当前状态
-    last_health_check: float = field(
-        default_factory=time.time
-    )  # 最后健康检查时间
+    last_health_check: float = field(default_factory=time.time)  # 最后健康检查时间
     consecutive_failures: int = 0  # 连续失败次数
     total_requests: int = 0  # 总请求数
     failed_requests: int = 0  # 失败请求数
@@ -48,9 +46,7 @@ class BrokerConnectionInfo:
         """计算成功率"""
         if self.total_requests == 0:
             return 1.0
-        return (
-            self.total_requests - self.failed_requests
-        ) / self.total_requests
+        return (self.total_requests - self.failed_requests) / self.total_requests
 
     @property
     def failure_rate(self) -> float:

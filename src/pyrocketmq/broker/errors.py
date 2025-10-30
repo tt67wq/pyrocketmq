@@ -3,15 +3,13 @@ Broker 模块异常定义
 定义与 RocketMQ Broker 交互时可能出现的各种异常类型。
 """
 
-from typing import Optional
-
 from ..remote.errors import RemoteError
 
 
 class BrokerError(RemoteError):
     """Broker 基础异常"""
 
-    def __init__(self, message: str, error_code: Optional[int] = None):
+    def __init__(self, message: str, error_code: int | None = None):
         """初始化Broker异常
 
         Args:
@@ -25,7 +23,7 @@ class BrokerError(RemoteError):
 class BrokerConnectionError(BrokerError):
     """Broker 连接错误"""
 
-    def __init__(self, message: str, broker_address: Optional[str] = None):
+    def __init__(self, message: str, broker_address: str | None = None):
         """初始化连接错误
 
         Args:
@@ -39,7 +37,7 @@ class BrokerConnectionError(BrokerError):
 class BrokerTimeoutError(BrokerError):
     """Broker 超时错误"""
 
-    def __init__(self, message: str, timeout: Optional[float] = None):
+    def __init__(self, message: str, timeout: float | None = None):
         """初始化超时错误
 
         Args:
@@ -53,7 +51,7 @@ class BrokerTimeoutError(BrokerError):
 class BrokerResponseError(BrokerError):
     """Broker 响应错误"""
 
-    def __init__(self, message: str, response_code: Optional[int] = None):
+    def __init__(self, message: str, response_code: int | None = None):
         """初始化响应错误
 
         Args:
@@ -82,8 +80,8 @@ class AuthorizationError(BrokerError):
     def __init__(
         self,
         message: str,
-        operation: Optional[str] = None,
-        resource: Optional[str] = None,
+        operation: str | None = None,
+        resource: str | None = None,
     ):
         """初始化授权错误
 
@@ -100,7 +98,7 @@ class AuthorizationError(BrokerError):
 class BrokerBusyError(BrokerError):
     """Broker 繁忙异常"""
 
-    def __init__(self, message: str, broker_address: Optional[str] = None):
+    def __init__(self, message: str, broker_address: str | None = None):
         """初始化Broker繁忙错误
 
         Args:
@@ -117,9 +115,9 @@ class MessagePullError(BrokerError):
     def __init__(
         self,
         message: str,
-        topic: Optional[str] = None,
-        queue_id: Optional[int] = None,
-        pull_offset: Optional[int] = None,
+        topic: str | None = None,
+        queue_id: int | None = None,
+        pull_offset: int | None = None,
     ):
         """初始化消息拉取错误
 
@@ -141,9 +139,9 @@ class OffsetError(BrokerError):
     def __init__(
         self,
         message: str,
-        topic: Optional[str] = None,
-        queue_id: Optional[int] = None,
-        offset: Optional[int] = None,
+        topic: str | None = None,
+        queue_id: int | None = None,
+        offset: int | None = None,
     ):
         """初始化偏移量错误
 
@@ -162,7 +160,7 @@ class OffsetError(BrokerError):
 class BrokerSystemError(BrokerError):
     """Broker 系统异常"""
 
-    def __init__(self, message: str, error_code: Optional[int] = None):
+    def __init__(self, message: str, error_code: int | None = None):
         """初始化Broker系统错误
 
         Args:

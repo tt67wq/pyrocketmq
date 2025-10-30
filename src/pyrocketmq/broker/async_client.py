@@ -5,7 +5,7 @@
 
 import json
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
@@ -64,9 +64,7 @@ class AsyncBrokerClient:
     async def disconnect(self) -> None:
         """断开连接"""
         try:
-            logger.info(
-                f"Disconnecting from Broker, client_id: {self._client_id}"
-            )
+            logger.info(f"Disconnecting from Broker, client_id: {self._client_id}")
             await self.remote.close()
             logger.info("Disconnected from Broker successfully")
         except Exception as e:
@@ -87,7 +85,7 @@ class AsyncBrokerClient:
         self,
         response,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
     ) -> SendMessageResult:
         """处理发送消息的响应结果（参考Go语言实现）
 
@@ -126,9 +124,7 @@ class AsyncBrokerClient:
             properties
             and MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX in properties
         ):
-            msg_id = properties[
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
-            ]
+            msg_id = properties[MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX]
 
         # 获取区域ID和Trace开关
         region_id = ext_fields.get(MessageProperty.MSG_REGION, "DefaultRegion")
@@ -170,7 +166,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """异步发送消息
@@ -218,9 +214,7 @@ class AsyncBrokerClient:
             if response.code != ResponseCode.SUCCESS:
                 error_msg = f"Send message failed with code {response.code}"
                 if response.language and response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -250,16 +244,14 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during send_message: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during send_message: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during send_message: {e}")
 
     async def async_oneway_message(
         self,
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """异步单向发送消息（不等待响应）
@@ -318,7 +310,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """异步批量发送消息
@@ -364,21 +356,15 @@ class AsyncBrokerClient:
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:
-                error_msg = (
-                    f"Send batch message failed with code {response.code}"
-                )
+                error_msg = f"Send batch message failed with code {response.code}"
                 if response.language and response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
             # 解析响应体为SendMessageResult
             if not response.body:
-                raise BrokerResponseError(
-                    "Empty response body for send batch message"
-                )
+                raise BrokerResponseError("Empty response body for send batch message")
 
             try:
                 result = self._process_send_response(response, mq, properties)
@@ -415,7 +401,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Optional[Dict[str, str]] = None,
+        properties: Dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """异步单向批量发送消息（不等待响应）
@@ -464,9 +450,7 @@ class AsyncBrokerClient:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(
-                f"Unexpected error during async_batch_oneway_message: {e}"
-            )
+            logger.error(f"Unexpected error during async_batch_oneway_message: {e}")
             raise BrokerResponseError(
                 f"Unexpected error during async_batch_oneway_message: {e}"
             )
@@ -554,9 +538,7 @@ class AsyncBrokerClient:
 
             elif response.code == ResponseCode.PULL_NOT_FOUND:
                 # 没有找到消息
-                logger.info(
-                    f"No messages found in topic={topic}, queueId={queue_id}"
-                )
+                logger.info(f"No messages found in topic={topic}, queueId={queue_id}")
                 return PullMessageResult(
                     messages=[],
                     next_begin_offset=queue_offset,
@@ -577,15 +559,11 @@ class AsyncBrokerClient:
                 logger.warning(
                     f"Pull retry immediately for topic={topic}, queueId={queue_id}"
                 )
-                raise MessagePullError(
-                    f"Pull retry immediately: {response.remark}"
-                )
+                raise MessagePullError(f"Pull retry immediately: {response.remark}")
 
             else:
                 # 其他错误响应
-                error_msg = (
-                    response.remark or f"Unknown pull error: {response.code}"
-                )
+                error_msg = response.remark or f"Unknown pull error: {response.code}"
                 logger.error(f"Pull message failed: {error_msg}")
                 raise BrokerResponseError(f"Pull message failed: {error_msg}")
 
@@ -636,12 +614,10 @@ class AsyncBrokerClient:
             )
 
             # 创建查询消费者偏移量请求
-            request = (
-                RemotingRequestFactory.create_query_consumer_offset_request(
-                    consumer_group=consumer_group,
-                    topic=topic,
-                    queue_id=queue_id,
-                )
+            request = RemotingRequestFactory.create_query_consumer_offset_request(
+                consumer_group=consumer_group,
+                topic=topic,
+                queue_id=queue_id,
             )
 
             # 发送请求并获取响应
@@ -666,9 +642,7 @@ class AsyncBrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}"
                         )
@@ -700,9 +674,7 @@ class AsyncBrokerClient:
                 # 通用错误，可能包括消费者组不存在、系统错误、权限错误等
                 error_msg = response.remark or "General error"
                 logger.error(f"Query consumer offset error: {error_msg}")
-                raise BrokerResponseError(
-                    f"Query consumer offset error: {error_msg}"
-                )
+                raise BrokerResponseError(f"Query consumer offset error: {error_msg}")
 
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
@@ -713,13 +685,10 @@ class AsyncBrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown query offset error: {response.code}"
+                    response.remark or f"Unknown query offset error: {response.code}"
                 )
                 logger.error(f"Query consumer offset failed: {error_msg}")
-                raise BrokerResponseError(
-                    f"Query consumer offset failed: {error_msg}"
-                )
+                raise BrokerResponseError(f"Query consumer offset failed: {error_msg}")
 
         except Exception as e:
             if isinstance(
@@ -734,9 +703,7 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during query_consumer_offset: {e}")
-            raise OffsetError(
-                f"Unexpected error during query_consumer_offset: {e}"
-            )
+            raise OffsetError(f"Unexpected error during query_consumer_offset: {e}")
 
     async def update_consumer_offset(
         self,
@@ -767,13 +734,11 @@ class AsyncBrokerClient:
             )
 
             # 创建更新消费者偏移量请求（使用oneway模式）
-            request = (
-                RemotingRequestFactory.create_update_consumer_offset_request(
-                    consumer_group=consumer_group,
-                    topic=topic,
-                    queue_id=queue_id,
-                    commit_offset=commit_offset,
-                )
+            request = RemotingRequestFactory.create_update_consumer_offset_request(
+                consumer_group=consumer_group,
+                topic=topic,
+                queue_id=queue_id,
+                commit_offset=commit_offset,
             )
 
             # 发送oneway请求，不等待响应
@@ -857,9 +822,7 @@ class AsyncBrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -907,8 +870,7 @@ class AsyncBrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown search offset error: {response.code}"
+                    response.remark or f"Unknown search offset error: {response.code}"
                 )
                 logger.error(f"Search offset by timestamp failed: {error_msg}")
                 raise BrokerResponseError(
@@ -927,9 +889,7 @@ class AsyncBrokerClient:
             ):
                 raise
 
-            logger.error(
-                f"Unexpected error during search_offset_by_timestamp: {e}"
-            )
+            logger.error(f"Unexpected error during search_offset_by_timestamp: {e}")
             raise OffsetError(
                 f"Unexpected error during search_offset_by_timestamp: {e}",
                 topic=topic,
@@ -956,9 +916,7 @@ class AsyncBrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
-                f"Getting max offset: topic={topic}, queueId={queue_id}"
-            )
+            logger.debug(f"Getting max offset: topic={topic}, queueId={queue_id}")
 
             # 创建获取最大偏移量请求
             request = RemotingRequestFactory.create_get_max_offset_request(
@@ -988,9 +946,7 @@ class AsyncBrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
-                            f"Failed to parse offset from ext_fields: {e}"
-                        )
+                        logger.error(f"Failed to parse offset from ext_fields: {e}")
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -999,8 +955,7 @@ class AsyncBrokerClient:
                 else:
                     # 响应成功但没有offset字段
                     logger.error(
-                        f"No offset field found for topic={topic}, "
-                        f"queueId={queue_id}"
+                        f"No offset field found for topic={topic}, queueId={queue_id}"
                     )
                     raise OffsetError(
                         f"No offset field found in response: topic={topic}, "
@@ -1028,8 +983,7 @@ class AsyncBrokerClient:
             else:
                 # 其他错误响应
                 error_msg = (
-                    response.remark
-                    or f"Unknown get max offset error: {response.code}"
+                    response.remark or f"Unknown get max offset error: {response.code}"
                 )
                 logger.error(f"Get max offset failed: {error_msg}")
                 raise BrokerResponseError(f"Get max offset failed: {error_msg}")
@@ -1073,9 +1027,7 @@ class AsyncBrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
-                f"Sending heartbeat: clientID={heartbeat_data.client_id}"
-            )
+            logger.debug(f"Sending heartbeat: clientID={heartbeat_data.client_id}")
 
             # 创建心跳请求
             request = RemotingRequestFactory.create_heartbeat_request(
@@ -1090,9 +1042,7 @@ class AsyncBrokerClient:
             if response.code != ResponseCode.SUCCESS:
                 error_msg = f"Send heartbeat failed with code {response.code}"
                 if response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -1112,9 +1062,7 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during send_heartbeat: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during send_heartbeat: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during send_heartbeat: {e}")
 
     async def consumer_send_msg_back(
         self,
@@ -1148,14 +1096,12 @@ class AsyncBrokerClient:
             )
 
             # 创建消费者发送消息回退请求
-            request = (
-                RemotingRequestFactory.create_consumer_send_msg_back_request(
-                    message=message,
-                    consumer_group=consumer_group,
-                    delay_level=delay_level,
-                    max_consume_retry_times=max_consume_retry_times,
-                    **kwargs,
-                )
+            request = RemotingRequestFactory.create_consumer_send_msg_back_request(
+                message=message,
+                consumer_group=consumer_group,
+                delay_level=delay_level,
+                max_consume_retry_times=max_consume_retry_times,
+                **kwargs,
             )
 
             # 发送请求并获取响应
@@ -1163,11 +1109,11 @@ class AsyncBrokerClient:
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:
-                error_msg = f"Consumer send message back failed with code {response.code}"
+                error_msg = (
+                    f"Consumer send message back failed with code {response.code}"
+                )
                 if response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -1198,8 +1144,8 @@ class AsyncBrokerClient:
         tran_state_table_offset: int,
         commit_log_offset: int,
         commit_or_rollback: int,
-        msg_id: Optional[str] = None,
-        transaction_id: Optional[str] = None,
+        msg_id: str | None = None,
+        transaction_id: str | None = None,
         **kwargs,
     ) -> None:
         """异步结束事务
@@ -1247,9 +1193,7 @@ class AsyncBrokerClient:
             if response.code != ResponseCode.SUCCESS:
                 error_msg = f"End transaction failed with code {response.code}"
                 if response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -1270,9 +1214,7 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during end_transaction: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during end_transaction: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
     async def get_consumers_by_group(self, consumer_group: str) -> list:
         """异步获取指定消费者组的消费者列表
@@ -1315,9 +1257,7 @@ class AsyncBrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的消费者列表通常是JSON格式
-                        consumer_data = json.loads(
-                            response.body.decode("utf-8")
-                        )
+                        consumer_data = json.loads(response.body.decode("utf-8"))
 
                         # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
                         if (
@@ -1341,9 +1281,7 @@ class AsyncBrokerClient:
                         return consumer_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
-                            f"Failed to parse consumer list response: {e}"
-                        )
+                        logger.error(f"Failed to parse consumer list response: {e}")
                         # 如果解析失败，返回空列表而不是抛出异常
                         logger.warning(
                             "Returning empty consumer list due to parsing failure"
@@ -1376,7 +1314,7 @@ class AsyncBrokerClient:
             )
 
     async def lock_batch_mq(
-        self, consumer_group: str, client_id: str, mqs: List[MessageQueue]
+        self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
     ) -> list:
         """异步批量锁定消息队列
 
@@ -1456,9 +1394,7 @@ class AsyncBrokerClient:
                         return locked_queue_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
-                            f"Failed to parse lock batch response: {e}"
-                        )
+                        logger.error(f"Failed to parse lock batch response: {e}")
                         raise BrokerResponseError(
                             f"Failed to parse lock batch response: {e}"
                         )
@@ -1485,15 +1421,13 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during lock_batch_mq: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during lock_batch_mq: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during lock_batch_mq: {e}")
 
     async def unlock_batch_mq(
         self,
         consumer_group: str,
         client_id: str,
-        mqs: List[MessageQueue],
+        mqs: list[MessageQueue],
     ) -> None:
         """异步批量解锁消息队列
 
@@ -1528,11 +1462,11 @@ class AsyncBrokerClient:
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:
-                error_msg = f"Unlock batch message queues failed with code {response.code}"
+                error_msg = (
+                    f"Unlock batch message queues failed with code {response.code}"
+                )
                 if response.body:
-                    error_msg += (
-                        f": {response.body.decode('utf-8', errors='ignore')}"
-                    )
+                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
@@ -1553,9 +1487,7 @@ class AsyncBrokerClient:
                 raise
 
             logger.error(f"Unexpected error during unlock_batch_mq: {e}")
-            raise BrokerResponseError(
-                f"Unexpected error during unlock_batch_mq: {e}"
-            )
+            raise BrokerResponseError(f"Unexpected error during unlock_batch_mq: {e}")
 
 
 def create_async_broker_client(
@@ -1583,9 +1515,7 @@ def create_async_broker_client(
     remote_config = RemoteConfig(rpc_timeout=timeout)
 
     # 创建异步远程通信实例
-    remote = create_async_remote(
-        f"{host}:{port}", remote_config, transport_config
-    )
+    remote = create_async_remote(f"{host}:{port}", remote_config, transport_config)
 
     # 创建并返回异步Broker客户端
     return AsyncBrokerClient(remote=remote, timeout=timeout)

@@ -254,7 +254,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """单向发送消息（不等待响应）
@@ -313,7 +313,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """批量发送消息

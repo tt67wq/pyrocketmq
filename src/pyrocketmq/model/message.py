@@ -38,12 +38,6 @@ class Message:
 
     def __post_init__(self):
         """后处理，确保数据类型正确"""
-        if not isinstance(self.body, bytes):
-            if isinstance(self.body, str):
-                self.body = self.body.encode("utf-8")
-            else:
-                self.body = str(self.body).encode("utf-8")
-
         # 确保properties是字典
         if self.properties is None:
             self.properties = {}
@@ -621,23 +615,11 @@ def encode_batch(*messages: Message) -> Message:
         topic=first_msg.topic,
         body=b"",  # 将在下面设置
         queue=first_msg.queue,
-        flag=first_msg.flag,
-        transaction_id=first_msg.transaction_id,
     )
 
     # 编码批量消息体
     batch_msg.body = marshal_message_batch(*messages)
     batch_msg.batch = True
-
-    # unique key
-    msg_ids = [
-        msg.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX)
-        for msg in messages
-    ]
-    msg_ids = [msg_id for msg_id in msg_ids if msg_id is not None]
-    batch_msg.set_property(
-        MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ",".join(msg_ids)
-    )
 
     return batch_msg
 

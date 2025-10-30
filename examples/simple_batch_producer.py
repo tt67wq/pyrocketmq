@@ -28,7 +28,7 @@ from pyrocketmq.producer import create_producer
 from pyrocketmq.producer.errors import ProducerError
 
 
-def create_batch_messages(count: int = 5) -> list:
+def create_batch_messages(count: int = 5) -> list[Message]:
     """创建批量测试消息
 
     Args:
@@ -37,82 +37,27 @@ def create_batch_messages(count: int = 5) -> list:
     Returns:
         消息列表
     """
-    messages = []
+    messages: list[Message] = []
     for i in range(count):
         message = Message(
             topic="test_im_015",
             body=f"Batch message {i + 1} - {time.strftime('%H:%M:%S')}".encode(),
         )
-        # 设置消息属性
-        message.set_property("KEYS", f"batch_key_{i + 1}")
-        message.set_property("BATCH_ID", f"batch_{int(time.time())}")
-        message.set_tags("batch_tag")
-
         messages.append(message)
 
     return messages
 
 
-def demonstrate_batch_features():
-    """演示批量消息功能"""
-    print("=== 批量消息功能演示 ===\n")
-
-    # 创建测试消息
-    messages = create_batch_messages(3)
-
-    print(f"创建了 {len(messages)} 个消息:")
-    for i, msg in enumerate(messages):
-        print(
-            f"  消息 {i + 1}: topic={msg.topic}, body_size={len(msg.body)}, keys={msg.get_property('KEYS')}"
-        )
-
-    print("\n--- Producer.send_batch() 功能说明 ---")
-    print("✅ 新的批量发送方法支持:")
-    print("  - 自动将多个消息编码为批量消息")
-    print("  - 主题一致性验证")
-    print("  - 高效的网络传输")
-    print("  - 详细的错误处理和统计")
-    print("  - 支持同步和异步发送")
-
-    print("\n--- 使用示例 ---")
-    print("```python")
-    print("# 同步Producer")
-    print("producer = create_producer('group', 'nameserver:9876')")
-    print("producer.start()")
-    print("")
-    print("# 创建多个消息")
-    print("msg1 = Message(topic='test', body=b'message1')")
-    print("msg2 = Message(topic='test', body=b'message2')")
-    print("")
-    print("# 批量发送")
-    print("result = producer.send_batch(msg1, msg2)")
-    print("")
-    print("# 异步Producer")
-    print(
-        "async_producer = await create_async_producer('group', 'nameserver:9876')"
-    )
-    print("await async_producer.start()")
-    print("result = await async_producer.send_batch(msg1, msg2)")
-    print("```")
-
-    print("\n批量发送演示完成!\n")
-
-
 def main():
     """主函数"""
     # 设置日志
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
+    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG"))
 
     print("=== 简单批量消息Producer示例 ===\n")
 
-    # 演示批量消息功能
-    demonstrate_batch_features()
-
     # 创建Producer
     print("=== 开始Producer发送测试 ===")
-    producer = create_producer(
-        "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
-    )
+    producer = create_producer("GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110")
 
     # 批量发送测试
     batch_count = 0
@@ -127,9 +72,7 @@ def main():
                 # 创建批量消息
                 messages = create_batch_messages(5)
 
-                print(
-                    f"\n发送第 {batch_count + 1} 批消息 ({len(messages)} 个消息):"
-                )
+                print(f"\n发送第 {batch_count + 1} 批消息 ({len(messages)} 个消息):")
                 start_time = time.time()
 
                 # 使用新的send_batch方法直接发送
@@ -137,7 +80,7 @@ def main():
 
                 send_time = time.time() - start_time
                 print(f"  ✅ 批量发送成功! 耗时: {send_time:.3f}s")
-                print(f"  消息ID: {result.message_id if result else 'N/A'}")
+                print(f"  消息ID: {result.msg_id if result else 'N/A'}")
 
                 batch_count += 1
 

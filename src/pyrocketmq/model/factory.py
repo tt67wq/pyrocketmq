@@ -978,10 +978,19 @@ class RemotingRequestFactory:
         # 使用Message的marshall_properties方法序列化properties
         properties_str = temp_message.marshall_properties()
 
-        header = SendMessageRequestHeader(
+        # 处理事务消息的sys_flag
+        sys_flag = 0
+        if properties and MessageProperty.TRANSACTION_PREPARED in properties:
+            # 检查事务准备标志
+            tran_msg_value = properties.get(MessageProperty.TRANSACTION_PREPARED, "")
+            if tran_msg_value.lower() == "true":
+                sys_flag |= TRANSACTION_PREPARED_TYPE
+
+        header = SendMessageRequestV2Header(
             producer_group=producer_group,
             topic=topic,
             queue_id=queue_id,
+            sys_flag=sys_flag,
             properties=properties_str,
             batch=True,
             **kwargs,

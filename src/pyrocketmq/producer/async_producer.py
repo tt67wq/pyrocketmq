@@ -717,6 +717,7 @@ class AsyncProducer:
                 message.body,
                 message_queue,
                 message.properties,
+                flag=message.flag,
             )
 
     async def _send_message_to_broker_oneway_async(
@@ -733,7 +734,11 @@ class AsyncProducer:
         """
         async with self._broker_manager.connection(broker_addr) as broker_remote:
             await AsyncBrokerClient(broker_remote).async_oneway_message(
-                self._config.producer_group, message.body, message_queue
+                self._config.producer_group,
+                message.body,
+                message_queue,
+                message.properties,
+                flag=message.flag,
             )
 
     async def _batch_send_message_to_broker_async(
@@ -754,7 +759,11 @@ class AsyncProducer:
         """
         async with self._broker_manager.connection(broker_addr) as broker_remote:
             return await AsyncBrokerClient(broker_remote).async_batch_send_message(
-                self._config.producer_group, batch_message.body, message_queue
+                self._config.producer_group,
+                batch_message.body,
+                message_queue,
+                batch_message.properties,
+                flag=batch_message.flag,
             )
 
     async def _batch_send_message_to_broker_oneway_async(
@@ -774,7 +783,11 @@ class AsyncProducer:
         """
         async with self._broker_manager.connection(broker_addr) as broker_remote:
             await AsyncBrokerClient(broker_remote).async_batch_oneway_message(
-                self._config.producer_group, batch_message.body, message_queue
+                self._config.producer_group,
+                batch_message.body,
+                message_queue,
+                batch_message.properties,
+                flag=batch_message.flag,
             )
 
     def _check_running(self) -> None:

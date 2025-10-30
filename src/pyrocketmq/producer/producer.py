@@ -342,7 +342,7 @@ class Producer:
 
             # 3. 更新路由信息
             if batch_message.topic not in self._topic_mapping.get_all_topics():
-                self.update_route_info(batch_message.topic)
+                _ = self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
             routing_result = self._message_router.route_message(
@@ -705,6 +705,7 @@ class Producer:
                 message.body,
                 message_queue,
                 message.properties,
+                flag=message.flag,
             )
 
     def _send_message_to_broker_oneway(
@@ -722,7 +723,11 @@ class Producer:
 
         with self._broker_manager.connection(broker_addr) as broker_remote:
             BrokerClient(broker_remote).oneway_send_message(
-                self._config.producer_group, message.body, message_queue
+                self._config.producer_group,
+                message.body,
+                message_queue,
+                message.properties,
+                flag=message.flag,
             )
 
     def _batch_send_message_to_broker(
@@ -743,7 +748,11 @@ class Producer:
         """
         with self._broker_manager.connection(broker_addr) as broker_remote:
             return BrokerClient(broker_remote).sync_batch_send_message(
-                self._config.producer_group, batch_message.body, message_queue
+                self._config.producer_group,
+                batch_message.body,
+                message_queue,
+                batch_message.properties,
+                flag=batch_message.flag,
             )
 
     def _batch_send_message_to_broker_oneway(
@@ -763,7 +772,11 @@ class Producer:
         """
         with self._broker_manager.connection(broker_addr) as broker_remote:
             BrokerClient(broker_remote).oneway_batch_send_message(
-                self._config.producer_group, batch_message.body, message_queue
+                self._config.producer_group,
+                batch_message.body,
+                message_queue,
+                properties=batch_message.properties,
+                flag=batch_message.flag,
             )
 
     def _check_running(self) -> None:

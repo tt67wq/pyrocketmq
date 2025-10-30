@@ -1,7 +1,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
 from pyrocketmq.logging import get_logger
@@ -46,7 +46,7 @@ class AsyncBrokerConnectionPool:
         self._logger = get_logger(f"broker.pool.{broker_name}")
 
         # 连接池状态
-        self._connections: List[AsyncRemote] = []
+        self._connections: list[AsyncRemote] = []
         self._available_connections: asyncio.Queue = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._closed = False
@@ -86,9 +86,7 @@ class AsyncBrokerConnectionPool:
                 return connection
             else:
                 # 连接已断开，销毁并继续尝试
-                self._logger.warning(
-                    f"发现无效连接，销毁重建: {self.broker_addr}"
-                )
+                self._logger.warning(f"发现无效连接，销毁重建: {self.broker_addr}")
                 await self._destroy_connection(connection)
 
         except asyncio.TimeoutError:
@@ -135,9 +133,7 @@ class AsyncBrokerConnectionPool:
                 self._logger.debug(f"连接已释放回连接池: {self.broker_addr}")
             except asyncio.QueueFull:
                 # 队列已满（不应该发生），销毁连接
-                self._logger.warning(
-                    f"连接池队列已满，销毁连接: {self.broker_addr}"
-                )
+                self._logger.warning(f"连接池队列已满，销毁连接: {self.broker_addr}")
                 await self._destroy_connection(connection)
         else:
             # 连接已断开，销毁
@@ -160,8 +156,7 @@ class AsyncBrokerConnectionPool:
         # 并发销毁所有连接
         if connections_to_destroy:
             destroy_tasks = [
-                self._destroy_connection(conn)
-                for conn in connections_to_destroy
+                self._destroy_connection(conn) for conn in connections_to_destroy
             ]
             await asyncio.gather(*destroy_tasks, return_exceptions=True)
 
@@ -196,16 +191,12 @@ class AsyncBrokerConnectionPool:
         # 尝试创建测试连接并放回连接池复用
         try:
             test_connection = await self._create_connection()
-            self._logger.debug(
-                f"健康检查创建连接，放回连接池: {self.broker_addr}"
-            )
+            self._logger.debug(f"健康检查创建连接，放回连接池: {self.broker_addr}")
 
             # 将健康检查创建的连接放回连接池，避免浪费
             try:
                 self._available_connections.put_nowait(test_connection)
-                self._logger.debug(
-                    f"健康检查连接已放回连接池: {self.broker_addr}"
-                )
+                self._logger.debug(f"健康检查连接已放回连接池: {self.broker_addr}")
             except asyncio.QueueFull:
                 # 如果连接池满了，销毁连接
                 self._logger.warning(
@@ -240,17 +231,14 @@ class AsyncBrokerConnectionPool:
             self._active_connections += 1
 
             self._logger.debug(
-                f"创建连接成功: {self.broker_addr}, "
-                f"当前连接数={len(self._connections)}"
+                f"创建连接成功: {self.broker_addr}, 当前连接数={len(self._connections)}"
             )
 
             return connection
 
         except Exception as e:
             self._logger.error(f"创建连接失败: {self.broker_addr}, error={e}")
-            raise ConnectionError(
-                f"无法连接到Broker {self.broker_addr}: {e}"
-            ) from e
+            raise ConnectionError(f"无法连接到Broker {self.broker_addr}: {e}") from e
 
     async def _destroy_connection(self, connection: AsyncRemote) -> None:
         """销毁连接
@@ -320,7 +308,7 @@ class AsyncBrokerManager:
     def __init__(
         self,
         remote_config: RemoteConfig,
-        transport_config: Optional[TransportConfig] = None,
+        transport_config: TransportConfig | None = None,
         health_check_interval: float = 30.0,
         health_check_timeout: float = 5.0,
         max_consecutive_failures: int = 3,
@@ -346,12 +334,12 @@ class AsyncBrokerManager:
         self._logger = get_logger("broker.manager")
 
         # Broker连接信息映射
-        self._brokers: Dict[str, BrokerConnectionInfo] = {}
-        self._broker_pools: Dict[str, AsyncBrokerConnectionPool] = {}
+        self._brokers: dict[str, BrokerConnectionInfo] = {}
+        self._broker_pools: dict[str, AsyncBrokerConnectionPool] = {}
         self._lock = asyncio.Lock()
 
         # 后台任务
-        self._health_check_task: Optional[asyncio.Task] = None
+        self._health_check_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
 
         self._logger.info("Broker管理器初始化完成")
@@ -400,7 +388,7 @@ class AsyncBrokerManager:
         self._logger.info("Broker管理器已关闭")
 
     async def add_broker(
-        self, broker_addr: str, broker_name: Optional[str] = None
+        self, broker_addr: str, broker_name: str | None = None
     ) -> None:
         """添加Broker
 
@@ -489,15 +477,11 @@ class AsyncBrokerManager:
                     if connection_success:
                         broker_info.state = BrokerState.HEALTHY
                         broker_info.consecutive_failures = 0
-                        self._logger.info(
-                            f"与Broker建立初始连接成功: {broker_addr}"
-                        )
+                        self._logger.info(f"与Broker建立初始连接成功: {broker_addr}")
                     else:
                         broker_info.state = BrokerState.UNHEALTHY
                         broker_info.consecutive_failures = 1
-                        self._logger.warning(
-                            f"与Broker建立初始连接失败: {broker_addr}"
-                        )
+                        self._logger.warning(f"与Broker建立初始连接失败: {broker_addr}")
                 except Exception as e:
                     broker_info.state = BrokerState.FAILED
                     broker_info.consecutive_failures = 1
@@ -575,19 +559,14 @@ class AsyncBrokerManager:
             broker_info.update_request_stats(False, 0.0)
 
             # 如果连续失败次数过多，标记为故障
-            if (
-                broker_info.consecutive_failures
-                >= self.max_consecutive_failures
-            ):
+            if broker_info.consecutive_failures >= self.max_consecutive_failures:
                 broker_info.state = BrokerState.FAILED
                 self._logger.error(
                     f"Broker标记为故障: {broker_addr}, "
                     f"连续失败次数={broker_info.consecutive_failures}"
                 )
 
-            raise ConnectionError(
-                f"无法获取连接: {broker_addr}, error={e}"
-            ) from e
+            raise ConnectionError(f"无法获取连接: {broker_addr}, error={e}") from e
 
     async def release_connection(
         self, broker_addr: str, connection: AsyncRemote
@@ -600,9 +579,7 @@ class AsyncBrokerManager:
         """
         async with self._lock:
             if broker_addr not in self._broker_pools:
-                self._logger.warning(
-                    f"Broker不存在，直接关闭连接: {broker_addr}"
-                )
+                self._logger.warning(f"Broker不存在，直接关闭连接: {broker_addr}")
                 await connection.close()
                 return
 
@@ -646,14 +623,14 @@ class AsyncBrokerManager:
                 available_brokers.append(broker_addr)
         return available_brokers
 
-    def get_broker_stats(self, broker_addr: str) -> Optional[Dict]:
+    def get_broker_stats(self, broker_addr: str) -> Dict | None:
         """获取Broker统计信息
 
         Args:
             broker_addr: Broker地址
 
         Returns:
-            Optional[Dict]: 统计信息字典，如果Broker不存在则返回None
+            Dict | None: 统计信息字典，如果Broker不存在则返回None
         """
         if broker_addr not in self._brokers:
             return None
@@ -760,10 +737,7 @@ class AsyncBrokerManager:
                     self._logger.info(f"Broker恢复健康: {broker_addr}")
             else:
                 broker_info.consecutive_failures += 1
-                if (
-                    broker_info.consecutive_failures
-                    >= self.max_consecutive_failures
-                ):
+                if broker_info.consecutive_failures >= self.max_consecutive_failures:
                     if broker_info.state != BrokerState.FAILED:
                         broker_info.state = BrokerState.FAILED
                         self._logger.error(
@@ -779,14 +753,9 @@ class AsyncBrokerManager:
         except asyncio.TimeoutError:
             broker_info.consecutive_failures += 1
             broker_info.last_health_check = current_time
-            if (
-                broker_info.consecutive_failures
-                >= self.max_consecutive_failures
-            ):
+            if broker_info.consecutive_failures >= self.max_consecutive_failures:
                 broker_info.state = BrokerState.FAILED
-                self._logger.error(
-                    f"Broker健康检查超时，标记为故障: {broker_addr}"
-                )
+                self._logger.error(f"Broker健康检查超时，标记为故障: {broker_addr}")
             else:
                 broker_info.state = BrokerState.UNHEALTHY
                 self._logger.warning(f"Broker健康检查超时: {broker_addr}")
@@ -794,26 +763,20 @@ class AsyncBrokerManager:
         except Exception as e:
             broker_info.consecutive_failures += 1
             broker_info.last_health_check = current_time
-            if (
-                broker_info.consecutive_failures
-                >= self.max_consecutive_failures
-            ):
+            if broker_info.consecutive_failures >= self.max_consecutive_failures:
                 broker_info.state = BrokerState.FAILED
                 self._logger.error(
                     f"Broker健康检查异常，标记为故障: {broker_addr}, error={e}"
                 )
             else:
                 broker_info.state = BrokerState.UNHEALTHY
-                self._logger.warning(
-                    f"Broker健康检查异常: {broker_addr}, error={e}"
-                )
+                self._logger.warning(f"Broker健康检查异常: {broker_addr}, error={e}")
 
     @property
     def is_running(self) -> bool:
         """检查管理器是否正在运行"""
         return (
-            self._health_check_task is not None
-            and not self._health_check_task.done()
+            self._health_check_task is not None and not self._health_check_task.done()
         )
 
     @property
@@ -868,7 +831,5 @@ class AsyncBrokerManager:
                 try:
                     await self.release_connection(broker_addr, connection)
                 except Exception as e:
-                    self._logger.error(
-                        f"释放连接时发生异常: {broker_addr}, error={e}"
-                    )
+                    self._logger.error(f"释放连接时发生异常: {broker_addr}, error={e}")
                     # 不抛出异常，避免掩盖原始异常
