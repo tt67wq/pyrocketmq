@@ -1430,7 +1430,7 @@ class BrokerClient:
 
     def lock_batch_mq(
         self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
-    ) -> list[MessageQueue]
+    ) -> list[MessageQueue]:
         """批量锁定消息队列
 
         Args:
@@ -1539,7 +1539,9 @@ class BrokerClient:
             logger.error(f"Unexpected error during lock_batch_mq: {e}")
             raise BrokerResponseError(f"Unexpected error during lock_batch_mq: {e}")
 
-    def unlock_batch_mq(self, consumer_group: str, client_id: str, mqs: list[MessageQueue]) -> None:
+    def unlock_batch_mq(
+        self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
+    ) -> None:
         """批量解锁消息队列
 
         Args:

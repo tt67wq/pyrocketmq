@@ -826,11 +826,6 @@ class AsyncProducer:
                 ],
             )
 
-            # 创建心跳请求
-            heartbeat_request = RemotingRequestFactory.create_heartbeat_request(
-                heartbeat_data
-            )
-
             # 统计结果
             success_count = 0
             failed_count = 0
@@ -842,8 +837,9 @@ class AsyncProducer:
                     async with self._broker_manager.connection(
                         broker_addr
                     ) as broker_remote:
-                        # 发送单向心跳请求（不等待响应）
-                        await broker_remote.oneway(heartbeat_request)
+                        await AsyncBrokerClient(broker_remote).send_heartbeat(
+                            heartbeat_data
+                        )
                         success_count += 1
                         logger.debug(f"Heartbeat sent to broker: {broker_addr}")
 

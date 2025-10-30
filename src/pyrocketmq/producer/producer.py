@@ -776,11 +776,11 @@ class Producer:
 
     def send_heartbeat_to_all_broker(self) -> None:
         """向所有Broker发送心跳"""
-        logger.debug("Sending heartbeat to all brokers...")
+        logger.debug("!!!!!!!!!!!!!!!!!!!!!!!!Sending heartbeat to all brokers...")
 
         try:
             # 获取所有已知的Broker地址
-            broker_addrs = set()
+            broker_addrs: set[str] = set()
             all_topics = self._topic_mapping.get_all_topics()
 
             for topic in all_topics:
@@ -809,11 +809,6 @@ class Producer:
                 ],
             )
 
-            # 创建心跳请求
-            heartbeat_request = RemotingRequestFactory.create_heartbeat_request(
-                heartbeat_data
-            )
-
             # 统计结果
             success_count = 0
             failed_count = 0
@@ -823,8 +818,7 @@ class Producer:
                 try:
                     # 获取或创建Broker连接
                     with self._broker_manager.connection(broker_addr) as broker_remote:
-                        # 发送单向心跳请求（不等待响应）
-                        broker_remote.oneway(heartbeat_request)
+                        BrokerClient(broker_remote).send_heartbeat(heartbeat_data)
                         success_count += 1
                         logger.debug(f"Heartbeat sent to broker: {broker_addr}")
 
