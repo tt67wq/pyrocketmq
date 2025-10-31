@@ -30,9 +30,9 @@ class ProducerError(Exception):
             cause: 原因异常（可选）
         """
         super().__init__(message)
-        self.message = message
-        self.error_code = error_code
-        self.cause = cause
+        self.message: str = message
+        self.error_code: int | None = error_code
+        self.cause: Exception | None = cause
 
     def __str__(self) -> str:
         """字符串表示"""
@@ -85,8 +85,8 @@ class ProducerStateError(ProducerError):
         if current_state and expected_state:
             message = f"Producer state error: current={current_state}, expected={expected_state}"
         super().__init__(message, error_code=1003, cause=cause)
-        self.current_state = current_state
-        self.expected_state = expected_state
+        self.current_state: str | None = current_state
+        self.expected_state: str | None = expected_state
 
 
 class MessageSendError(ProducerError):
@@ -108,8 +108,8 @@ class MessageSendError(ProducerError):
             message = f"Failed to send message to topic {topic}"
 
         super().__init__(message, error_code=2001, cause=cause)
-        self.topic = topic
-        self.broker = broker
+        self.topic: str | None = topic
+        self.broker: str | None = broker
 
 
 class MessageValidationError(ProducerError):
@@ -130,8 +130,8 @@ class MessageValidationError(ProducerError):
             message = f"Message validation failed for topic {topic}"
 
         super().__init__(message, error_code=2002)
-        self.topic = topic
-        self.validation_error = validation_error
+        self.topic: str | None = topic
+        self.validation_error: str | None = validation_error
 
 
 class RouteNotFoundError(ProducerError):
@@ -149,7 +149,7 @@ class RouteNotFoundError(ProducerError):
             message = f"Route not found for topic {topic}"
 
         super().__init__(message, error_code=3001)
-        self.topic = topic
+        self.topic: str | None = topic
 
 
 class BrokerNotAvailableError(ProducerError):
@@ -170,8 +170,8 @@ class BrokerNotAvailableError(ProducerError):
             message = f"Broker at {broker_addr} is not available"
 
         super().__init__(message, error_code=3002)
-        self.broker_name = broker_name
-        self.broker_addr = broker_addr
+        self.broker_name: str | None = broker_name
+        self.broker_addr: str | None = broker_addr
 
 
 class QueueNotAvailableError(ProducerError):
@@ -193,9 +193,9 @@ class QueueNotAvailableError(ProducerError):
             message = f"No available queues found for topic {topic}"
 
         super().__init__(message, error_code=3003)
-        self.topic = topic
-        self.broker_name = broker_name
-        self.queue_id = queue_id
+        self.topic: str | None = topic
+        self.broker_name: str | None = broker_name
+        self.queue_id: int | None = queue_id
 
 
 class RouteUpdateError(ProducerError):
@@ -214,7 +214,7 @@ class RouteUpdateError(ProducerError):
             message = f"Failed to update route info for topic {topic}"
 
         super().__init__(message, error_code=3004, cause=cause)
-        self.topic = topic
+        self.topic: str | None = topic
 
 
 class NameServerError(ProducerError):
@@ -233,7 +233,7 @@ class NameServerError(ProducerError):
             message = f"NameServer error at {nameserver_addr}"
 
         super().__init__(message, error_code=4001, cause=cause)
-        self.nameserver_addr = nameserver_addr
+        self.nameserver_addr: str | None = nameserver_addr
 
 
 class ConfigurationError(ProducerError):
@@ -252,8 +252,8 @@ class ConfigurationError(ProducerError):
             message = f"Invalid configuration: {config_key}={config_value}"
 
         super().__init__(message, error_code=5001)
-        self.config_key = config_key
-        self.config_value = config_value
+        self.config_key: str | None = config_key
+        self.config_value: str | None = config_value
 
 
 class TimeoutError(ProducerError):
@@ -274,8 +274,8 @@ class TimeoutError(ProducerError):
             message = f"Operation {operation} timed out"
 
         super().__init__(message, error_code=5002)
-        self.operation = operation
-        self.timeout_ms = timeout_ms
+        self.operation: str | None = operation
+        self.timeout_ms: int | None = timeout_ms
 
 
 class RetryExhaustedError(ProducerError):
@@ -294,8 +294,8 @@ class RetryExhaustedError(ProducerError):
             message = f"Failed after {attempts} retry attempts"
 
         super().__init__(message, error_code=5003, cause=last_error)
-        self.attempts = attempts
-        self.last_error = last_error
+        self.attempts: int | None = attempts
+        self.last_error: Exception | None = last_error
 
 
 class CompressionError(ProducerError):
@@ -400,28 +400,28 @@ class ErrorCodes:
     """错误代码常量"""
 
     # Producer相关错误 (1000-1999)
-    PRODUCER_START_ERROR = 1001
-    PRODUCER_SHUTDOWN_ERROR = 1002
-    PRODUCER_STATE_ERROR = 1003
+    PRODUCER_START_ERROR: int = 1001
+    PRODUCER_SHUTDOWN_ERROR: int = 1002
+    PRODUCER_STATE_ERROR: int = 1003
 
     # 消息发送相关错误 (2000-2999)
-    MESSAGE_SEND_ERROR = 2001
-    MESSAGE_VALIDATION_ERROR = 2002
+    MESSAGE_SEND_ERROR: int = 2001
+    MESSAGE_VALIDATION_ERROR: int = 2002
 
     # 路由相关错误 (3000-3999)
-    ROUTE_NOT_FOUND = 3001
-    BROKER_NOT_AVAILABLE = 3002
-    QUEUE_NOT_AVAILABLE = 3003
-    ROUTE_UPDATE_ERROR = 3004
+    ROUTE_NOT_FOUND: int = 3001
+    BROKER_NOT_AVAILABLE: int = 3002
+    QUEUE_NOT_AVAILABLE: int = 3003
+    ROUTE_UPDATE_ERROR: int = 3004
 
     # NameServer相关错误 (4000-4999)
-    NAMESERVER_ERROR = 4001
+    NAMESERVER_ERROR: int = 4001
 
     # 通用错误 (5000-5999)
-    CONFIGURATION_ERROR = 5001
-    TIMEOUT_ERROR = 5002
-    RETRY_EXHAUSTED_ERROR = 5003
+    CONFIGURATION_ERROR: int = 5001
+    TIMEOUT_ERROR: int = 5002
+    RETRY_EXHAUSTED_ERROR: int = 5003
 
     # 序列化相关错误 (6000-6999)
-    COMPRESSION_ERROR = 6001
-    SERIALIZATION_ERROR = 6002
+    COMPRESSION_ERROR: int = 6001
+    SERIALIZATION_ERROR: int = 6002

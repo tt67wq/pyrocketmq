@@ -386,7 +386,7 @@ class AsyncProducer:
 
             # 3. 更新路由信息
             if batch_message.topic not in self._topic_mapping.get_all_topics():
-                await self.update_route_info(batch_message.topic)
+                _ = await self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
             routing_result = self._message_router.route_message(

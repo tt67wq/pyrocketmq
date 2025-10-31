@@ -25,6 +25,7 @@ from pyrocketmq.model.headers import (
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.message_ext import MessageExt
 from pyrocketmq.model.message_id import MessageID, unmarshal_msg_id
+from pyrocketmq.nameserver.models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
@@ -100,7 +101,7 @@ class TransactionProducer(Producer):
         self,
         config: ProducerConfig | None = None,
         transaction_listener: TransactionListener | None = None,
-    ):
+    ) -> None:
         """初始化TransactionProducer
 
         Args:
@@ -108,15 +109,15 @@ class TransactionProducer(Producer):
             transaction_listener: 事务监听器
         """
         super().__init__(config)
-        self._transaction_listener = transaction_listener
+        self._transaction_listener: TransactionListener | None = transaction_listener
         self._logger = get_logger(__name__)
 
         # 事务检查请求码（根据RocketMQ协议定义）
-        self._transaction_check_code = RequestCode.CHECK_TRANSACTION_STATE.value
+        self._transaction_check_code: int = RequestCode.CHECK_TRANSACTION_STATE.value
 
         # 事务相关的配置
-        self._transaction_timeout = 60000  # 默认60秒超时
-        self._max_check_times = 15  # 最大回查次数
+        self._transaction_timeout: int = 60000  # 默认60秒超时
+        self._max_check_times: int = 15  # 最大回查次数
 
         self._failed_registrations: set[str] = set()
 
@@ -151,6 +152,7 @@ class TransactionProducer(Producer):
                 "TransactionListener is required for transactional producer"
             )
 
+        transaction_id: str | None = ""
         try:
             # 1. 发送带有事务标记的消息
             send_result = self._send_message_with_transaction_flag(message)
@@ -168,14 +170,14 @@ class TransactionProducer(Producer):
                     MessageProperty.TRANSACTION_ID, send_result.transaction_id
                 )
 
-            transaction_id: str | None = message.get_property(
+            transaction_id = message.get_property(
                 MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
             )
             if transaction_id:
                 message.transaction_id = transaction_id
 
             # 3. 执行本地事务
-            local_state = self._execute_local_transaction(
+            local_state: LocalTransactionState = self._execute_local_transaction(
                 message, transaction_id or "", arg
             )
 
@@ -225,7 +227,9 @@ class TransactionProducer(Producer):
             _ = self.update_route_info(message.topic)
 
         # 3. 获取路由结果
-        routing_result = self._message_router.route_message(message.topic, message)
+        routing_result: RoutingResult = self._message_router.route_message(
+            message.topic, message
+        )
         if not routing_result.success:
             raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
@@ -247,23 +251,33 @@ class TransactionProducer(Producer):
     ) -> None:
         """注册事务检查处理器，包含详细的错误处理"""
         try:
-            _ = broker_remote.register_request_processor_lazy(
+            _: Any = broker_remote.register_request_processor_lazy(
                 self._transaction_check_code,
                 self._handle_transaction_check,
             )
-            self._logger.debug(f"为Broker {broker_addr} 注册事务检查处理器")
+            self._logger.debug(
+                "为Broker注册事务检查处理器", extra={"broker_addr": broker_addr}
+            )
         except ConnectionError as e:
-            self._logger.error(f"无法连接到Broker {broker_addr}: {e}")
+            self._logger.error(
+                "无法连接到Broker", extra={"broker_addr": broker_addr, "error": str(e)}
+            )
             raise BrokerNotAvailableError(
                 f"Cannot connect to broker {broker_addr}: {e}"
             )
         except TimeoutError as e:
-            self._logger.error(f"注册事务检查处理器超时 {broker_addr}: {e}")
+            self._logger.error(
+                "注册事务检查处理器超时",
+                extra={"broker_addr": broker_addr, "error": str(e)},
+            )
             raise BrokerTimeoutError(
                 f"Registration timeout for broker {broker_addr}: {e}"
             )
         except Exception as e:
-            self._logger.error(f"注册事务检查处理器失败 {broker_addr}: {e}")
+            self._logger.error(
+                "注册事务检查处理器失败",
+                extra={"broker_addr": broker_addr, "error": str(e)},
+            )
             # 事务检查处理器注册失败继续发送，但记录失败信息
             self._failed_registrations.add(broker_addr)
 
@@ -276,7 +290,7 @@ class TransactionProducer(Producer):
     ) -> SendMessageResult:
         """发送消息到指定Broker"""
         try:
-            result = BrokerClient(broker_remote).sync_send_message(
+            result: SendMessageResult = BrokerClient(broker_remote).sync_send_message(
                 self._config.producer_group,
                 message.body,
                 message_queue,
@@ -287,20 +301,30 @@ class TransactionProducer(Producer):
                 raise MessageSendError("Broker returned empty result")
 
             self._logger.debug(
-                f"事务消息发送成功: broker={broker_addr}, msgId={result.msg_id}"
+                "事务消息发送成功",
+                extra={
+                    "broker": broker_addr,
+                    "msgId": result.msg_id,
+                },
             )
             return result
 
         except ConnectionError as e:
-            self._logger.error(f"连接Broker失败 {broker_addr}: {e}")
+            self._logger.error(
+                "连接Broker失败", extra={"broker_addr": broker_addr, "error": str(e)}
+            )
             raise BrokerNotAvailableError(
                 f"Cannot connect to broker {broker_addr}: {e}"
             )
         except TimeoutError as e:
-            self._logger.error(f"发送消息超时 {broker_addr}: {e}")
+            self._logger.error(
+                "发送消息超时", extra={"broker_addr": broker_addr, "error": str(e)}
+            )
             raise MessageSendError(f"Send timeout to broker {broker_addr}: {e}")
         except Exception as e:
-            self._logger.error(f"发送消息失败 {broker_addr}: {e}")
+            self._logger.error(
+                "发送消息失败", extra={"broker_addr": broker_addr, "error": str(e)}
+            )
             raise MessageSendError(
                 f"Failed to send message to {broker_addr}: {e}"
             ) from e
@@ -319,8 +343,8 @@ class TransactionProducer(Producer):
 
         try:
             # 准备消息路由
-            routing_result = self._prepare_message_routing(message)
-            broker_addr = routing_result.broker_address
+            routing_result: RoutingResult = self._prepare_message_routing(message)
+            broker_addr: str | None = routing_result.broker_address
             if not broker_addr:
                 raise BrokerNotAvailableError()
 
@@ -342,7 +366,7 @@ class TransactionProducer(Producer):
             raise
         except Exception as e:
             # 处理未知异常
-            self._logger.error(f"发送事务消息失败: {e}")
+            self._logger.error("发送事务消息失败", extra={"error": str(e)})
             raise MessageSendError(f"Failed to send transaction message: {e}") from e
 
     def _execute_local_transaction(
@@ -359,7 +383,7 @@ class TransactionProducer(Producer):
             LocalTransactionState: 本地事务状态
         """
         try:
-            self._logger.debug(f"执行本地事务: transactionId={transaction_id}")
+            self._logger.debug("执行本地事务", extra={"transaction_id": transaction_id})
 
             # 参数验证
             # if not transaction_id:
@@ -370,17 +394,11 @@ class TransactionProducer(Producer):
                 return LocalTransactionState.ROLLBACK_MESSAGE_STATE
 
             # 执行本地事务
-            result = self._transaction_listener.execute_local_transaction(
-                message, transaction_id, arg
-            )
-
-            # 验证返回值
-            if not isinstance(result, LocalTransactionState):
-                self._logger.error(
-                    f"本地事务返回无效状态: transactionId={transaction_id}, "
-                    f"expected=LocalTransactionState, actual={type(result)}"
+            result: LocalTransactionState = (
+                self._transaction_listener.execute_local_transaction(
+                    message, transaction_id, arg
                 )
-                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+            )
 
             self._logger.debug(
                 f"本地事务执行完成: transactionId={transaction_id}, state={result}"
@@ -432,14 +450,14 @@ class TransactionProducer(Producer):
 
         try:
             # 获取Broker地址
-            broker_addr = self._get_broker_addr_by_name(
+            broker_addr: str | None = self._get_broker_addr_by_name(
                 message_queue.broker_name, message_queue.topic
             )
             if not broker_addr:
                 raise ValueError("Broker address not found")
 
             with self._broker_manager.connection(broker_addr) as broker_remote:
-                broker_client = BrokerClient(broker_remote)
+                broker_client: BrokerClient = BrokerClient(broker_remote)
 
                 broker_client.end_transaction(
                     self._config.producer_group,
@@ -451,15 +469,22 @@ class TransactionProducer(Producer):
                     True,
                 )
                 if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
-                    self._logger.debug(f"提交事务: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "提交事务", extra={"transaction_id": transaction_id}
+                    )
                 elif local_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
-                    self._logger.debug(f"回滚事务: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "回滚事务", extra={"transaction_id": transaction_id}
+                    )
                 elif local_state == LocalTransactionState.UNKNOW_STATE:
-                    self._logger.debug(f"未知事务状态: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "未知事务状态", extra={"transaction_id": transaction_id}
+                    )
 
         except Exception as e:
             self._logger.error(
-                f"发送事务状态确认失败: transactionId={transaction_id}, error={e}"
+                "发送事务状态确认失败",
+                extra={"transaction_id": transaction_id, "error": str(e)},
             )
 
             # 根据状态类型抛出不同的异常
@@ -490,14 +515,18 @@ class TransactionProducer(Producer):
         """
         try:
             # 解析事务检查回调数据
-            broker_addr = f"{remote_addr[0]}:{remote_addr[1]}"
-            callback = self._parse_original_message_from_request(request, broker_addr)
+            broker_addr: str = f"{remote_addr[0]}:{remote_addr[1]}"
+            callback: CheckTransactionStateCallback | None = (
+                self._parse_original_message_from_request(request, broker_addr)
+            )
             if not callback:
                 self._logger.error("无法解析事务检查回调")
                 return None
 
             # 解析transaction_id
-            transaction_id = callback.msg.get_property(MessageProperty.TRANSACTION_ID)
+            transaction_id: str | None = callback.msg.get_property(
+                MessageProperty.TRANSACTION_ID
+            )
             if not transaction_id:
                 transaction_id = callback.header.transaction_id
                 if not transaction_id:
@@ -507,7 +536,7 @@ class TransactionProducer(Producer):
                         return None
 
             # 解析UNIQ_KEY
-            uniq_key = callback.msg.get_property(
+            uniq_key: str | None = callback.msg.get_property(
                 MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
             )
             if not uniq_key:
@@ -517,20 +546,30 @@ class TransactionProducer(Producer):
                     return None
 
             self._logger.debug(
-                f"收到事务检查请求: transactionId={transaction_id}, "
-                f"broker={broker_addr}, msg_id={callback.msg.msg_id}"
+                "收到事务检查请求",
+                extra={
+                    "transaction_id": transaction_id,
+                    "broker": broker_addr,
+                    "msg_id": callback.msg.msg_id,
+                },
             )
             if not self._transaction_listener:
                 self._logger.error("无法处理事务检查请求: 未设置事务监听器")
                 return None
 
             # 调用用户定义的检查逻辑
-            local_state = self._transaction_listener.check_local_transaction(
-                callback.msg, transaction_id
+            local_state: LocalTransactionState = (
+                self._transaction_listener.check_local_transaction(
+                    callback.msg, transaction_id
+                )
             )
 
             self._logger.debug(
-                f"发送事务检查响应: transactionId={transaction_id}, state={local_state}"
+                "发送事务检查响应",
+                extra={
+                    "transaction_id": transaction_id,
+                    "state": str(local_state),
+                },
             )
             with self._broker_manager.connection(broker_addr) as broker_remote:
                 BrokerClient(broker_remote).end_transaction(
@@ -543,16 +582,22 @@ class TransactionProducer(Producer):
                     True,
                 )
                 if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
-                    self._logger.debug(f"提交事务: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "提交事务", extra={"transaction_id": transaction_id}
+                    )
                 elif local_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
-                    self._logger.debug(f"回滚事务: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "回滚事务", extra={"transaction_id": transaction_id}
+                    )
                 elif local_state == LocalTransactionState.UNKNOW_STATE:
-                    self._logger.debug(f"未知事务状态: transactionId={transaction_id}")
+                    self._logger.debug(
+                        "未知事务状态", extra={"transaction_id": transaction_id}
+                    )
 
             return
 
         except Exception as e:
-            self._logger.error(f"处理事务检查请求失败: {e}")
+            self._logger.error("处理事务检查请求失败", extra={"error": str(e)})
             raise TransactionCheckError(f"Failed to handle transaction check: {e}")
 
     def _parse_original_message_from_request(
@@ -569,7 +614,9 @@ class TransactionProducer(Producer):
         """
         try:
             # 解析请求头
-            header = CheckTransactionStateRequestHeader.decode(request.ext_fields)
+            header: CheckTransactionStateRequestHeader = (
+                CheckTransactionStateRequestHeader.decode(request.ext_fields)
+            )
 
             # 从请求body中解码MessageExt
             if not request.body:
@@ -577,23 +624,26 @@ class TransactionProducer(Producer):
                 return None
 
             # 使用MessageExt.from_bytes方法解析消息体
-            message_ext = MessageExt.from_bytes(request.body)
+            message_ext: MessageExt = MessageExt.from_bytes(request.body)
 
             # 创建回调数据结构
-            callback = CheckTransactionStateCallback(
+            callback: CheckTransactionStateCallback = CheckTransactionStateCallback(
                 addr=addr, msg=message_ext, header=header
             )
 
             self._logger.debug(
-                f"成功解析事务检查回调: addr={addr}, "
-                f"msg_id={message_ext.msg_id}, "
-                f"transaction_id={header.transaction_id}"
+                "成功解析事务检查回调",
+                extra={
+                    "addr": addr,
+                    "msg_id": message_ext.msg_id,
+                    "transaction_id": header.transaction_id,
+                },
             )
 
             return callback
 
         except Exception as e:
-            self._logger.error(f"解析事务检查回调失败: {e}")
+            self._logger.error("解析事务检查回调失败", extra={"error": str(e)})
             return None
 
     def set_transaction_timeout(self, timeout_ms: int) -> None:
@@ -603,7 +653,7 @@ class TransactionProducer(Producer):
             timeout_ms: 超时时间（毫秒）
         """
         self._transaction_timeout = timeout_ms
-        self._logger.info(f"设置事务超时时间: {timeout_ms}ms")
+        self._logger.info("设置事务超时时间", extra={"timeout_ms": timeout_ms})
 
     def set_max_check_times(self, max_times: int) -> None:
         """设置最大回查次数
@@ -612,7 +662,7 @@ class TransactionProducer(Producer):
             max_times: 最大回查次数
         """
         self._max_check_times = max_times
-        self._logger.info(f"设置最大回查次数: {max_times}")
+        self._logger.info("设置最大回查次数", extra={"max_times": max_times})
 
     def _get_broker_addr_by_name(
         self, broker_name: str, topic: str | None = None
@@ -632,7 +682,9 @@ class TransactionProducer(Producer):
         Raises:
             ProducerError: 当NameServer连接不可用或查询失败时抛出
         """
-        self._logger.debug(f"查询broker地址: broker_name={broker_name}, topic={topic}")
+        self._logger.debug(
+            "查询broker地址", extra={"broker_name": broker_name, "topic": topic}
+        )
 
         if not self._nameserver_connections:
             raise ProducerError("NameServer连接不可用，无法查询broker地址")
@@ -652,14 +704,16 @@ class TransactionProducer(Producer):
         for addr, remote in self._nameserver_connections.items():
             try:
                 # 使用NameServer客户端查询路由信息
-                client = SyncNameServerClient(
+                client: SyncNameServerClient = SyncNameServerClient(
                     remote, self._config.send_msg_timeout / 1000.0
                 )
 
                 for check_topic in topics_to_check:
                     try:
                         # 查询Topic路由信息
-                        topic_route_data = client.query_topic_route_info(check_topic)
+                        topic_route_data: TopicRouteData = (
+                            client.query_topic_route_info(check_topic)
+                        )
 
                         # 在路由数据中查找目标broker
                         for broker_data in topic_route_data.broker_data_list:
@@ -669,17 +723,22 @@ class TransactionProducer(Producer):
                                 )
 
                     except Exception as e:
-                        self._logger.debug(f"查询topic {check_topic} 失败: {e}")
+                        self._logger.debug(
+                            "查询topic失败",
+                            extra={"topic": check_topic, "error": str(e)},
+                        )
                         continue
 
             except Exception as e:
-                self._logger.warning(f"从NameServer {addr} 查询失败: {e}")
+                self._logger.warning(
+                    "从NameServer查询失败", extra={"addr": addr, "error": str(e)}
+                )
                 continue
 
-        self._logger.warning(f"未找到broker {broker_name} 的地址信息")
+        self._logger.warning("未找到broker地址信息", extra={"broker_name": broker_name})
         return None
 
-    def get_stats(self) -> dict[str, str | int | float]:
+    def get_stats(self) -> dict[str, str | int | bool | None]:
         """获取TransactionProducer统计信息
 
         Returns:
@@ -701,7 +760,7 @@ def create_transactional_producer(
     producer_group: str,
     namesrv_addr: str,
     transaction_listener: TransactionListener,
-    **kwargs,
+    **kwargs: Any,
 ) -> TransactionProducer:
     """创建TransactionProducer的便利函数
 
@@ -715,7 +774,7 @@ def create_transactional_producer(
         TransactionProducer: 配置好的事务消息生产者
     """
 
-    config = ProducerConfig(
+    config: ProducerConfig = ProducerConfig(
         producer_group=producer_group,
         namesrv_addr=namesrv_addr,
         **kwargs,
