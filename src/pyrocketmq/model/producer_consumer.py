@@ -5,7 +5,7 @@
 
 import ast
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 from .errors import DeserializationError
 
@@ -19,12 +19,12 @@ class ProducerData:
 
     group_name: str  # 生产者组名
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {"groupName": self.group_name}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProducerData":
+    def from_dict(cls, data: dict[str, Any]) -> "ProducerData":
         """从字典创建实例"""
         return cls(group_name=data["groupName"])
 
@@ -46,9 +46,7 @@ class ProducerData:
             parsed_data = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse ProducerData from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse ProducerData from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid ProducerData format: {e}")
 
@@ -70,14 +68,14 @@ class ConsumerData:
     consume_from_where: (
         str  # 消费起始位置 (CONSUME_FROM_LAST_OFFSET/CONSUME_FROM_FIRST_OFFSET)
     )
-    subscription_data: Dict[str, str] = {}  # 订阅关系 topic -> expression
+    subscription_data: dict[str, str] = {}  # 订阅关系 topic -> expression
 
     def __post_init__(self):
         """后处理，确保类型正确"""
         if self.subscription_data is None:
             self.subscription_data = {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "groupName": self.group_name,
@@ -88,7 +86,7 @@ class ConsumerData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConsumerData":
+    def from_dict(cls, data: dict[str, Any]) -> "ConsumerData":
         """从字典创建实例"""
         return cls(
             group_name=data["groupName"],
@@ -116,9 +114,7 @@ class ConsumerData:
             parsed_data = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse ConsumerData from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse ConsumerData from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid ConsumerData format: {e}")
 

@@ -6,7 +6,7 @@
 import struct
 import time
 from dataclasses import dataclass
-from typing import List, Any
+from typing import Any
 
 from pyrocketmq.model.message_queue import MessageQueue
 
@@ -271,7 +271,7 @@ class MessageExt(Message):
         )
 
     @classmethod
-    def decode_messages(cls, data: bytes) -> List["MessageExt"]:
+    def decode_messages(cls, data: bytes) -> list["MessageExt"]:
         """从字节数组中解析出多个MessageExt对象
 
         Args:

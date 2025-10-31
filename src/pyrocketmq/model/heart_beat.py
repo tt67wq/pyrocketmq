@@ -4,7 +4,7 @@ RocketMQ心跳数据结构定义
 """
 
 from dataclasses import dataclass, field
-from typing import List
+
 
 from .client_data import ConsumerData, ProducerData
 
@@ -17,10 +17,10 @@ class HeartbeatData:
     """
 
     client_id: str  # 客户端ID
-    producer_data_set: List[ProducerData] = field(
+    producer_data_set: list[ProducerData] = field(
         default_factory=list
     )  # 生产者数据集合
-    consumer_data_set: List[ConsumerData] = field(
+    consumer_data_set: list[ConsumerData] = field(
         default_factory=list
     )  # 消费者数据集合
 
@@ -101,11 +101,11 @@ class HeartbeatData:
                 return True
         return False
 
-    def get_producer_groups(self) -> List[str]:
+    def get_producer_groups(self) -> list[str]:
         """获取所有生产者组名"""
         return [producer.group_name for producer in self.producer_data_set]
 
-    def get_consumer_groups(self) -> List[str]:
+    def get_consumer_groups(self) -> list[str]:
         """获取所有消费者组名"""
         return [consumer.group_name for consumer in self.consumer_data_set]
 

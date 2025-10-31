@@ -5,7 +5,7 @@
 
 import ast
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .errors import DeserializationError
 from .message_queue import MessageQueue
@@ -23,8 +23,8 @@ class SendMessageResult:
     msg_id: str  # 消息ID
     message_queue: MessageQueue  # 消息队列信息
     queue_offset: int  # 队列偏移量
-    transaction_id: Optional[str] = None  # 事务ID
-    offset_msg_id: Optional[str] = None  # 偏移量消息ID
+    transaction_id: str | None = None  # 事务ID
+    offset_msg_id: str | None = None  # 偏移量消息ID
     region_id: str = "DefaultRegion"  # 区域ID
     trace_on: bool = False  # 是否开启Trace
 
@@ -51,7 +51,7 @@ class SendMessageResult:
         """获取队列ID (兼容性属性)"""
         return self.message_queue.queue_id
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         result = {
             "status": self.status,
@@ -71,7 +71,7 @@ class SendMessageResult:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SendMessageResult":
+    def from_dict(cls, data: dict[str, Any]) -> "SendMessageResult":
         """从字典创建实例"""
         # 解析MessageQueue
         mq_data = data.get("messageQueue", {})
@@ -124,12 +124,12 @@ class PullMessageResult:
     包含从Broker拉取的消息列表和相关信息
     """
 
-    messages: List[MessageExt]  # 消息列表
+    messages: list[MessageExt]  # 消息列表
     next_begin_offset: int  # 下次拉取的起始偏移量
     min_offset: int  # 最小偏移量
     max_offset: int  # 最大偏移量
-    suggest_which_broker_id: Optional[int] = None  # 建议的broker ID
-    pull_rt: Optional[float] = None  # 拉取耗时
+    suggest_which_broker_id: int | None = None  # 建议的broker ID
+    pull_rt: float | None = None  # 拉取耗时
 
     @property
     def is_found(self) -> bool:
@@ -141,7 +141,7 @@ class PullMessageResult:
         """拉取到的消息数量"""
         return len(self.messages)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         result = {
             "messages": [msg.to_dict() for msg in self.messages],
@@ -160,7 +160,7 @@ class PullMessageResult:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PullMessageResult":
+    def from_dict(cls, data: dict[str, Any]) -> "PullMessageResult":
         """从字典创建实例"""
         from .message_ext import MessageExt  # 避免循环导入
 
@@ -212,12 +212,12 @@ class OffsetResult:
     offset: int  # 偏移量值
     retry_times: int = 0  # 重试次数
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {"offset": self.offset, "retryTimes": self.retry_times}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OffsetResult":
+    def from_dict(cls, data: dict[str, Any]) -> "OffsetResult":
         """从字典创建实例"""
         return cls(offset=data["offset"], retry_times=data.get("retryTimes", 0))
 

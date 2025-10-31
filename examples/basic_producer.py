@@ -32,18 +32,23 @@ from pyrocketmq.producer.errors import ProducerError
 
 def main():
     """主函数"""
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG"))
-    producer = create_producer(
-        "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
-    )
+    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
+    producer = create_producer("GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110")
     producer.start()
     while True:
         try:
-            message = Message(
-                topic="test_im_015", body=b"Hello, RocketMQ From Python!"
-            )
+            message = Message(topic="test_im_015", body=b"Hello, RocketMQ From Python!")
             ret = producer.send(message)
             print("Message sent ret:", ret)
+
+            messages: list[Message] = []
+            for _ in range(10):
+                message = Message(
+                    topic="test_im_015", body=b"Hello, RocketMQ From Python in Batch!"
+                )
+                messages.append(message)
+            ret = producer.send_batch(*messages)
+            print("Batch message sent ret:", ret)
         except ProducerError as e:
             print(f"Failed to send message: {e}")
             time.sleep(5)

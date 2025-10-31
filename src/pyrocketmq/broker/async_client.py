@@ -1046,7 +1046,7 @@ class AsyncBrokerClient:
                 logger.error(error_msg)
                 raise BrokerResponseError(error_msg)
 
-            logger.info(
+            logger.debug(
                 f"Successfully sent heartbeat: clientID={heartbeat_data.client_id}"
             )
 

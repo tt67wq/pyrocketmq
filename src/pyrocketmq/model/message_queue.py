@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
@@ -42,7 +42,7 @@ class MessageQueue:
         return hash((self.topic, self.broker_name, self.queue_id))
 
     # 序列化方法
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式
 
         Returns:
@@ -55,7 +55,7 @@ class MessageQueue:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MessageQueue":
+    def from_dict(cls, data: dict[str, Any]) -> "MessageQueue":
         """从字典创建消息队列实例
 
         Args:
@@ -90,9 +90,7 @@ class MessageQueue:
         Returns:
             是否有效
         """
-        return (
-            bool(self.topic) and bool(self.broker_name) and self.queue_id >= 0
-        )
+        return bool(self.topic) and bool(self.broker_name) and self.queue_id >= 0
 
     @property
     def full_name(self) -> str:

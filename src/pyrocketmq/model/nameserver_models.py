@@ -7,7 +7,7 @@ NameServer 数据结构模型
 import ast
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 
 @dataclass
@@ -16,9 +16,9 @@ class BrokerData:
 
     cluster: str
     broker_name: str
-    broker_addresses: Dict[int, str]  # brokerId -> address
+    broker_addresses: dict[int, str]  # brokerId -> address
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "cluster": self.cluster,
@@ -27,7 +27,7 @@ class BrokerData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BrokerData":
+    def from_dict(cls, data: dict[str, Any]) -> "BrokerData":
         """从字典创建实例"""
         return cls(
             cluster=data["cluster"],
@@ -98,7 +98,7 @@ class QueueData:
     topic_syn_flag: int
     compression_type: str = "gzip"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "brokerName": self.broker_name,
@@ -110,7 +110,7 @@ class QueueData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "QueueData":
+    def from_dict(cls, data: dict[str, Any]) -> "QueueData":
         """从字典创建实例"""
         return cls(
             broker_name=data["brokerName"],
@@ -149,10 +149,10 @@ class TopicRouteData:
     """Topic 路由信息"""
 
     order_topic_conf: str = ""
-    queue_data_list: List[QueueData] = field(default_factory=list)
-    broker_data_list: List[BrokerData] = field(default_factory=list)
+    queue_data_list: list[QueueData] = field(default_factory=list)
+    broker_data_list: list[BrokerData] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "orderTopicConf": self.order_topic_conf,
@@ -161,7 +161,7 @@ class TopicRouteData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TopicRouteData":
+    def from_dict(cls, data: dict[str, Any]) -> "TopicRouteData":
         """从字典创建实例"""
         return cls(
             order_topic_conf=data.get("orderTopicConf", ""),
@@ -207,10 +207,10 @@ class TopicRouteData:
 class BrokerClusterInfo:
     """Broker 集群信息"""
 
-    broker_addr_table: Dict[str, BrokerData] = field(default_factory=dict)
-    cluster_addr_table: Dict[str, List[str]] = field(default_factory=dict)
+    broker_addr_table: dict[str, BrokerData] = field(default_factory=dict)
+    cluster_addr_table: dict[str, list[str]] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "brokerAddrTable": {
@@ -220,7 +220,7 @@ class BrokerClusterInfo:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "BrokerClusterInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "BrokerClusterInfo":
         """从字典创建实例"""
         return cls(
             broker_addr_table={
@@ -255,8 +255,6 @@ class BrokerClusterInfo:
 
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise ValueError(
-                f"Failed to parse BrokerClusterInfo from bytes: {e}"
-            )
+            raise ValueError(f"Failed to parse BrokerClusterInfo from bytes: {e}")
         except Exception as e:
             raise ValueError(f"Invalid BrokerClusterInfo format: {e}")

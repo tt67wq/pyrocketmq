@@ -6,7 +6,6 @@ RocketMQ消息ID的生成和解析功能。
 import ipaddress
 import struct
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -194,9 +193,7 @@ def is_valid_message_id(msg_id: str) -> bool:
         return False
 
 
-def create_message_id_from_bytes(
-    addr_bytes: bytes, port: int, offset: int
-) -> str:
+def create_message_id_from_bytes(addr_bytes: bytes, port: int, offset: int) -> str:
     """从字节数组创建消息ID字符串（与Go实现保持一致）
 
     Args:
@@ -212,9 +209,7 @@ def create_message_id_from_bytes(
         >>> msg_id = create_message_id_from_bytes(addr_bytes, 10911, 123456789)
     """
     if len(addr_bytes) != 4:
-        raise ValueError(
-            f"IP地址字节数组长度必须为4，实际为: {len(addr_bytes)}"
-        )
+        raise ValueError(f"IP地址字节数组长度必须为4，实际为: {len(addr_bytes)}")
 
     # 转换为IP地址字符串后使用标准函数创建
     addr = get_address_by_bytes(addr_bytes)
@@ -222,7 +217,7 @@ def create_message_id_from_bytes(
 
 
 # 便利函数
-def parse_message_id_from_string(msg_id_str: str) -> Optional[MessageID]:
+def parse_message_id_from_string(msg_id_str: str) -> MessageID | None:
     """安全解析消息ID字符串（不会抛出异常）
 
     Args:

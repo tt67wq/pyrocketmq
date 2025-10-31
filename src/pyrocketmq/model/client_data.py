@@ -6,7 +6,7 @@
 import ast
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any
 
 from .errors import DeserializationError
 from .message_queue import MessageQueue
@@ -23,10 +23,10 @@ class SubscriptionData:
     sub_string: str = "*"
     sub_version: int = 0
     expression_type: str = "TAG"
-    tags_set: List[str] = field(default_factory=list)
-    code_set: List[str] = field(default_factory=list)
+    tags_set: list[str] = field(default_factory=list)
+    code_set: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """转换为字典格式"""
         return {
             "topic": self.topic,
@@ -38,7 +38,7 @@ class SubscriptionData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SubscriptionData":
+    def from_dict(cls, data: dict[str, Any]) -> "SubscriptionData":
         """从字典创建实例"""
         return cls(
             topic=data.get("topic", ""),
@@ -51,9 +51,7 @@ class SubscriptionData:
 
     def __str__(self) -> str:
         """字符串表示"""
-        return (
-            f"SubscriptionData[topic={self.topic}, subString={self.sub_string}]"
-        )
+        return f"SubscriptionData[topic={self.topic}, subString={self.sub_string}]"
 
 
 @dataclass
@@ -69,12 +67,12 @@ class ProducerData:
         """获取唯一标识符"""
         return self.group_name
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {"groupName": self.group_name}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProducerData":
+    def from_dict(cls, data: dict[str, Any]) -> "ProducerData":
         """从字典创建实例"""
         return cls(group_name=data["groupName"])
 
@@ -96,9 +94,7 @@ class ProducerData:
             parsed_data = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse ProducerData from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse ProducerData from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid ProducerData format: {e}")
 
@@ -120,9 +116,7 @@ class ConsumerData:
     consume_from_where: (
         str  # 消费起始位置 (CONSUME_FROM_LAST_OFFSET/CONSUME_FROM_FIRST_OFFSET)
     )
-    subscription_data: List[SubscriptionData] = field(
-        default_factory=list
-    )  # 订阅关系
+    subscription_data: list[SubscriptionData] = field(default_factory=list)  # 订阅关系
 
     def unique_id(self) -> str:
         """获取唯一标识符，对应Go实现的UniqueID()方法"""
@@ -133,7 +127,7 @@ class ConsumerData:
         if self.subscription_data is None:
             self.subscription_data = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {
             "groupName": self.group_name,
@@ -144,7 +138,7 @@ class ConsumerData:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConsumerData":
+    def from_dict(cls, data: dict[str, Any]) -> "ConsumerData":
         """从字典创建实例"""
         return cls(
             group_name=data["groupName"],
@@ -172,9 +166,7 @@ class ConsumerData:
             parsed_data = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse ConsumerData from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse ConsumerData from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid ConsumerData format: {e}")
 
@@ -210,7 +202,7 @@ class ProcessQueueInfo:
     last_pull_timestamp: int = 0  # 最后拉取时间戳
     last_consume_timestamp: int = 0  # 最后消费时间戳
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式
 
         Returns:
@@ -234,7 +226,7 @@ class ProcessQueueInfo:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProcessQueueInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "ProcessQueueInfo":
         """从字典创建处理队列信息实例
 
         Args:
@@ -283,7 +275,7 @@ class ConsumeStatus:
     consume_failed_tps: float = 0.0  # 消费失败TPS
     consume_failed_msgs: int = 0  # 消费失败消息数量
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式
 
         Returns:
@@ -299,7 +291,7 @@ class ConsumeStatus:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConsumeStatus":
+    def from_dict(cls, data: dict[str, Any]) -> "ConsumeStatus":
         """从字典创建消费状态实例
 
         Args:
@@ -333,18 +325,16 @@ class ConsumerRunningInfo:
     表示消费者的运行状态信息，与Go语言实现保持兼容。
     """
 
-    properties: Dict[str, str] = field(default_factory=dict)  # 属性配置
-    subscription_data: Dict[SubscriptionData, bool] = field(
+    properties: dict[str, str] = field(default_factory=dict)  # 属性配置
+    subscription_data: dict[SubscriptionData, bool] = field(
         default_factory=dict
     )  # 订阅数据映射
-    mq_table: Dict[MessageQueue, ProcessQueueInfo] = field(
+    mq_table: dict[MessageQueue, ProcessQueueInfo] = field(
         default_factory=dict
     )  # 消息队列处理信息表
-    status_table: Dict[str, ConsumeStatus] = field(
-        default_factory=dict
-    )  # 状态表
+    status_table: dict[str, ConsumeStatus] = field(default_factory=dict)  # 状态表
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式
 
         Returns:
@@ -373,7 +363,7 @@ class ConsumerRunningInfo:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ConsumerRunningInfo":
+    def from_dict(cls, data: dict[str, Any]) -> "ConsumerRunningInfo":
         """从字典创建消费者运行信息实例
 
         Args:
@@ -387,15 +377,10 @@ class ConsumerRunningInfo:
         sub_data_raw = data.get("subscriptionData", {})
         if isinstance(sub_data_raw, dict):
             for sub_key, sub_value in sub_data_raw.items():
-                if (
-                    isinstance(sub_value, dict)
-                    and "subscriptionData" in sub_value
-                ):
+                if isinstance(sub_value, dict) and "subscriptionData" in sub_value:
                     sub_info = sub_value["subscriptionData"]
                     is_active = sub_value.get("isActive", False)
-                    subscription_data[SubscriptionData.from_dict(sub_info)] = (
-                        is_active
-                    )
+                    subscription_data[SubscriptionData.from_dict(sub_info)] = is_active
 
         # 解析mq_table
         mq_table = {}
@@ -457,9 +442,7 @@ class ConsumerRunningInfo:
             return True
         return False
 
-    def add_queue_info(
-        self, mq: MessageQueue, process_info: ProcessQueueInfo
-    ) -> None:
+    def add_queue_info(self, mq: MessageQueue, process_info: ProcessQueueInfo) -> None:
         """添加队列处理信息
 
         Args:
@@ -613,7 +596,7 @@ class ConsumerRunningInfo:
         """
         return (mq.topic, mq.broker_name, mq.queue_id)
 
-    def _consume_status_to_dict(self, obj: "ConsumeStatus") -> Dict[str, Any]:
+    def _consume_status_to_dict(self, obj: "ConsumeStatus") -> dict[str, Any]:
         """ConsumeStatus对象转换为字典，用于JSON序列化
 
         Args:

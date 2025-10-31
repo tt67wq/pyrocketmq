@@ -4,7 +4,7 @@ RocketMQ远程命令数据结构
 
 import json
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+
 
 from .enums import FlagType, LanguageCode
 
@@ -18,9 +18,9 @@ class RemotingCommand:
     version: int = 1
     opaque: int = 0
     flag: int = 0
-    remark: Optional[str] = None
-    ext_fields: Dict[str, str] = field(default_factory=dict)
-    body: Optional[bytes] = None
+    remark: str | None = None
+    ext_fields: dict[str, str] = field(default_factory=dict)
+    body: bytes | None = None
 
     def __post_init__(self):
         """后初始化处理"""
@@ -58,13 +58,11 @@ class RemotingCommand:
         """添加扩展字段"""
         self.ext_fields[key] = value
 
-    def get_ext_field(
-        self, key: str, default: Optional[str] = None
-    ) -> Optional[str]:
+    def get_ext_field(self, key: str, default: str | None = None) -> str | None:
         """获取扩展字段"""
         return self.ext_fields.get(key, default)
 
-    def remove_ext_field(self, key: str) -> Optional[str]:
+    def remove_ext_field(self, key: str) -> str | None:
         """移除扩展字段"""
         return self.ext_fields.pop(key, None)
 
@@ -76,7 +74,7 @@ class RemotingCommand:
         """清空扩展字段"""
         self.ext_fields.clear()
 
-    def get_ext_fields_copy(self) -> Dict[str, str]:
+    def get_ext_fields_copy(self) -> dict[str, str]:
         """获取扩展字段的拷贝"""
         return self.ext_fields.copy()
 
@@ -92,7 +90,7 @@ class RemotingCommand:
 
     def _serialize_header(self) -> bytes:
         """序列化header数据为JSON格式"""
-        header_dict: dict = {
+        header_dict: dict[str, str | int | dict[str, str]] = {
             "code": self.code,
             "language": int(self.language),
             "version": self.version,

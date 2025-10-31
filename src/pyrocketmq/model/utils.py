@@ -6,7 +6,7 @@ import json
 import struct
 import time
 import threading
-from typing import Any, Dict, List, Optional, Final
+from typing import Any, Final
 
 from .command import RemotingCommand
 from .enums import (
@@ -137,7 +137,7 @@ def get_command_summary(command: RemotingCommand) -> str:
     return f"{type_str}[code={command.code}, opaque={command.opaque}, body={body_size}B, ext={ext_count}]"
 
 
-def get_topic_from_command(command: RemotingCommand) -> Optional[str]:
+def get_topic_from_command(command: RemotingCommand) -> str | None:
     """从命令中提取主题信息
 
     Args:
@@ -149,7 +149,7 @@ def get_topic_from_command(command: RemotingCommand) -> Optional[str]:
     return command.ext_fields.get("topic")
 
 
-def get_group_from_command(command: RemotingCommand) -> Optional[str]:
+def get_group_from_command(command: RemotingCommand) -> str | None:
     """从命令中提取组信息（生产者组或消费者组）
 
     Args:
@@ -167,7 +167,7 @@ def get_group_from_command(command: RemotingCommand) -> Optional[str]:
     return command.ext_fields.get("producerGroup")
 
 
-def get_queue_id_from_command(command: RemotingCommand) -> Optional[int]:
+def get_queue_id_from_command(command: RemotingCommand) -> int | None:
     """从命令中提取队列ID
 
     Args:
@@ -185,7 +185,7 @@ def get_queue_id_from_command(command: RemotingCommand) -> Optional[int]:
     return None
 
 
-def get_offset_from_command(command: RemotingCommand) -> Optional[int]:
+def get_offset_from_command(command: RemotingCommand) -> int | None:
     """从命令中提取偏移量
 
     Args:
@@ -230,8 +230,8 @@ def copy_command_with_new_opaque(
 def create_response_for_request(
     request: RemotingCommand,
     response_code: int,
-    body: Optional[bytes] = None,
-    remark: Optional[str] = None,
+    body: bytes | None = None,
+    remark: str | None = None,
 ) -> RemotingCommand:
     """为请求创建对应的响应
 
@@ -257,8 +257,8 @@ def create_response_for_request(
 
 
 def filter_commands_by_topic(
-    commands: List[RemotingCommand], topic: str
-) -> List[RemotingCommand]:
+    commands: list[RemotingCommand], topic: str
+) -> list[RemotingCommand]:
     """按主题过滤命令列表
 
     Args:
@@ -272,8 +272,8 @@ def filter_commands_by_topic(
 
 
 def filter_commands_by_group(
-    commands: List[RemotingCommand], group: str
-) -> List[RemotingCommand]:
+    commands: list[RemotingCommand], group: str
+) -> list[RemotingCommand]:
     """按组过滤命令列表
 
     Args:
@@ -286,7 +286,7 @@ def filter_commands_by_group(
     return [cmd for cmd in commands if get_group_from_command(cmd) == group]
 
 
-def get_command_stats(commands: List[RemotingCommand]) -> Dict[str, int]:
+def get_command_stats(commands: list[RemotingCommand]) -> dict[str, int]:
     """获取命令统计信息
 
     Args:
@@ -319,7 +319,7 @@ def get_command_stats(commands: List[RemotingCommand]) -> Dict[str, int]:
     return stats
 
 
-def format_ext_fields_for_display(ext_fields: Dict[str, str]) -> str:
+def format_ext_fields_for_display(ext_fields: dict[str, str]) -> str:
     """格式化扩展字段用于显示
 
     Args:
@@ -338,7 +338,7 @@ def format_ext_fields_for_display(ext_fields: Dict[str, str]) -> str:
     return "{\n" + "\n".join(lines) + "\n}"
 
 
-def command_to_dict(command: RemotingCommand) -> Dict[str, Any]:
+def command_to_dict(command: RemotingCommand) -> dict[str, Any]:
     """将命令转换为字典格式
 
     Args:
@@ -369,7 +369,7 @@ def command_to_dict(command: RemotingCommand) -> Dict[str, Any]:
     }
 
 
-def commands_to_json(commands: List[RemotingCommand], indent: Optional[int] = 2) -> str:
+def commands_to_json(commands: list[RemotingCommand], indent: int | None = 2) -> str:
     """将命令列表转换为JSON格式
 
     Args:
