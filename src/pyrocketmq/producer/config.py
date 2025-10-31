@@ -231,6 +231,20 @@ class ProducerConfig:
     在生产环境中建议启用，以便及时发现性能问题。
     """
 
+    # ==================== 路由策略配置 ====================
+    routing_strategy: str = "round_robin"
+    """路由策略
+
+    指定选择消息队列的算法策略，支持以下选项：
+    - "round_robin": 轮询策略，按顺序轮流选择队列，实现负载均衡
+    - "random": 随机策略，随机选择可用队列，简单高效
+    - "message_hash": 消息哈希策略，基于消息分片键计算哈希值选择队列
+      确保相同分片键的消息路由到同一队列，保证消息顺序性
+
+    默认为"round_robin"策略，适合大多数场景。
+    对于需要消息顺序性的场景，建议使用"message_hash"策略。
+    """
+
     # ==================== 传输层配置 ====================
     transport_config: TransportConfig | None = None
     """传输层配置
@@ -368,6 +382,14 @@ class ProducerConfig:
         if self.batch_split_type not in ["by_size", "by_count"]:
             raise ValueError("batch_split_type must be 'by_size' or 'by_count'")
 
+        # 验证路由策略配置
+        valid_routing_strategies = ["round_robin", "random", "message_hash"]
+        if self.routing_strategy not in valid_routing_strategies:
+            raise ValueError(
+                f"routing_strategy must be one of {valid_routing_strategies}, "
+                f"got '{self.routing_strategy}'"
+            )
+
     @classmethod
     def from_env(cls) -> "ProducerConfig":
         """从环境变量创建配置实例
@@ -382,6 +404,7 @@ class ProducerConfig:
         - PYROCKETMQ_SEND_MSG_TIMEOUT: 发送超时时间（毫秒）
         - PYROCKETMQ_RETRY_TIMES: 重试次数
         - PYROCKETMQ_MAX_MESSAGE_SIZE: 最大消息大小
+        - PYROCKETMQ_ROUTING_STRATEGY: 路由策略 (round_robin/random/message_hash)
         - PYROCKETMQ_DEBUG_ENABLED: 是否启用调试模式
 
         Returns:
@@ -421,6 +444,10 @@ class ProducerConfig:
             except ValueError:
                 pass
 
+        # 路由策略配置
+        if routing_strategy := os.getenv("PYROCKETMQ_ROUTING_STRATEGY"):
+            config.routing_strategy = routing_strategy
+
         if debug_enabled := os.getenv("PYROCKETMQ_DEBUG_ENABLED"):
             config.debug_enabled = debug_enabled.lower() in ("true", "1", "yes")
 
@@ -459,6 +486,18 @@ PRODUCTION_CONFIG = ProducerConfig(
     send_latency_enable=True,
     trace_message=False,
     debug_enabled=False,
+    routing_strategy="round_robin",
+)
+
+ORDER_SEQUENCED_CONFIG = ProducerConfig(
+    send_msg_timeout=5000.0,
+    retry_times=5,
+    retry_another_broker_when_not_store_ok=True,
+    batch_size=1,  # 单条消息发送保证顺序
+    send_latency_enable=True,
+    trace_message=True,
+    debug_enabled=False,
+    routing_strategy="message_hash",
 )
 
 HIGH_PERFORMANCE_CONFIG = ProducerConfig(
@@ -466,6 +505,7 @@ HIGH_PERFORMANCE_CONFIG = ProducerConfig(
     retry_times=1,
     compress_msg_body_over_howmuch=1024 * 1024,  # 1MB
     max_message_size=2 * 1024 * 1024,  # 2MB
+    routing_strategy="random",
     batch_size=64,
     async_send_semaphore=50000,
     send_latency_enable=True,

@@ -1101,7 +1101,7 @@ class BrokerClient:
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 心跳成功
-                logger.info(
+                logger.debug(
                     f"Successfully sent heartbeat: clientId={heartbeat_data.client_id}, "
                     f"producers={len(heartbeat_data.producer_data_set)}, "
                     f"consumers={len(heartbeat_data.consumer_data_set)}, heartbeatRT={heartbeat_rt:.3f}s"

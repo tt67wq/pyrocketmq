@@ -31,7 +31,6 @@ from pyrocketmq.broker.client import BrokerClient
 
 # Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
-from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
 
@@ -45,11 +44,12 @@ from pyrocketmq.producer.errors import (
     MessageSendError,
     ProducerError,
     ProducerStartError,
+    ProducerShutdownError,
     ProducerStateError,
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.producer.router import MessageRouter
+from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
@@ -103,26 +103,31 @@ class Producer:
             config: Producer配置，如果为None则使用默认配置
         """
         # 配置管理
-        self._config = config or ProducerConfig()
+        self._config: ProducerConfig = config or ProducerConfig()
 
         # 简化的状态管理 (MVP设计)
-        self._running = False
+        self._running: bool = False
 
         # 核心组件
-        self._topic_mapping = TopicBrokerMapping(
+        self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping(
             route_timeout=self._config.update_topic_route_info_interval / 1000.0
         )
 
         # 消息路由器
-        self._message_router = MessageRouter(topic_mapping=self._topic_mapping)
+        self._message_router: MessageRouter = MessageRouter(
+            topic_mapping=self._topic_mapping,
+            default_strategy=RoutingStrategy(self._config.routing_strategy),
+        )
 
         # 基础状态统计
-        self._total_sent = 0
-        self._total_failed = 0
+        self._total_sent: int = 0
+        self._total_failed: int = 0
 
         # NameServer连接管理（仅用于路由查询）
         self._nameserver_connections: dict[str, Remote] = {}
-        self._nameserver_addrs = self._parse_nameserver_addrs(self._config.namesrv_addr)
+        self._nameserver_addrs: dict[str, str] = self._parse_nameserver_addrs(
+            self._config.namesrv_addr
+        )
 
         # Broker管理器（使用现有的连接池管理）
         transport_config = TransportConfig(
@@ -132,19 +137,16 @@ class Producer:
         remote_config = RemoteConfig(
             rpc_timeout=self._config.send_msg_timeout / 1000.0,
         )
-        self._broker_manager = BrokerManager(
+        self._broker_manager: BrokerManager = BrokerManager(
             remote_config=remote_config,
             transport_config=transport_config,
         )
 
         # 后台任务线程
         self._background_thread: threading.Thread | None = None
-        self._shutdown_event = threading.Event()
+        self._shutdown_event: threading.Event = threading.Event()
 
-        logger.info(
-            f"Producer initialized with config: {self._config.producer_group}, "
-            f"NameServer addrs: {self._nameserver_addrs}"
-        )
+        logger.info("producer_initialized")
 
     def start(self) -> None:
         """启动Producer
@@ -156,12 +158,9 @@ class Producer:
             ProducerStartError: 当启动失败时抛出异常
         """
         if self._running:
-            logger.warning("Producer is already running")
             return
 
         try:
-            logger.info("Starting producer...")
-
             # 1. 初始化NameServer连接（仅用于路由查询）
             self._init_nameserver_connections()
 
@@ -174,13 +173,7 @@ class Producer:
             # 设置运行状态
             self._running = True
 
-            logger.info(
-                f"Producer started successfully. Group: {self._config.producer_group}, "
-                f"Client ID: {self._config.client_id}"
-            )
-
         except Exception as e:
-            logger.error(f"Failed to start producer: {e}")
             raise ProducerStartError(f"Producer start failed: {e}") from e
 
     def shutdown(self) -> None:
@@ -190,12 +183,9 @@ class Producer:
         多次调用不会产生副作用。
         """
         if not self._running:
-            logger.warning("Producer is not running")
             return
 
         try:
-            logger.info("Shutting down producer...")
-
             # 设置停止状态
             self._running = False
 
@@ -208,13 +198,8 @@ class Producer:
             # 3. 关闭NameServer连接
             self._close_nameserver_connections()
 
-            logger.info(
-                f"Producer shutdown completed. Total sent: {self._total_sent}, "
-                f"Total failed: {self._total_failed}"
-            )
-
         except Exception as e:
-            logger.error(f"Error during producer shutdown: {e}")
+            raise ProducerShutdownError(f"Producer shutdown failed: {e}") from e
 
     def send(self, message: Message) -> SendMessageResult:
         """同步发送消息
@@ -995,26 +980,182 @@ def create_producer(
 ) -> Producer:
     """创建Producer实例的便捷函数
 
-    提供简化的接口来创建Producer实例，特别适合快速开发。
+    提供简化的接口来创建Producer实例，特别适合快速开发和原型验证。
+    该函数封装了ProducerConfig的创建过程，让你能够用最少的代码启动一个功能完整的RocketMQ生产者。
+
+    ========== 功能特性 ==========
+
+    - 🚀 **快速启动**: 一行代码即可创建生产者实例
+    - 📡 **自动连接**: 自动建立与NameServer的连接
+    - 🔄 **后台服务**: 自动启动路由刷新和心跳发送等后台任务
+    - ⚙️ **灵活配置**: 支持所有ProducerConfig的配置参数
+    - 🛡️ **异常安全**: 配置错误时提供清晰的错误信息
+    - 🔧 **生产就绪**: 支持重试、超时等生产环境必需的特性
+
+    ========== 与AsyncProducer的对比 ==========
+
+    | 特性 | Producer (同步) | AsyncProducer (异步) |
+    |------|----------------|-------------------|
+    | 编程模型 | 同步阻塞 | async/await |
+    | 使用复杂度 | 简单易用 | 需要异步编程知识 |
+    | 并发性能 | 单线程顺序处理 | 高并发处理 |
+    | 资源占用 | 较高连接开销 | 更低连接开销 |
+    | 适用场景 | 简单应用、批处理 | 高并发、低延迟应用 |
+    | 学习成本 | 低 | 中等 |
+    | 调试难度 | 容易 | 需要异步调试技巧 |
+
+    **选择建议**:
+    - 🟢 **选择Producer**: 如果你是RocketMQ新手、应用简单、或主要进行批处理操作
+    - 🟡 **选择AsyncProducer**: 如果你的应用已经是异步架构、需要高并发消息发送、或对延迟有严格要求
+
+    ========== 参数详解 ==========
 
     Args:
-        producer_group: 生产者组名，默认为"DEFAULT_PRODUCER"
-        namesrv_addr: NameServer地址，默认为"localhost:9876"
-        **kwargs: 其他配置参数
+        producer_group (str): 生产者组名
+            - 同一组的生产者被视为同一应用的不同实例
+            - 用于事务消息和消费端的消息去重
+            - 默认值: "DEFAULT_PRODUCER"
+            - 建议格式: "应用名_功能名_PRODUCER"，如 "ORDER_SERVICE_PRODUCER"
+
+        namesrv_addr (str): NameServer服务器地址
+            - RocketMQ的注册发现中心地址
+            - 支持单个地址或多个地址（用分号分隔）
+            - 格式: "host:port" 或 "host1:port1;host2:port2"
+            - 默认值: "localhost:9876"
+            - 生产环境建议配置多个NameServer实现高可用
+
+        **kwargs: 其他ProducerConfig配置参数
+            所有ProducerConfig支持的参数都可以通过kwargs传递，包括但不限于：
+
+            - send_message_timeout (int): 消息发送超时时间，默认3000ms
+            - retry_times (int): 发送失败重试次数，默认2次
+            - compress_msg_body_over_howmuch (int): 消息体压缩阈值，默认4096字节
+            - compress_level (int): 压缩级别，默认5（0-9，越大压缩率越高但CPU消耗越多）
+            - max_message_size (int): 最大消息体大小，默认4MB
+            - retry_another_broker_when_not_store_ok (bool): 存储失败时是否重试其他broker，默认False
+
+    ========== 返回值 ==========
 
     Returns:
-        Producer: Producer实例
+        Producer: 配置完成的Producer实例
+            - 实例已初始化但未启动，需要调用producer.start()启动
+            - 包含完整的消息发送功能（同步、异步、单向）
+            - 支持批量消息和事务消息（需要相应的Producer实例）
+            - 内置连接池管理和路由缓存机制
 
-    Example:
-        >>> # 创建默认Producer
-        >>> producer = create_producer()
-        >>>
-        >>> # 创建自定义Producer
-        >>> producer = create_producer(
-        ...     producer_group="my_producer",
-        ...     namesrv_addr="192.168.1.100:9876",
-        ...     retry_times=3
-        ... )
+    ========== 使用示例 ==========
+
+    基础使用示例：
+
+    >>> from pyrocketmq.producer import create_producer
+    >>> from pyrocketmq.model.message import Message
+    >>>
+    >>> # 1. 创建默认配置的生产者
+    >>> producer = create_producer()
+    >>> producer.start()
+    >>>
+    >>> # 2. 发送简单消息
+    >>> message = Message(topic="test_topic", body=b"Hello, RocketMQ!")
+    >>> result = producer.send(message)
+    >>> print(f"消息发送成功，ID: {result.msg_id}")
+    >>>
+    >>> producer.shutdown()
+
+    自定义配置示例：
+
+    >>> # 3. 创建自定义配置的生产者
+    >>> producer = create_producer(
+    ...     producer_group="ORDER_SERVICE_PRODUCER",
+    ...     namesrv_addr="192.168.1.100:9876;192.168.1.101:9876",
+    ...     send_message_timeout=5000,
+    ...     retry_times=3,
+    ...     compress_msg_body_over_howmuch=1024,  # 1KB以上压缩
+    ...     compress_level=6,
+    ...     max_message_size=8 * 1024 * 1024,     # 8MB
+    ... )
+    >>> producer.start()
+    >>>
+    >>> # 4. 发送带属性的消息
+    >>> message = Message(
+    ...     topic="order_topic",
+    ...     body=b'{"order_id": "12345", "amount": 99.99}',
+    ...     flag=0
+    ... )
+    >>> message.set_property("order_type", "electronic")
+    >>> message.set_property("priority", "high")
+    >>>
+    >>> result = producer.send(message)
+    >>> print(f"订单消息发送成功，队列ID: {result.queue_id}")
+    >>>
+    >>> producer.shutdown()
+
+    生产环境最佳实践：
+
+    >>> # 5. 生产环境推荐配置
+    >>> producer = create_producer(
+    ...     producer_group=f"{APP_NAME}_PRODUCER",  # 使用环境变量
+    ...     namesrv_addr=os.getenv("NAMESRV_ADDR", "localhost:9876"),
+    ...     send_message_timeout=10000,            # 10秒超时
+    ...     retry_times=5,                         # 更多重试
+    ...     retry_another_broker_when_not_store_ok=True,  # 故障转移
+    ...     compress_msg_body_over_howmuch=2048,   # 2KB压缩阈值
+    ... )
+    >>>
+    >>> # 6. 使用上下文管理器（推荐）
+    >>> try:
+    ...     producer.start()
+    ...     # 业务逻辑...
+    ... finally:
+    ...     producer.shutdown()
+
+    ========== 常见问题 ==========
+
+    Q: 如何选择合适的producer_group名称？
+    A: 建议使用"应用名_功能名_PRODUCER"的格式，避免使用默认值，
+       不同功能的生产者应该使用不同的组名。
+
+    Q: namesrv_addr应该如何配置？
+    A: 开发环境可以使用"localhost:9876"，生产环境建议配置多个
+       NameServer地址，用分号分隔，实现高可用。
+
+    Q: 消息发送失败怎么办？
+    A: 调整retry_times参数增加重试次数，启用retry_another_broker_when_not_store_ok
+       实现故障转移，同时检查网络连接和broker状态。
+
+    Q: 什么时候需要调整超时时间？
+    A: 网络延迟较高或消息体较大时，应该适当增加send_message_timeout。
+
+    Q: 应该选择Producer还是AsyncProducer？
+    A: 根据具体需求选择：
+       - **新手用户**: 建议从Producer开始，学习曲线平缓
+       - **简单应用**: Producer足够使用，代码更直观
+       - **高并发需求**: 选择AsyncProducer，性能更优
+       - **异步架构**: 如果整个应用都是异步的，使用AsyncProducer更一致
+       - **批处理场景**: Producer更适合简单批量操作
+       - **实时性要求高**: AsyncProducer提供更低的延迟
+
+    ========== 注意事项 ==========
+
+    - Producer实例不是线程安全的，多线程使用时请确保每个线程使用独立的Producer实例
+    - 调用start()后才能发送消息，使用完毕后记得调用shutdown()释放资源
+    - 消息体大小不要超过max_message_size限制，默认4MB
+    - 生产环境中建议配置多个NameServer地址以确保高可用性
+    - 发送重要消息时建议增加重试次数和超时时间
+
+    ========== 异常处理 ==========
+
+    函数可能抛出的异常：
+    - TypeError: 当producer_group或namesrv_addr参数类型错误时
+    - ValueError: 当配置参数值不合法时
+    - 所有ProducerConfig.__init__可能抛出的异常
+
+    ========== 参见 ==========
+
+    - Producer: 生产者核心实现类
+    - ProducerConfig: 生产者配置类
+    - Message: 消息数据结构
+    - create_async_producer: 异步生产者创建函数
+    - create_transaction_producer: 事务生产者创建函数
     """
     config = ProducerConfig(
         producer_group=producer_group,

@@ -31,11 +31,8 @@ from pyrocketmq.broker.async_client import AsyncBrokerClient
 
 # Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
-from pyrocketmq.model.enums import ResponseCode
-from pyrocketmq.model.factory import RemotingRequestFactory
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
-from pyrocketmq.model.nameserver_models import TopicRouteData
 
 # Local imports - nameserver
 from pyrocketmq.nameserver.client import AsyncNameServerClient
@@ -51,7 +48,7 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.producer.router import MessageRouter
+from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
@@ -105,22 +102,25 @@ class AsyncProducer:
             config: Producer配置，如果为None则使用默认配置
         """
         # 配置管理
-        self._config = config or ProducerConfig()
+        self._config: ProducerConfig = config or ProducerConfig()
 
         # 简化的状态管理 (MVP设计)
-        self._running = False
+        self._running: bool = False
 
         # 核心组件
-        self._topic_mapping = TopicBrokerMapping(
+        self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping(
             route_timeout=self._config.update_topic_route_info_interval / 1000.0
         )
 
         # 消息路由器
-        self._message_router = MessageRouter(topic_mapping=self._topic_mapping)
+        self._message_router: MessageRouter = MessageRouter(
+            topic_mapping=self._topic_mapping,
+            default_strategy=RoutingStrategy(self._config.routing_strategy),
+        )
 
         # 基础状态统计
-        self._total_sent = 0
-        self._total_failed = 0
+        self._total_sent: int = 0
+        self._total_failed: int = 0
 
         # NameServer连接管理（仅用于路由查询）
         self._nameserver_connections: dict[str, AsyncRemote] = {}
@@ -136,14 +136,14 @@ class AsyncProducer:
         remote_config = RemoteConfig(
             rpc_timeout=self._config.send_msg_timeout / 1000.0,
         )
-        self._broker_manager = AsyncBrokerManager(
+        self._broker_manager: AsyncBrokerManager = AsyncBrokerManager(
             remote_config=remote_config,
             transport_config=transport_config,
         )
 
         # 后台任务管理
-        self._background_task = None
-        self._shutdown_event = asyncio.Event()
+        self._background_task: asyncio.Task[None] | None = None
+        self._shutdown_event: asyncio.Event = asyncio.Event()
 
         logger.info(
             f"AsyncProducer initialized with config: {self._config.producer_group}, "
@@ -1018,38 +1018,217 @@ def create_async_producer(
 ) -> AsyncProducer:
     """创建AsyncProducer实例的便捷函数
 
-    提供简化的接口来创建AsyncProducer实例，特别适合快速开发。
+    提供简化的接口来创建异步Producer实例，特别适合高并发和异步编程场景。
+    该函数封装了ProducerConfig的创建过程，让你能够用最少的代码启动一个功能完整的异步RocketMQ生产者。
+
+    ========== 功能特性 ==========
+
+    - 🚀 **异步高并发**: 基于asyncio实现，支持高并发消息发送
+    - 📡 **自动连接**: 异步建立与NameServer的连接池
+    - 🔄 **后台服务**: 自动启动异步路由刷新和心跳发送任务
+    - ⚙️ **灵活配置**: 支持所有ProducerConfig的配置参数
+    - 🛡️ **异常安全**: 异步操作中的完整异常处理机制
+    - 🔧 **生产就绪**: 支持重试、超时、批量发送等生产环境特性
+    - 📊 **性能监控**: 内置异步统计和监控功能
+
+    ========== 与同步Producer的区别 ==========
+
+    | 特性 | AsyncProducer | Producer |
+    |------|-------------|----------|
+    | 编程模型 | async/await | 同步阻塞 |
+    | 并发性能 | 高并发 | 单线程 |
+    | 资源占用 | 更低连接开销 | 更高连接开销 |
+    | 适用场景 | 高并发、低延迟 | 简单场景、批处理 |
+    | 学习成本 | 需要异步编程知识 | 简单易用 |
+
+    ========== 参数详解 ==========
 
     Args:
-        producer_group: 生产者组名，默认为"DEFAULT_PRODUCER"
-        namesrv_addr: NameServer地址，默认为"localhost:9876"
-        **kwargs: 其他配置参数
+        producer_group (str): 生产者组名
+            - 同一组的生产者被视为同一应用的不同实例
+            - 用于事务消息和消费端的消息去重
+            - 默认值: "DEFAULT_PRODUCER"
+            - 建议格式: "应用名_功能名_ASYNC_PRODUCER"，如 "ORDER_SERVICE_ASYNC_PRODUCER"
+
+        namesrv_addr (str): NameServer服务器地址
+            - RocketMQ的注册发现中心地址
+            - 支持单个地址或多个地址（用分号分隔）
+            - 格式: "host:port" 或 "host1:port1;host2:port2"
+            - 默认值: "localhost:9876"
+            - 生产环境建议配置多个NameServer实现高可用
+
+        **kwargs: 其他ProducerConfig配置参数
+            所有ProducerConfig支持的参数都可以通过kwargs传递，重要的异步相关参数包括：
+
+            - send_message_timeout (int): 消息发送超时时间，默认3000ms
+            - retry_times (int): 发送失败重试次数，默认2次
+            - async_send_semaphore (int): 异步发送信号量大小，默认10000
+            - routing_strategy (str): 路由策略，默认"round_robin"
+            - compress_msg_body_over_howmuch (int): 消息体压缩阈值，默认4MB
+            - max_message_size (int): 最大消息体大小，默认4MB
+
+    ========== 返回值 ==========
 
     Returns:
-        AsyncProducer: AsyncProducer实例
+        AsyncProducer: 配置完成的异步Producer实例
+            - 实例已初始化但未启动，需要调用await producer.start()
+            - 包含完整的异步消息发送功能（发送、批量发送、单向发送）
+            - 内置异步连接池管理和路由缓存机制
+            - 支持高并发消息发送和异步结果处理
 
-    Example:
-        >>> import asyncio
-        >>>
-        >>> async def main():
-        >>>     # 创建默认AsyncProducer
-        >>>     producer = create_async_producer()
-        >>>     await producer.start()
-        >>>
-        >>>     # 发送消息
-        >>>     message = Message(topic="test_topic", body=b"Hello RocketMQ")
-        >>>     result = await producer.send_async(message)
-        >>>     print(f"Send result: {result.success}")
-        >>>
-        >>>     # 关闭Producer
-        >>>     await producer.shutdown()
-        >>>
-        >>> # 创建自定义AsyncProducer
-        >>> producer = create_async_producer(
-        >>>     producer_group="my_async_producer",
-        >>>     namesrv_addr="192.168.1.100:9876",
-        >>>     retry_times=3
-        >>> )
+    ========== 使用示例 ==========
+
+    基础异步使用示例：
+
+    >>> import asyncio
+    >>> from pyrocketmq.producer import create_async_producer
+    >>> from pyrocketmq.model.message import Message
+    >>>
+    >>> async def basic_example():
+    >>>     # 1. 创建默认异步Producer
+    >>>     producer = create_async_producer()
+    >>>     await producer.start()
+    >>>
+    >>>     # 2. 异步发送消息
+    >>>     message = Message(topic="test_topic", body=b"Hello, Async RocketMQ!")
+    >>>     result = await producer.send(message)
+    >>>     print(f"消息发送成功，ID: {result.msg_id}")
+    >>>
+    >>>     # 3. 关闭Producer
+    >>>     await producer.shutdown()
+    >>>
+    >>> # 运行异步示例
+    >>> asyncio.run(basic_example())
+
+    高并发异步发送示例：
+
+    >>> async def high_concurrency_example():
+    >>>     # 创建高性能异步Producer
+    >>>     producer = create_async_producer(
+    >>>         producer_group="HIGH_CONCURRENCY_PRODUCER",
+    >>>         namesrv_addr="192.168.1.100:9876;192.168.1.101:9876",
+    >>>         async_send_semaphore=50000,  # 更大的并发信号量
+    >>>         send_message_timeout=5000,   # 5秒超时
+    >>>         retry_times=3,               # 更多重试
+    >>>         routing_strategy="random",   # 随机路由策略
+    >>>     )
+    >>>     await producer.start()
+    >>>
+    >>>     # 创建大量异步发送任务
+    >>>     tasks = []
+    >>>     for i in range(1000):
+    >>>         message = Message(
+    >>>             topic="high_concurrency_topic",
+    >>>             body=f"message_{i}".encode()
+    >>>         )
+    >>>         tasks.append(producer.send(message))
+    >>>
+    >>>     # 并发执行所有发送任务
+    >>>     results = await asyncio.gather(*tasks)
+    >>>     success_count = sum(1 for r in results if r.is_success)
+    >>>     print(f"成功发送: {success_count}/1000")
+    >>>
+    >>>     await producer.shutdown()
+
+    异步批量发送示例：
+
+    >>> async def batch_send_example():
+    >>>     producer = create_async_producer(
+    >>>         producer_group="BATCH_ASYNC_PRODUCER",
+    >>>         compress_msg_body_over_howmuch=1024,  # 1KB以上压缩
+    >>>         batch_size=32,  # 批量大小
+    >>>     )
+    >>>     await producer.start()
+    >>>
+    >>>     # 创建多个消息
+    >>>     messages = [
+    >>>         Message(topic="batch_topic", body=f"data_{i}".encode())
+    >>>         for i in range(100)
+    >>>     ]
+    >>>
+    >>>     # 异步批量发送
+    >>>     result = await producer.send_batch(*messages)
+    >>>     print(f"批量发送完成，成功: {result.is_success}")
+    >>>
+    >>>     await producer.shutdown()
+
+    异步上下文管理器使用：
+
+    >>> async def context_manager_example():
+    >>>     async with create_async_producer("SERVICE_PRODUCER") as producer:
+    >>>         # 自动启动和关闭
+    >>>         message = Message(topic="service_topic", body=b"service data")
+    >>>         result = await producer.send(message)
+    >>>         print(f"服务消息发送: {result.is_success}")
+
+    ========== 最佳实践 ==========
+
+    🎯 **异步编程最佳实践**:
+
+    1. **合理设置并发数量**:
+       >>> producer = create_async_producer(
+       ...     async_send_semaphore=10000,  # 根据系统资源调整
+       ... )
+
+    2. **使用批量发送提升性能**:
+       >>> # 批量发送减少网络调用
+       >>> await producer.send_batch(*messages)
+
+    3. **异常处理和重试**:
+       >>> try:
+       ...     result = await producer.send(message)
+       ... except Exception as e:
+       ...     logger.error(f"发送失败: {e}")
+
+    4. **连接池管理**:
+       >>> # 生产环境使用多个NameServer
+       >>> producer = create_async_producer(
+       ...     namesrv_addr="host1:9876;host2:9876;host3:9876"
+       ... )
+
+    🚀 **性能优化建议**:
+
+    - 调整 `async_send_semaphore` 控制并发数量
+    - 使用 `routing_strategy="random"` 提升性能
+    - 启用消息压缩减少网络传输
+    - 使用批量发送提高吞吐量
+
+    ========== 常见问题 ==========
+
+    Q: 什么时候应该使用AsyncProducer而不是Producer？
+    A: 当需要处理大量并发消息发送，或者应用本身就是异步架构时，
+       AsyncProducer能提供更好的性能和资源利用率。
+
+    Q: 如何设置合适的async_send_semaphore？
+    A: 根据系统资源和Broker的承受能力来设置，通常10000-50000比较合适，
+       可以通过压测找到最佳值。
+
+    Q: 异步发送失败如何处理？
+    A: AsyncProducer内置重试机制，也可以在应用层实现重试逻辑，
+       建议结合死信队列处理最终失败的消息。
+
+    ========== 注意事项 ==========
+
+    - 需要在asyncio事件循环中运行
+    - Producer实例不是线程安全的，多线程使用时请确保每个线程使用独立的实例
+    - 调用await producer.start()后才能发送消息
+    - 使用完毕后记得调用await producer.shutdown()释放资源
+    - 高并发时注意监控Broker的负载情况
+    - 异步编程需要处理好异常和取消操作
+
+    ========== 异常处理 ==========
+
+    函数可能抛出的异常：
+    - TypeError: 当producer_group或namesrv_addr参数类型错误时
+    - ValueError: 当配置参数值不合法时
+    - 所有ProducerConfig.__init__可能抛出的异常
+
+    ========== 参见 ==========
+
+    - AsyncProducer: 异步生产者核心实现类
+    - ProducerConfig: 生产者配置类
+    - Message: 消息数据结构
+    - create_producer: 同步生产者创建函数
     """
     config = ProducerConfig(
         producer_group=producer_group,

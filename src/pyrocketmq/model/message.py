@@ -166,7 +166,7 @@ class Message:
         Returns:
             消息标签
         """
-        return self.get_property("TAGS")
+        return self.get_property(MessageProperty.TAGS)
 
     def set_tags(self, tags: str) -> None:
         """设置消息标签
@@ -174,7 +174,7 @@ class Message:
         Args:
             tags: 消息标签
         """
-        self.set_property("TAGS", tags)
+        self.set_property(MessageProperty.TAGS, tags)
 
     def get_keys(self) -> str | None:
         """获取消息键
@@ -182,7 +182,7 @@ class Message:
         Returns:
             消息键（多个键用空格分隔）
         """
-        return self.get_property("KEYS")
+        return self.get_property(MessageProperty.KEYS)
 
     def set_keys(self, keys: str) -> None:
         """设置消息键
@@ -190,7 +190,7 @@ class Message:
         Args:
             keys: 消息键（多个键用空格分隔）
         """
-        self.set_property("KEYS", keys)
+        self.set_property(MessageProperty.KEYS, keys)
 
     def add_key(self, key: str) -> None:
         """添加单个消息键
@@ -212,7 +212,7 @@ class Message:
         Returns:
             延时级别
         """
-        level_str = self.get_property("DELAY")
+        level_str = self.get_property(MessageProperty.DELAY_TIME_LEVEL)
         return int(level_str) if level_str else 0
 
     def set_delay_time_level(self, level: int) -> None:
@@ -221,7 +221,7 @@ class Message:
         Args:
             level: 延时级别
         """
-        self.set_property("DELAY", str(level))
+        self.set_property(MessageProperty.DELAY_TIME_LEVEL, str(level))
 
     # 重试消息便利方法
     def get_retry_topic(self) -> str | None:
@@ -230,7 +230,7 @@ class Message:
         Returns:
             重试主题
         """
-        return self.get_property("RETRY_TOPIC")
+        return self.get_property(MessageProperty.RETRY_TOPIC)
 
     def set_retry_topic(self, topic: str) -> None:
         """设置重试主题
@@ -238,7 +238,7 @@ class Message:
         Args:
             topic: 重试主题
         """
-        self.set_property("RETRY_TOPIC", topic)
+        self.set_property(MessageProperty.RETRY_TOPIC, topic)
 
     def is_retry_message(self) -> bool:
         """判断是否为重试消息
@@ -246,7 +246,7 @@ class Message:
         Returns:
             是否为重试消息
         """
-        return self.has_property("RETRY_TOPIC")
+        return self.has_property(MessageProperty.RETRY_TOPIC)
 
     # 事务消息便利方法
     def is_transaction_message(self) -> bool:
@@ -255,11 +255,66 @@ class Message:
         Returns:
             是否为事务消息
         """
-        return self.has_property("TRAN_MSG") or self.transaction_id is not None
+        return (
+            self.has_property(MessageProperty.TRANSACTION_PREPARED)
+            or self.transaction_id is not None
+        )
 
     def mark_as_prepared_transaction(self) -> None:
         """标记为预提交事务消息"""
         self.set_property("TRAN_MSG", "true")
+
+    # 分片键便利方法
+    def get_sharding_key(self) -> str | None:
+        """获取分片键
+
+        分片键用于消息路由，确保具有相同分片键的消息会被发送到同一个队列，
+        实现消息的顺序性保证。
+
+        Returns:
+            分片键，如果未设置则返回None
+
+        Example:
+            >>> message = Message(topic="order_topic", body=b"order_data")
+            >>> message.set_sharding_key("user_123")
+            >>> key = message.get_sharding_key()
+            >>> print(f"分片键: {key}")  # 输出: 分片键: user_123
+        """
+        return self.get_property(MessageProperty.SHARDING_KEY)
+
+    def set_sharding_key(self, sharding_key: str) -> None:
+        """设置分片键
+
+        分片键用于消息路由，确保具有相同分片键的消息会被发送到同一个队列。
+        这对于需要保证消息顺序性的场景非常重要，比如：
+        - 同一个用户的订单消息需要按顺序处理
+        - 同一个商品的库存变更需要按顺序处理
+        - 同一个会话的消息需要按顺序处理
+
+        Args:
+            sharding_key: 分片键，建议使用具有业务意义的标识符
+                        比如用户ID、订单ID、商品ID等
+
+        Example:
+            >>> # 为用户订单消息设置分片键
+            >>> message = Message(topic="order_topic", body=b"order_data")
+            >>> message.set_sharding_key("user_12345")
+            >>>
+            >>> # 为库存操作设置分片键
+            >>> inventory_msg = Message(topic="inventory_topic", body=b"stock_update")
+            >>> inventory_msg.set_sharding_key("product_67890")
+            >>>
+            >>> # 为会话消息设置分片键
+            >>> chat_msg = Message(topic="chat_topic", body=b"hello")
+            >>> chat_msg.set_sharding_key("session_abc123")
+
+        Note:
+            - 分片键会被用作MessageHashSelector的哈希输入
+            - 相同分片键的消息会路由到相同的队列
+            - 分片键不应该包含会变化的业务数据（如时间戳）
+            - 建议使用稳定的业务标识符作为分片键
+        """
+        self.set_property(MessageProperty.SHARDING_KEY, sharding_key)
 
     # 序列化方法
     def to_dict(self) -> dict[str, Any]:
@@ -306,7 +361,7 @@ class Message:
         # 处理body字段
         body = b""
         if "body" in data:
-            body_data = data["body"]
+            body_data: str | bytes = data["body"]
             if isinstance(body_data, str):
                 body = body_data.encode("utf-8")
             elif isinstance(body_data, bytes):
@@ -315,7 +370,7 @@ class Message:
                 body = str(body_data).encode("utf-8")
 
         # 提取properties
-        properties = data.get("properties", {})
+        properties: dict[str, str] = data.get("properties", {})
         if not isinstance(properties, dict):
             properties = {}
 
@@ -478,6 +533,7 @@ def create_message(
     tags: str | None = None,
     keys: str | None = None,
     properties: dict[str, str] | None = None,
+    sharding_key: str | None = None,
 ) -> Message:
     """创建消息的便利函数
 
@@ -487,9 +543,34 @@ def create_message(
         tags: 消息标签
         keys: 消息键
         properties: 额外的消息属性
+        sharding_key: 分片键，用于消息顺序性保证
 
     Returns:
         Message实例
+
+    Example:
+        >>> # 创建简单消息
+        >>> msg = create_message("test_topic", b"Hello")
+        >>>
+        >>> # 创建带标签的消息
+        >>> msg = create_message("order_topic", b"order_data", tags="new_order")
+        >>>
+        >>> # 创建带分片键的消息（保证顺序性）
+        >>> msg = create_message(
+        ...     "order_topic",
+        ...     b"order_data",
+        ...     sharding_key="user_12345"
+        ... )
+        >>>
+        >>> # 创建完整的消息
+        >>> msg = create_message(
+        ...     topic="chat_topic",
+        ...     body=b"Hello World",
+        ...     tags="greeting",
+        ...     keys="msg_123",
+        ...     sharding_key="session_abc",
+        ...     properties={"priority": "high", "source": "mobile"}
+        ... )
     """
     msg = Message(topic=topic, body=body)
 
@@ -497,6 +578,8 @@ def create_message(
         msg.set_tags(tags)
     if keys:
         msg.set_keys(keys)
+    if sharding_key:
+        msg.set_sharding_key(sharding_key)
     if properties:
         for key, value in properties.items():
             msg.set_property(key, value)
@@ -628,32 +711,32 @@ def encode_batch(*messages: Message) -> Message:
 class MessageProperty:
     """消息属性常量定义"""
 
-    KEY_SEPARATOR = " "
-    KEYS = "KEYS"
-    TAGS = "TAGS"
-    WAIT_STORE_MSG_OK = "WAIT"
-    DELAY_TIME_LEVEL = "DELAY"
-    RETRY_TOPIC = "RETRY_TOPIC"
-    REAL_TOPIC = "REAL_TOPIC"
-    REAL_QUEUE_ID = "REAL_QID"
-    TRANSACTION_PREPARED = "TRAN_MSG"
-    PRODUCER_GROUP = "PGROUP"
-    MIN_OFFSET = "MIN_OFFSET"
-    MAX_OFFSET = "MAX_OFFSET"
-    BUYER_ID = "BUYER_ID"
-    ORIGIN_MESSAGE_ID = "ORIGIN_MESSAGE_ID"
-    TRANSFER_FLAG = "TRANSFER_FLAG"
-    CORRECTION_FLAG = "CORRECTION_FLAG"
-    MQ2_FLAG = "MQ2_FLAG"
-    RECONSUME_TIME = "RECONSUME_TIME"
-    MSG_REGION = "MSG_REGION"
-    TRACE_SWITCH = "TRACE_ON"
-    UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX = "UNIQ_KEY"
-    MAX_RECONSUME_TIMES = "MAX_RECONSUME_TIMES"
-    CONSUME_START_TIME = "CONSUME_START_TIME"
-    TRANSACTION_PREPARED_QUEUE_OFFSET = "TRAN_PREPARED_QUEUE_OFFSET"
-    TRANSACTION_CHECK_TIMES = "TRANSACTION_CHECK_TIMES"
-    CHECK_IMMUNITY_TIME_IN_SECONDS = "CHECK_IMMUNITY_TIME_IN_SECONDS"
-    SHARDING_KEY = "SHARDING_KEY"
-    TRANSACTION_ID = "__transactionId__"
-    START_DELIVER_TIME = "START_DELIVER_TIME"
+    KEY_SEPARATOR: str = " "
+    KEYS: str = "KEYS"
+    TAGS: str = "TAGS"
+    WAIT_STORE_MSG_OK: str = "WAIT"
+    DELAY_TIME_LEVEL: str = "DELAY"
+    RETRY_TOPIC: str = "RETRY_TOPIC"
+    REAL_TOPIC: str = "REAL_TOPIC"
+    REAL_QUEUE_ID: str = "REAL_QID"
+    TRANSACTION_PREPARED: str = "TRAN_MSG"
+    PRODUCER_GROUP: str = "PGROUP"
+    MIN_OFFSET: str = "MIN_OFFSET"
+    MAX_OFFSET: str = "MAX_OFFSET"
+    BUYER_ID: str = "BUYER_ID"
+    ORIGIN_MESSAGE_ID: str = "ORIGIN_MESSAGE_ID"
+    TRANSFER_FLAG: str = "TRANSFER_FLAG"
+    CORRECTION_FLAG: str = "CORRECTION_FLAG"
+    MQ2_FLAG: str = "MQ2_FLAG"
+    RECONSUME_TIME: str = "RECONSUME_TIME"
+    MSG_REGION: str = "MSG_REGION"
+    TRACE_SWITCH: str = "TRACE_ON"
+    UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX: str = "UNIQ_KEY"
+    MAX_RECONSUME_TIMES: str = "MAX_RECONSUME_TIMES"
+    CONSUME_START_TIME: str = "CONSUME_START_TIME"
+    TRANSACTION_PREPARED_QUEUE_OFFSET: str = "TRAN_PREPARED_QUEUE_OFFSET"
+    TRANSACTION_CHECK_TIMES: str = "TRANSACTION_CHECK_TIMES"
+    CHECK_IMMUNITY_TIME_IN_SECONDS: str = "CHECK_IMMUNITY_TIME_IN_SECONDS"
+    SHARDING_KEY: str = "SHARDING_KEY"
+    TRANSACTION_ID: str = "__transactionId__"
+    START_DELIVER_TIME: str = "START_DELIVER_TIME"

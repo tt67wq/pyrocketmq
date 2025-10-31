@@ -12,6 +12,7 @@ import abc
 import asyncio
 import random
 import threading
+from typing_extensions import override
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message, MessageProperty
@@ -45,8 +46,9 @@ class RoundRobinSelector(QueueSelector):
 
     def __init__(self):
         self._counters: dict[str, int] = {}
-        self._lock = threading.RLock()
+        self._lock: threading.RLock = threading.RLock()
 
+    @override
     def select(
         self,
         topic: str,
@@ -82,6 +84,7 @@ class RoundRobinSelector(QueueSelector):
 class RandomSelector(QueueSelector):
     """随机队列选择器"""
 
+    @override
     def select(
         self,
         topic: str,
@@ -102,6 +105,7 @@ class RandomSelector(QueueSelector):
 class MessageHashSelector(QueueSelector):
     """基于消息哈希的队列选择器"""
 
+    @override
     def select(
         self,
         topic: str,
@@ -115,12 +119,7 @@ class MessageHashSelector(QueueSelector):
             return RandomSelector().select(topic, available_queues, message)
 
         # 优先使用分片键，其次使用消息键
-        sharding_key = message.get_property(MessageProperty.SHARDING_KEY)
-        if not sharding_key:
-            keys = message.get_keys()
-            if keys:
-                sharding_key = keys.split()[0]
-
+        sharding_key = message.get_sharding_key()
         if not sharding_key:
             logger.debug("No sharding key found for message, using random selection")
             return RandomSelector().select(topic, available_queues, message)
@@ -161,8 +160,9 @@ class AsyncRoundRobinSelector(AsyncQueueSelector):
 
     def __init__(self):
         self._counters: dict[str, int] = {}
-        self._lock = asyncio.Lock()
+        self._lock: asyncio.Lock = asyncio.Lock()
 
+    @override
     async def select(
         self,
         topic: str,
@@ -198,6 +198,7 @@ class AsyncRoundRobinSelector(AsyncQueueSelector):
 class AsyncRandomSelector(AsyncQueueSelector):
     """异步随机队列选择器"""
 
+    @override
     async def select(
         self,
         topic: str,
@@ -223,6 +224,7 @@ class AsyncRandomSelector(AsyncQueueSelector):
 class AsyncMessageHashSelector(AsyncQueueSelector):
     """异步基于消息哈希的队列选择器"""
 
+    @override
     async def select(
         self,
         topic: str,
