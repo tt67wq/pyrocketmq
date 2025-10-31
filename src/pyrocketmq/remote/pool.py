@@ -3,6 +3,7 @@
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
 import threading
 import time
 import logging
@@ -59,12 +60,24 @@ class ConnectionPool:
                     )
                     remote.connect()
                     self._pool.append(remote)
-                    self._logger.debug(f"连接池初始化连接 {i + 1}/{self.pool_size}")
+                    self._logger.debug(
+                        "连接池初始化连接",
+                        extra={
+                            "current": i + 1,
+                            "total": self.pool_size,
+                        },
+                    )
                 except Exception as e:
-                    self._logger.error(f"初始化连接池连接失败: {e}")
+                    self._logger.error(
+                        "初始化连接池连接失败",
+                        extra={"error": str(e)},
+                    )
                     raise ConnectionError(f"初始化连接池失败: {e}") from e
 
-            self._logger.info(f"连接池初始化完成，大小: {self.pool_size}")
+            self._logger.info(
+                "连接池初始化完成",
+                extra={"pool_size": self.pool_size},
+            )
 
     @contextmanager
     def get_connection(self, timeout: float | None = None) -> Any:
@@ -100,7 +113,10 @@ class ConnectionPool:
                 # 短暂等待后重试
                 time.sleep(0.1)
 
-            self._logger.debug(f"获取连接成功，剩余连接: {len(self._pool)}")
+            self._logger.debug(
+                "获取连接成功",
+                extra={"remaining_connections": len(self._pool)},
+            )
             yield connection
 
         except Exception:
@@ -115,14 +131,20 @@ class ConnectionPool:
             with self._pool_lock:
                 if len(self._pool) < self.pool_size:
                     self._pool.append(connection)
-                    self._logger.debug(f"归还连接到池中，当前连接数: {len(self._pool)}")
+                    self._logger.debug(
+                        "归还连接到池中",
+                        extra={"current_connections": len(self._pool)},
+                    )
                     return
 
         # 连接已断开或池已满，关闭连接
         try:
             connection.close()
         except Exception as e:
-            self._logger.warning(f"关闭连接时发生错误: {e}")
+            self._logger.warning(
+                "关闭连接时发生错误",
+                extra={"error": str(e)},
+            )
 
     def close(self) -> None:
         """关闭连接池"""
@@ -131,7 +153,10 @@ class ConnectionPool:
                 try:
                     connection.close()
                 except Exception as e:
-                    self._logger.warning(f"关闭连接时发生错误: {e}")
+                    self._logger.warning(
+                        "关闭连接时发生错误",
+                        extra={"error": str(e)},
+                    )
             self._pool.clear()
 
         self._logger.info("连接池已关闭")
@@ -180,7 +205,7 @@ class AsyncConnectionPool:
         # 更新配置中的连接池大小
         self.remote_config = self.remote_config.with_connection_pool_size(pool_size)
 
-        self._logger: Any = get_logger("remote.pool.async")
+        self._logger: logging.Logger = get_logger("remote.pool.async")
 
         # 连接池
         self._pool: list[AsyncRemote] = []
@@ -202,12 +227,24 @@ class AsyncConnectionPool:
                     )
                     await remote.connect()
                     self._pool.append(remote)
-                    self._logger.debug(f"异步连接池初始化连接 {i + 1}/{self.pool_size}")
+                    self._logger.debug(
+                        "异步连接池初始化连接",
+                        extra={
+                            "current": i + 1,
+                            "total": self.pool_size,
+                        },
+                    )
                 except Exception as e:
-                    self._logger.error(f"初始化异步连接池连接失败: {e}")
+                    self._logger.error(
+                        "初始化异步连接池连接失败",
+                        extra={"error": str(e)},
+                    )
                     raise ConnectionError(f"初始化连接池失败: {e}") from e
 
-            self._logger.info(f"异步连接池初始化完成，大小: {self.pool_size}")
+            self._logger.info(
+                "异步连接池初始化完成",
+                extra={"pool_size": self.pool_size},
+            )
 
     async def initialize(self) -> None:
         """初始化连接池（异步）"""
@@ -219,7 +256,9 @@ class AsyncConnectionPool:
         await self._initialize_task
 
     @asynccontextmanager
-    async def get_connection(self, timeout: float | None = None) -> Any:
+    async def get_connection(
+        self, timeout: float | None = None
+    ) -> AsyncGenerator[Any, Any]:
         """获取连接
 
         Args:
@@ -256,7 +295,10 @@ class AsyncConnectionPool:
                 # 短暂等待后重试
                 await asyncio.sleep(0.1)
 
-            self._logger.debug(f"获取异步连接成功，剩余连接: {len(self._pool)}")
+            self._logger.debug(
+                "获取异步连接成功",
+                extra={"remaining_connections": len(self._pool)},
+            )
             yield connection
 
         except Exception:
@@ -272,7 +314,8 @@ class AsyncConnectionPool:
                 if len(self._pool) < self.pool_size:
                     self._pool.append(connection)
                     self._logger.debug(
-                        f"归还异步连接到池中，当前连接数: {len(self._pool)}"
+                        "归还异步连接到池中",
+                        extra={"current_connections": len(self._pool)},
                     )
                     return
 
@@ -280,7 +323,10 @@ class AsyncConnectionPool:
         try:
             await connection.close()
         except Exception as e:
-            self._logger.warning(f"关闭异步连接时发生错误: {e}")
+            self._logger.warning(
+                "关闭异步连接时发生错误",
+                extra={"error": str(e)},
+            )
 
     async def close(self) -> None:
         """关闭连接池"""
@@ -289,7 +335,10 @@ class AsyncConnectionPool:
                 try:
                     await connection.close()
                 except Exception as e:
-                    self._logger.warning(f"关闭异步连接时发生错误: {e}")
+                    self._logger.warning(
+                        "关闭异步连接时发生错误",
+                        extra={"error": str(e)},
+                    )
             self._pool.clear()
 
         # 取消初始化任务

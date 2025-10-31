@@ -37,7 +37,10 @@ class RemoteFactory:
 
         # 处理地址
         parsed_address = RemoteFactory._parse_address(address)
-        logger.debug(f"创建同步远程连接: {parsed_address}")
+        logger.debug(
+            "创建同步远程连接",
+            extra={"address": parsed_address},
+        )
 
         # 使用传入的配置或默认配置
         config = remote_config or get_config()
@@ -54,7 +57,10 @@ class RemoteFactory:
         # 创建远程通信实例
         remote = Remote(transport_config, config)
 
-        logger.info(f"同步远程通信实例创建成功: {parsed_address}")
+        logger.info(
+            "同步远程通信实例创建成功",
+            extra={"address": parsed_address},
+        )
         return remote
 
     @staticmethod
@@ -81,7 +87,10 @@ class RemoteFactory:
 
         # 处理地址
         parsed_address = RemoteFactory._parse_address(address)
-        logger.debug(f"创建异步远程连接: {parsed_address}")
+        logger.debug(
+            "创建异步远程连接",
+            extra={"address": parsed_address},
+        )
 
         # 使用传入的配置或默认配置
         config = remote_config or get_config()
@@ -98,7 +107,10 @@ class RemoteFactory:
         # 创建远程通信实例
         remote = AsyncRemote(transport_config, config)
 
-        logger.info(f"异步远程通信实例创建成功: {parsed_address}")
+        logger.info(
+            "异步远程通信实例创建成功",
+            extra={"address": parsed_address},
+        )
         return remote
 
     @staticmethod

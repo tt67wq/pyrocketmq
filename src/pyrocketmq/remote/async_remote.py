@@ -74,7 +74,10 @@ class AsyncRemote:
             self._start_recv_task()
 
         except Exception as e:
-            self._logger.error(f"异步连接建立失败: {e}")
+            self._logger.error(
+                "异步连接建立失败",
+                extra={"error": str(e)},
+            )
             raise ConnectionError(f"连接建立失败: {e}") from e
 
     async def close(self) -> None:
@@ -98,7 +101,10 @@ class AsyncRemote:
             self._logger.info("异步连接已关闭")
 
         except Exception as e:
-            self._logger.error(f"关闭异步连接失败: {e}")
+            self._logger.error(
+                "关闭异步连接失败",
+                extra={"error": str(e)},
+            )
             raise RemoteError(f"关闭连接失败: {e}") from e
 
     async def register_request_processor(
@@ -112,7 +118,10 @@ class AsyncRemote:
         """
         async with self._processors_lock:
             self._processors[code] = processor
-            self._logger.debug(f"注册异步请求处理器: code={code}")
+            self._logger.debug(
+                "注册异步请求处理器",
+                extra={"code": code},
+            )
 
     async def unregister_request_processor(self, code: int) -> bool:
         """取消注册请求处理器
@@ -126,7 +135,10 @@ class AsyncRemote:
         async with self._processors_lock:
             if code in self._processors:
                 del self._processors[code]
-                self._logger.debug(f"取消注册异步请求处理器: code={code}")
+                self._logger.debug(
+                    "取消注册异步请求处理器",
+                    extra={"code": code},
+                )
                 return True
             return False
 
@@ -174,7 +186,10 @@ class AsyncRemote:
             data = self._serializer.serialize(command)
             await self.transport.output(data)
 
-            self._logger.debug(f"发送异步RPC请求: opaque={opaque}, code={command.code}")
+            self._logger.debug(
+                "发送异步RPC请求",
+                extra={"opaque": opaque, "code": command.code},
+            )
 
             # 等待响应
             try:
@@ -203,7 +218,10 @@ class AsyncRemote:
         except Exception as e:
             # 其他错误，移除等待者
             await self._unregister_waiter(opaque)
-            self._logger.error(f"异步RPC调用失败: opaque={opaque}, error={e}")
+            self._logger.error(
+                "异步RPC调用失败",
+                extra={"opaque": opaque, "error": str(e)},
+            )
             raise RemoteError(f"RPC调用失败: {e}") from e
 
     async def oneway(self, command: RemotingCommand) -> None:
@@ -238,7 +256,10 @@ class AsyncRemote:
         except (ConnectionError, TransportError):
             raise
         except Exception as e:
-            self._logger.error(f"异步单向消息发送失败: opaque={opaque}, error={e}")
+            self._logger.error(
+                "异步单向消息发送失败",
+                extra={"opaque": opaque, "error": str(e)},
+            )
             raise RemoteError(f"单向消息发送失败: {e}") from e
 
     async def _generate_opaque(self) -> int:
@@ -328,7 +349,10 @@ class AsyncRemote:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self._logger.error(f"异步清理等待者时发生错误: {e}")
+                self._logger.error(
+                    "异步清理等待者时发生错误",
+                    extra={"error": str(e)},
+                )
 
     async def _cleanup_expired_waiters(self) -> None:
         """清理过期的等待者"""
@@ -410,7 +434,10 @@ class AsyncRemote:
                 await asyncio.sleep(1.0)
                 continue
             except Exception as e:
-                self._logger.error(f"接收消息时发生错误: {e}")
+                self._logger.error(
+                    f"接收消息时发生错误",
+                    extra={"error": str(e)},
+                )
                 await asyncio.sleep(1.0)
 
         self._logger.info("异步消息接收协程结束")

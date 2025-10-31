@@ -71,7 +71,10 @@ class Remote:
             self._start_recv_thread()
 
         except Exception as e:
-            self._logger.error(f"连接建立失败: {e}")
+            self._logger.error(
+                "连接建立失败",
+                extra={"error": str(e)},
+            )
             raise ConnectionError(f"连接建立失败: {e}") from e
 
     def close(self) -> None:
@@ -95,7 +98,10 @@ class Remote:
             self._logger.info("连接已关闭")
 
         except Exception as e:
-            self._logger.error(f"关闭连接失败: {e}")
+            self._logger.error(
+                "关闭连接失败",
+                extra={"error": str(e)},
+            )
             raise RemoteError(f"关闭连接失败: {e}") from e
 
     def register_request_processor(
@@ -109,7 +115,10 @@ class Remote:
         """
         with self._processors_lock:
             self._processors[code] = processor
-            self._logger.debug(f"注册请求处理器: code={code}")
+            self._logger.debug(
+                "注册请求处理器",
+                extra={"code": code},
+            )
 
     def register_request_processor_lazy(
         self, code: int, processor: ClientRequestFunc
@@ -192,7 +201,10 @@ class Remote:
             data = self._serializer.serialize(command)
             self.transport.output(data)
 
-            self._logger.debug(f"发送RPC请求: opaque={opaque}, code={command.code}")
+            self._logger.debug(
+                "发送RPC请求",
+                extra={"opaque": opaque, "code": command.code},
+            )
 
             # 等待响应
             if not event.wait(rpc_timeout):
@@ -216,7 +228,10 @@ class Remote:
             raise
         except RpcTimeoutError:
             self._unregister_waiter(opaque)
-            self._logger.error(f"RPC调用失败: opaque={opaque} 超时")
+            self._logger.error(
+                "RPC调用失败",
+                extra={"opaque": opaque, "reason": "timeout"},
+            )
             raise
         except Exception as e:
             self._unregister_waiter(opaque)
