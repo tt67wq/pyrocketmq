@@ -2,13 +2,15 @@
 pyrocketmq 日志模块
 
 提供简单易用的日志记录功能，支持配置管理和便捷接口。
+包含JSON格式化器，支持结构化日志输出。
 """
 
 import logging
-from typing import Optional
+
 
 from .config import LoggingConfig
 from .logger import LoggerFactory
+from .json_formatter import JsonFormatter, StructuredJsonFormatter
 
 __all__ = [
     "LoggingConfig",
@@ -16,6 +18,8 @@ __all__ = [
     "get_logger",
     "setup_logging",
     "get_config",
+    "JsonFormatter",
+    "StructuredJsonFormatter",
 ]
 
 
@@ -36,7 +40,7 @@ def get_logger(name: str) -> logging.Logger:
     return LoggerFactory.get_logger(name)
 
 
-def setup_logging(config: Optional[LoggingConfig] = None) -> None:
+def setup_logging(config: LoggingConfig | None = None) -> None:
     """
     设置全局日志配置
 

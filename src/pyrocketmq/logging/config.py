@@ -6,7 +6,6 @@
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -27,7 +26,7 @@ class LoggingConfig:
     date_format: str = "%Y-%m-%d %H:%M:%S"
 
     # 文件输出配置
-    file_path: Optional[str] = None
+    file_path: str | None = None
     file_mode: str = "a"
     file_encoding: str = "utf-8"
 
@@ -35,7 +34,7 @@ class LoggingConfig:
     console_output: bool = True
 
     # 高级配置
-    max_file_size: Optional[int] = None  # 字节数，None表示不限制
+    max_file_size: int | None = None  # 字节数，None表示不限制
     backup_count: int = 0  # 备份文件数量
 
     # 是否捕获异常信息
@@ -75,7 +74,7 @@ class LoggingConfig:
 
         return config
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | int | bool | None]:
         """转换为字典格式"""
         return {
             "level": self.level,

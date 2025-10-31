@@ -6,7 +6,6 @@ Logger工厂类
 
 import logging
 import sys
-from typing import Optional, Set
 
 from .config import LoggingConfig
 
@@ -19,9 +18,9 @@ class LoggerFactory:
     """
 
     # 类变量，保存全局配置
-    _config: Optional[LoggingConfig] = None
-    _configured_loggers: Set[str] = set()
-    _default_formatter: Optional[logging.Formatter] = None
+    _config: LoggingConfig | None = None
+    _configured_loggers: set[str] = set()
+    _default_formatter: logging.Formatter | None = None
 
     @classmethod
     def get_logger(cls, name: str) -> logging.Logger:
@@ -125,9 +124,7 @@ class LoggerFactory:
             return logging.Formatter(config.format, datefmt=config.date_format)
 
     @classmethod
-    def _create_console_handler(
-        cls, config: LoggingConfig
-    ) -> logging.StreamHandler:
+    def _create_console_handler(cls, config: LoggingConfig) -> logging.Handler:
         """
         创建控制台处理器
 
@@ -135,7 +132,7 @@ class LoggerFactory:
             config: 日志配置
 
         Returns:
-            logging.StreamHandler: 控制台处理器
+            logging.Handler: 控制台处理器
         """
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(getattr(logging, config.level))
