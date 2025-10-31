@@ -24,15 +24,15 @@ class SyncNameServerClient:
     使用 Remote 类进行同步通信
     """
 
-    def __init__(self, remote: Remote, timeout: float = 30.0):
+    def __init__(self, remote: Remote, timeout: float = 30.0) -> None:
         """初始化同步客户端
 
         Args:
             remote: 远程通信实例
             timeout: 请求超时时间，默认30秒
         """
-        self.remote = remote
-        self.timeout = timeout
+        self.remote: Remote = remote
+        self.timeout: float = timeout
 
     def connect(self) -> None:
         """建立连接"""
@@ -68,11 +68,9 @@ class SyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = RemotingRequestFactory.create_get_route_info_request(
-                topic
-            )
+            command = RemotingRequestFactory.create_get_route_info_request(topic)
 
-            logger.debug(f"Querying topic route info for topic: {topic}")
+            logger.debug("Querying topic route info", extra={"topic": topic})
 
             # 发送RPC请求
             response = self.remote.rpc(command, timeout=self.timeout)
@@ -80,13 +78,17 @@ class SyncNameServerClient:
             # 检查响应状态
             if not is_success_response(response):
                 error_msg = (
-                    response.remark
-                    or f"Query failed with code: {response.code}"
+                    response.remark or f"Query failed with code: {response.code}"
                 )
-                logger.error(f"Query topic route info failed: {error_msg}")
-                raise NameServerError(
-                    f"Query topic route info failed: {error_msg}"
+                logger.error(
+                    "Query topic route info failed",
+                    extra={
+                        "topic": topic,
+                        "error_msg": error_msg,
+                        "response_code": response.code,
+                    },
                 )
+                raise NameServerError(f"Query topic route info failed: {error_msg}")
 
             # 解析响应体
             if not response.body:
@@ -94,7 +96,7 @@ class SyncNameServerClient:
 
             route_data = TopicRouteData.from_bytes(response.body)
             logger.debug(
-                f"Successfully queried topic route info for topic: {topic}"
+                "Successfully queried topic route info", extra={"topic": topic}
             )
             return route_data
 
@@ -104,7 +106,8 @@ class SyncNameServerClient:
             raise
         except Exception as e:
             logger.error(
-                f"Failed to query topic route info for topic {topic}: {e}"
+                "Failed to query topic route info",
+                extra={"topic": topic, "error": str(e)},
             )
             raise NameServerError(f"Query topic route info failed: {e}")
 
@@ -140,10 +143,11 @@ class SyncNameServerClient:
                     response.remark
                     or f"Get broker cluster info failed with code: {response.code}"
                 )
-                logger.error(f"Get broker cluster info failed: {error_msg}")
-                raise NameServerError(
-                    f"Get broker cluster info failed: {error_msg}"
+                logger.error(
+                    "Get broker cluster info failed",
+                    extra={"error_msg": error_msg, "response_code": response.code},
                 )
+                raise NameServerError(f"Get broker cluster info failed: {error_msg}")
 
             # 解析响应体
             if not response.body:
@@ -158,7 +162,7 @@ class SyncNameServerClient:
         except NameServerError:
             raise
         except Exception as e:
-            logger.error(f"Failed to get broker cluster info: {e}")
+            logger.error("Failed to get broker cluster info", extra={"error": str(e)})
             raise NameServerError(f"Get broker cluster info failed: {e}")
 
     def __enter__(self) -> "SyncNameServerClient":
@@ -177,15 +181,15 @@ class AsyncNameServerClient:
     使用 AsyncRemote 进行异步通信
     """
 
-    def __init__(self, remote: AsyncRemote, timeout: float = 30.0):
+    def __init__(self, remote: AsyncRemote, timeout: float = 30.0) -> None:
         """初始化异步客户端
 
         Args:
             remote: 异步远程通信实例
             timeout: 请求超时时间，默认30秒
         """
-        self.remote = remote
-        self.timeout = timeout
+        self.remote: AsyncRemote = remote
+        self.timeout: float = timeout
 
     async def connect(self) -> None:
         """建立连接"""
@@ -194,7 +198,7 @@ class AsyncNameServerClient:
             await self.remote.connect()
             logger.info("Connected to NameServer successfully")
         except Exception as e:
-            logger.error(f"Failed to connect to NameServer: {e}")
+            logger.error("Failed to connect to NameServer", extra={"error": str(e)})
             raise NameServerError(f"Connection failed: {e}")
 
     async def disconnect(self) -> None:
@@ -204,7 +208,9 @@ class AsyncNameServerClient:
             await self.remote.close()
             logger.info("Disconnected from NameServer")
         except Exception as e:
-            logger.error(f"Failed to disconnect from NameServer: {e}")
+            logger.error(
+                "Failed to disconnect from NameServer", extra={"error": str(e)}
+            )
             raise NameServerError(f"Disconnection failed: {e}")
 
     def is_connected(self) -> bool:
@@ -229,11 +235,9 @@ class AsyncNameServerClient:
 
         try:
             # 创建请求命令
-            command = RemotingRequestFactory.create_get_route_info_request(
-                topic
-            )
+            command = RemotingRequestFactory.create_get_route_info_request(topic)
 
-            logger.debug(f"Querying topic route info for topic: {topic}")
+            logger.debug("Querying topic route info", extra={"topic": topic})
 
             # 发送异步RPC请求
             response = await self.remote.rpc(command, timeout=self.timeout)
@@ -241,13 +245,17 @@ class AsyncNameServerClient:
             # 检查响应状态
             if not is_success_response(response):
                 error_msg = (
-                    response.remark
-                    or f"Query failed with code: {response.code}"
+                    response.remark or f"Query failed with code: {response.code}"
                 )
-                logger.error(f"Query topic route info failed: {error_msg}")
-                raise NameServerError(
-                    f"Query topic route info failed: {error_msg}"
+                logger.error(
+                    "Query topic route info failed",
+                    extra={
+                        "topic": topic,
+                        "error_msg": error_msg,
+                        "response_code": response.code,
+                    },
                 )
+                raise NameServerError(f"Query topic route info failed: {error_msg}")
 
             # 解析响应体
             if not response.body:
@@ -255,7 +263,7 @@ class AsyncNameServerClient:
 
             route_data = TopicRouteData.from_bytes(response.body)
             logger.debug(
-                f"Successfully queried topic route info for topic: {topic}"
+                "Successfully queried topic route info", extra={"topic": topic}
             )
             return route_data
 
@@ -265,7 +273,8 @@ class AsyncNameServerClient:
             raise
         except Exception as e:
             logger.error(
-                f"Failed to query topic route info for topic {topic}: {e}"
+                "Failed to query topic route info",
+                extra={"topic": topic, "error": str(e)},
             )
             raise NameServerError(f"Query topic route info failed: {e}")
 
@@ -301,10 +310,11 @@ class AsyncNameServerClient:
                     response.remark
                     or f"Get broker cluster info failed with code: {response.code}"
                 )
-                logger.error(f"Get broker cluster info failed: {error_msg}")
-                raise NameServerError(
-                    f"Get broker cluster info failed: {error_msg}"
+                logger.error(
+                    "Get broker cluster info failed",
+                    extra={"error_msg": error_msg, "response_code": response.code},
                 )
+                raise NameServerError(f"Get broker cluster info failed: {error_msg}")
 
             # 解析响应体
             if not response.body:
@@ -319,7 +329,7 @@ class AsyncNameServerClient:
         except NameServerError:
             raise
         except Exception as e:
-            logger.error(f"Failed to get broker cluster info: {e}")
+            logger.error("Failed to get broker cluster info", extra={"error": str(e)})
             raise NameServerError(f"Get broker cluster info failed: {e}")
 
     async def __aenter__(self) -> "AsyncNameServerClient":

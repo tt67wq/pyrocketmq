@@ -572,7 +572,9 @@ class ConsumerRunningInfo:
         except (TypeError, ValueError) as e:
             raise TypeError(f"Failed to encode ConsumerRunningInfo: {e}")
 
-    def _subscription_sort_key(self, sub: "SubscriptionData") -> tuple:
+    def _subscription_sort_key(
+        self, sub: "SubscriptionData"
+    ) -> tuple[str, str, int, str]:
         """订阅数据排序键，参考Go实现的排序逻辑
 
         Args:
@@ -585,7 +587,7 @@ class ConsumerRunningInfo:
         # Go实现中还包含了classFilterMode、subVersion、expType、tags、codes的排序
         return (sub.topic, sub.sub_string, sub.sub_version, sub.expression_type)
 
-    def _message_queue_sort_key(self, mq: MessageQueue) -> tuple:
+    def _message_queue_sort_key(self, mq: MessageQueue) -> tuple[str, str, int]:
         """消息队列排序键，参考Go实现的排序逻辑
 
         Args:
