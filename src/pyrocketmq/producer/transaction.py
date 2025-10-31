@@ -14,9 +14,10 @@ MVP版本特性:
 - 基础的本地事务执行和回查
 """
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -234,6 +235,140 @@ class SimpleTransactionListener(TransactionListener):
         return state
 
 
+class AsyncTransactionListener(ABC):
+    """异步事务监听器接口
+
+    定义异步本地事务执行和回查的逻辑接口，用户需要实现此接口来处理异步业务逻辑。
+    """
+
+    @abstractmethod
+    async def execute_local_transaction(
+        self, message: Message, transaction_id: str, arg: ... = None
+    ) -> LocalTransactionState:
+        """异步执行本地事务
+
+        在发送半消息成功后，此方法会被调用来执行异步本地事务逻辑。
+
+        Args:
+            message: 原始消息
+            transaction_id: 事务ID
+            arg: 执行参数（可选）
+
+        Returns:
+            本地事务状态
+            - COMMIT_MESSAGE_STATE: 提交事务，消息对消费者可见
+            - ROLLBACK_MESSAGE_STATE: 回滚事务，消息将被删除
+            - UNKNOW_STATE: 状态未知，触发回查机制
+        """
+        pass
+
+    @abstractmethod
+    async def check_local_transaction(
+        self, message: Message, transaction_id: str
+    ) -> LocalTransactionState:
+        """异步检查本地事务状态
+
+        当事务状态未知时，Broker会回查此方法来确认事务状态。
+
+        Args:
+            message: 原始消息
+            transaction_id: 事务ID
+
+        Returns:
+            本地事务状态
+            - COMMIT_MESSAGE_STATE: 提交事务
+            - ROLLBACK_MESSAGE_STATE: 回滚事务
+            - UNKNOW_STATE: 继续保持未知状态，可能触发后续回查
+        """
+        pass
+
+
+class AsyncSimpleTransactionListener(AsyncTransactionListener):
+    """异步简单事务监听器实现
+
+    提供一个基础实现，用于快速测试和简单场景的异步事务处理。
+    """
+
+    def __init__(
+        self,
+        always_commit: bool = False,
+        always_rollback: bool = False,
+        always_unknow: bool = False,
+    ):
+        """初始化异步简单事务监听器
+
+        Args:
+            always_commit: 总是返回COMMIT_MESSAGE_STATE
+            always_rollback: 总是返回ROLLBACK_MESSAGE_STATE
+            always_unknow: 总是返回UNKNOW_STATE
+        """
+        self.always_commit: bool = always_commit
+        self.always_rollback: bool = always_rollback
+        self.always_unknow: bool = always_unknow
+
+    async def execute_local_transaction(
+        self, message: Message, transaction_id: str, arg: ... = None
+    ) -> LocalTransactionState:
+        """异步执行本地事务"""
+        logger.info(
+            "异步执行本地事务",
+            extra={
+                "transaction_id": transaction_id,
+                "topic": message.topic,
+                "message_size": len(message.body),
+            },
+        )
+
+        # 模拟异步操作
+        await asyncio.sleep(0.01)
+
+        if self.always_commit:
+            logger.info(f"异步事务 {transaction_id} 配置为总是提交")
+            return LocalTransactionState.COMMIT_MESSAGE_STATE
+        elif self.always_rollback:
+            logger.info(f"异步事务 {transaction_id} 配置为总是回滚")
+            return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+        elif self.always_unknow:
+            logger.info(f"异步事务 {transaction_id} 配置为总是未知状态")
+            return LocalTransactionState.UNKNOW_STATE
+        else:
+            # 默认情况下基于消息体内容做简单判断
+            try:
+                body_str = message.body.decode("utf-8")
+                logger.debug(f"异步事务 {transaction_id} 解析消息体: {body_str}")
+
+                if body_str.startswith("commit"):
+                    logger.info(f"异步事务 {transaction_id} 根据消息体内容决定提交")
+                    return LocalTransactionState.COMMIT_MESSAGE_STATE
+                elif body_str.startswith("rollback"):
+                    logger.info(f"异步事务 {transaction_id} 根据消息体内容决定回滚")
+                    return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+                else:
+                    logger.info(
+                        f"异步事务 {transaction_id} 消息体内容无法识别，返回未知状态"
+                    )
+                    return LocalTransactionState.UNKNOW_STATE
+            except Exception as e:
+                logger.error(f"异步事务 {transaction_id} 解析消息体失败: {e}")
+                return LocalTransactionState.ROLLBACK_MESSAGE_STATE
+
+    async def check_local_transaction(
+        self, message: Message, transaction_id: str
+    ) -> LocalTransactionState:
+        """异步检查本地事务状态"""
+        logger.info(
+            f"异步回查本地事务状态，事务ID: {transaction_id}, 主题: {message.topic}"
+        )
+
+        # 模拟异步检查操作
+        await asyncio.sleep(0.005)
+
+        # 对于简单实现，回查时返回同样的逻辑
+        state = await self.execute_local_transaction(message, transaction_id)
+        logger.info(f"异步事务 {transaction_id} 回查结果: {state.name}")
+        return state
+
+
 # @dataclass
 # class TransactionMetadata:
 #     """事务元数据
@@ -364,6 +499,20 @@ def create_simple_transaction_listener(
         SimpleTransactionListener实例
     """
     return SimpleTransactionListener(always_commit=commit)
+
+
+def create_async_simple_transaction_listener(
+    commit: bool = True,
+) -> AsyncSimpleTransactionListener:
+    """创建异步简单事务监听器的便利函数
+
+    Args:
+        commit: 是否总是提交
+
+    Returns:
+        AsyncSimpleTransactionListener实例
+    """
+    return AsyncSimpleTransactionListener(always_commit=commit)
 
 
 def create_transaction_message(
