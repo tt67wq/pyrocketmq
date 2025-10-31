@@ -1,9 +1,11 @@
 """连接状态管理模块 - 使用python-statemachine重构"""
 
 import asyncio
+import dis
 import socket
 import time
-from typing import Optional
+import logging
+from typing import Any
 
 from statemachine import State, StateMachine
 
@@ -16,10 +18,10 @@ class ConnectionStateMachine(StateMachine):
     """连接状态机 - 基于python-statemachine实现"""
 
     # 状态定义
-    disconnected = State(initial=True)
-    connecting = State()
-    connected = State()
-    closed = State(final=True)
+    disconnected: State = State(initial=True)
+    connecting: State = State()
+    connected: State = State()
+    closed: State = State(final=True)
 
     # 事件定义
     connect = disconnected.to(connecting)
@@ -27,38 +29,52 @@ class ConnectionStateMachine(StateMachine):
     disconnect = connected.to(disconnected) | connecting.to(disconnected)
     close = disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
 
-    def __init__(self, config: TransportConfig):
-        self.config = config
-        self._socket = None  # 这里可以存储实际的socket对象
-        self._logger = get_logger("transport.tcp")
+    def __init__(self, config: TransportConfig) -> None:
+        self.config: TransportConfig = config
+        self._socket: socket.socket | None = None  # 这里可以存储实际的socket对象
+        self._logger: logging.Logger = get_logger("transport.tcp")
         super().__init__()
 
-    def start(self):
+    def start(self) -> None:
         """启动连接过程"""
-        self.connect()
+        self.connect(self.disconnected)
 
-    def stop(self):
+    def stop(self) -> None:
         """关闭连接"""
         if not self.is_disconnected:
-            self.close()
+            self.close(self)
         else:
             self._logger.warning("当前状态不允许断开操作")
 
     # 状态转换回调
-    def on_connect(self):
+    def on_connect(self) -> None:
         """进入连接中状态"""
-        self._logger.info(f"开始连接到 {self.config.address}")
+        self._logger.info(
+            "开始连接到服务器",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._socket.settimeout(self.config.connect_timeout)
             self._socket.connect(self.config.address)
         except Exception as e:
-            self._logger.error(f"连接失败: {e}")
-            self.disconnect()
+            self._logger.error(
+                "连接失败",
+                extra={
+                    "address": self.config.address,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            self.disconnect(self.connecting)
         else:
-            self.connect_success()
+            self.connect_success(self.connecting)
 
-    def on_connect_success(self):
+    def on_connect_success(self) -> None:
         """进入已连接状态"""
         # 设置socket选项
         if self._socket:
@@ -71,10 +87,15 @@ class ConnectionStateMachine(StateMachine):
                 self._set_keepalive()
 
             self._logger.info(
-                f"Socket选项已设置: TCP_NODELAY=True, timeout={self.config.timeout}"
+                "Socket选项已设置",
+                extra={
+                    "tcp_nodelay": True,
+                    "timeout": self.config.timeout,
+                    "address": self.config.address,
+                },
             )
 
-    def _set_keepalive(self):
+    def _set_keepalive(self) -> None:
         if not self._socket:
             return
         try:
@@ -103,40 +124,86 @@ class ConnectionStateMachine(StateMachine):
                 self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
             self._logger.info(
-                f"TCP KeepAlive已启用: interval={self.config.keep_alive_interval}s, timeout={self.config.keep_alive_timeout}s"
+                "TCP KeepAlive已启用",
+                extra={
+                    "keepalive_interval": self.config.keep_alive_interval,
+                    "keepalive_timeout": self.config.keep_alive_timeout,
+                    "address": self.config.address,
+                },
             )
 
         except Exception as e:
-            self._logger.warning(f"设置TCP KeepAlive失败: {e}")
+            self._logger.warning(
+                "设置TCP KeepAlive失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "address": self.config.address,
+                },
+            )
 
-    def on_disconnect(self):
+    def on_disconnect(self) -> None:
         """进入断开连接状态"""
-        self._logger.info(f"连接已断开: {self.config.address}")
+        self._logger.info(
+            "连接已断开",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         # 清理socket资源
         self._close_socket()
 
         # 重连逻辑：只有在配置允许重连时才自动重连
         if self.config.max_retries != 0 and self.config.retry_interval > 0:
-            self._logger.info("准备重连...")
+            self._logger.info(
+                "准备重连",
+                extra={
+                    "address": self.config.address,
+                    "retry_interval": self.config.retry_interval,
+                    "max_retries": self.config.max_retries,
+                },
+            )
             time.sleep(self.config.retry_interval)
-            self.connect()
+            self.connect(self.disconnected)
         else:
-            self._logger.info("重连已禁用，保持断开状态")
+            self._logger.info(
+                "重连已禁用，保持断开状态",
+                extra={
+                    "address": self.config.address,
+                    "retry_interval": self.config.retry_interval,
+                    "max_retries": self.config.max_retries,
+                },
+            )
 
-    def on_close(self):
+    def on_close(self) -> None:
         """进入关闭状态"""
-        self._logger.info("连接已关闭")
+        self._logger.info(
+            "连接已关闭",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         # 清理socket资源
         self._close_socket()
 
-    def _close_socket(self):
+    def _close_socket(self) -> None:
         """关闭socket连接"""
         if self._socket:
             try:
                 self._socket.close()
                 self._logger.info("Socket已关闭")
             except Exception as e:
-                self._logger.error(f"关闭Socket时发生错误: {e}")
+                self._logger.error(
+                    "关闭Socket时发生错误",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
             finally:
                 self._socket = None
 
@@ -163,12 +230,23 @@ class ConnectionStateMachine(StateMachine):
                     raise ConnectionError("连接已断开")
                 total_sent += sent
 
-            self._logger.debug(f"发送消息成功: {total_sent} bytes")
+            self._logger.debug(
+                "发送消息成功",
+                extra={
+                    "bytes_sent": total_sent,
+                },
+            )
 
         except Exception as e:
-            self._logger.error(f"发送消息失败: {e}")
+            self._logger.error(
+                "发送消息失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 发送失败，断开连接
-            self.disconnect()
+            self.disconnect(self.connected)
             raise
 
     def recv(self, size: int) -> bytes:
@@ -194,19 +272,31 @@ class ConnectionStateMachine(StateMachine):
             if not data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭")
-                self.disconnect()
+                self.disconnect(self.connected)
                 return b""
 
-            self._logger.debug(f"接收消息成功: {len(data)} bytes (请求: {size})")
+            self._logger.debug(
+                "接收消息成功",
+                extra={
+                    "bytes_received": len(data),
+                    "bytes_requested": size,
+                },
+            )
             return data
 
         except socket.timeout:
             self._logger.debug("接收消息超时")
             raise TimeoutError("接收消息超时")
         except Exception as e:
-            self._logger.error(f"接收消息失败: {e}")
+            self._logger.error(
+                "接收消息失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 接收失败，断开连接
-            self.disconnect()
+            self.disconnect(self.connected)
             raise
 
     def recv_pkg(self) -> bytes:
@@ -231,7 +321,7 @@ class ConnectionStateMachine(StateMachine):
             if not header_data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭（接收header时）")
-                self.disconnect()
+                self.disconnect(self.connected)
                 return b""
 
             if len(header_data) != 4:
@@ -260,7 +350,7 @@ class ConnectionStateMachine(StateMachine):
             if not body_data:
                 # 连接被对方关闭
                 self._logger.info("连接被对方关闭（接收body时）")
-                self.disconnect()
+                self.disconnect(self.connected)
                 return b""
 
             if len(body_data) != body_length:
@@ -269,16 +359,26 @@ class ConnectionStateMachine(StateMachine):
                 )
 
             self._logger.debug(
-                f"接收数据包成功: header=4bytes, body={len(body_data)}bytes"
+                "接收数据包成功",
+                extra={
+                    "header_bytes": 4,
+                    "body_bytes": len(body_data),
+                },
             )
             return body_data
 
         except socket.timeout:
             raise TimeoutError("接收数据包超时")
         except Exception as e:
-            self._logger.error(f"接收数据包失败: {e}")
+            self._logger.error(
+                "接收数据包失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 接收失败，断开连接
-            self.disconnect()
+            self.disconnect(self.connected)
             raise
 
     def _recv_exactly(self, size: int) -> bytes:
@@ -306,10 +406,22 @@ class ConnectionStateMachine(StateMachine):
                 remaining -= len(chunk)
 
             except socket.timeout:
-                self._logger.debug(f"接收数据超时，已接收{len(data)}/{size}字节")
+                self._logger.debug(
+                    "接收数据超时",
+                    extra={
+                        "bytes_received": len(data),
+                        "bytes_requested": size,
+                    },
+                )
                 raise
             except Exception as e:
-                self._logger.error(f"接收数据失败: {e}")
+                self._logger.error(
+                    "接收数据失败",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
                 raise
 
         return data
@@ -339,10 +451,10 @@ class AsyncConnectionStateMachine(StateMachine):
     """异步连接状态机 - 基于python-statemachine实现"""
 
     # 状态定义
-    disconnected = State(initial=True)
-    connecting = State()
-    connected = State()
-    closed = State(final=True)
+    disconnected: State = State(initial=True)
+    connecting: State = State()
+    connected: State = State()
+    closed: State = State(final=True)
 
     # 事件定义
     connect = disconnected.to(connecting)
@@ -350,29 +462,36 @@ class AsyncConnectionStateMachine(StateMachine):
     disconnect = connected.to(disconnected) | connecting.to(disconnected)
     close = disconnected.to(closed) | connected.to(closed) | connecting.to(closed)
 
-    def __init__(self, config: TransportConfig):
-        self.config = config
-        self._socket: Optional[socket.socket] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._logger = get_logger("transport.tcp.async")
+    def __init__(self, config: TransportConfig) -> None:
+        self.config: TransportConfig = config
+        self._socket: socket.socket | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._reader: asyncio.StreamReader | None = None
+        self._logger: logging.Logger = get_logger("transport.tcp.async")
         super().__init__()
 
     async def start(self) -> None:
         """启动连接过程"""
-        await self.connect()
+        await self.connect(None)
 
     async def stop(self) -> None:
         """关闭连接"""
         if not self.is_disconnected:
-            await self.close()
+            await self.close(None)
         else:
             self._logger.warning("当前状态不允许断开操作")
 
     # 状态转换回调
     async def on_connect(self) -> None:
         """进入连接中状态"""
-        self._logger.info(f"开始异步连接到 {self.config.address}")
+        self._logger.info(
+            "开始异步连接到服务器",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         try:
             # 使用asyncio.open_connection建立异步连接
             self._reader, self._writer = await asyncio.wait_for(
@@ -392,21 +511,47 @@ class AsyncConnectionStateMachine(StateMachine):
                         await self._set_keepalive_async()
 
         except asyncio.TimeoutError:
-            self._logger.error(f"连接超时: {self.config.address}")
-            await self.disconnect()
+            self._logger.error(
+                "连接超时",
+                extra={
+                    "address": self.config.address,
+                    "host": self.config.host,
+                    "port": self.config.port,
+                },
+            )
+            await self.disconnect(None)
         except Exception as e:
-            self._logger.error(f"连接失败: {e}")
-            await self.disconnect()
+            self._logger.error(
+                "连接失败",
+                extra={
+                    "address": self.config.address,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
+            await self.disconnect(None)
         else:
             self._logger.info("异步连接成功")
-            await self.connect_success()
+            await self.connect_success(None)
 
     async def on_connect_success(self) -> None:
         """进入已连接状态"""
-        self._logger.info(f"异步连接已建立到 {self.config.address}")
+        self._logger.info(
+            "异步连接已建立",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         if self._writer and self._socket:
             self._logger.info(
-                f"异步Socket选项已设置: TCP_NODELAY=True, timeout={self.config.timeout}"
+                "异步Socket选项已设置",
+                extra={
+                    "tcp_nodelay": True,
+                    "timeout": self.config.timeout,
+                    "address": self.config.address,
+                },
             )
 
     async def _set_keepalive_async(self) -> None:
@@ -440,25 +585,58 @@ class AsyncConnectionStateMachine(StateMachine):
                 self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
             self._logger.info(
-                f"异步TCP KeepAlive已启用: interval={self.config.keep_alive_interval}s, timeout={self.config.keep_alive_timeout}s"
+                "异步TCP KeepAlive已启用",
+                extra={
+                    "keepalive_interval": self.config.keep_alive_interval,
+                    "keepalive_timeout": self.config.keep_alive_timeout,
+                    "address": self.config.address,
+                },
             )
 
         except Exception as e:
-            self._logger.warning(f"设置异步TCP KeepAlive失败: {e}")
+            self._logger.warning(
+                "设置异步TCP KeepAlive失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "address": self.config.address,
+                },
+            )
 
     async def on_disconnect(self) -> None:
         """进入断开连接状态"""
-        self._logger.info(f"异步连接已断开: {self.config.address}")
+        self._logger.info(
+            "异步连接已断开",
+            extra={
+                "address": self.config.address,
+                "host": self.config.host,
+                "port": self.config.port,
+            },
+        )
         # 清理socket资源
         await self._close_connection()
 
         # 重连逻辑：只有在配置允许重连时才自动重连
         if self.config.max_retries != 0 and self.config.retry_interval > 0:
-            self._logger.info("准备异步重连...")
+            self._logger.info(
+                "准备异步重连",
+                extra={
+                    "address": self.config.address,
+                    "retry_interval": self.config.retry_interval,
+                    "max_retries": self.config.max_retries,
+                },
+            )
             await asyncio.sleep(self.config.retry_interval)
-            await self.connect()
+            await self.connect(None)
         else:
-            self._logger.info("异步重连已禁用，保持断开状态")
+            self._logger.info(
+                "异步重连已禁用，保持断开状态",
+                extra={
+                    "address": self.config.address,
+                    "retry_interval": self.config.retry_interval,
+                    "max_retries": self.config.max_retries,
+                },
+            )
 
     async def on_close(self) -> None:
         """进入关闭状态"""
@@ -474,7 +652,13 @@ class AsyncConnectionStateMachine(StateMachine):
                 await self._writer.wait_closed()
                 self._logger.info("异步Writer已关闭")
             except Exception as e:
-                self._logger.error(f"关闭异步Writer时发生错误: {e}")
+                self._logger.error(
+                    "关闭异步Writer时发生错误",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
             finally:
                 self._writer = None
 
@@ -500,12 +684,23 @@ class AsyncConnectionStateMachine(StateMachine):
             self._writer.write(msg)
             await self._writer.drain()
 
-            self._logger.debug(f"异步发送消息成功: {len(msg)} bytes")
+            self._logger.debug(
+                "异步发送消息成功",
+                extra={
+                    "bytes_sent": len(msg),
+                },
+            )
 
         except Exception as e:
-            self._logger.error(f"异步发送消息失败: {e}")
+            self._logger.error(
+                "异步发送消息失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 发送失败，断开连接
-            await self.disconnect()
+            await self.disconnect(None)
             raise
 
     async def recv(self, size: int) -> bytes:
@@ -530,21 +725,33 @@ class AsyncConnectionStateMachine(StateMachine):
                 self._reader.readexactly(size), timeout=self.config.timeout
             )
 
-            self._logger.debug(f"异步接收消息成功: {len(data)} bytes (请求: {size})")
+            self._logger.debug(
+                "异步接收消息成功",
+                extra={
+                    "bytes_received": len(data),
+                    "bytes_requested": size,
+                },
+            )
             return data
 
         except asyncio.IncompleteReadError:
             # 连接被对方关闭
             self._logger.info("异步连接被对方关闭")
-            await self.disconnect()
+            await self.disconnect(None)
             return b""
         except asyncio.TimeoutError:
             self._logger.warning("异步接收消息超时")
             raise TimeoutError("异步接收消息超时")
         except Exception as e:
-            self._logger.error(f"异步接收消息失败: {e}")
+            self._logger.error(
+                "异步接收消息失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 接收失败，断开连接
-            await self.disconnect()
+            await self.disconnect(None)
             raise
 
     async def recv_pkg(self) -> bytes:
@@ -569,7 +776,7 @@ class AsyncConnectionStateMachine(StateMachine):
             if not header_data:
                 # 连接被对方关闭
                 self._logger.info("异步连接被对方关闭（接收header时）")
-                await self.disconnect()
+                await self.disconnect(None)
                 return b""
 
             if len(header_data) != 4:
@@ -598,7 +805,7 @@ class AsyncConnectionStateMachine(StateMachine):
             if not body_data:
                 # 连接被对方关闭
                 self._logger.info("异步连接被对方关闭（接收body时）")
-                await self.disconnect()
+                await self.disconnect(None)
                 return b""
 
             if len(body_data) != body_length:
@@ -607,7 +814,11 @@ class AsyncConnectionStateMachine(StateMachine):
                 )
 
             self._logger.debug(
-                f"异步接收数据包成功: header=4bytes, body={len(body_data)}bytes"
+                "异步接收数据包成功",
+                extra={
+                    "header_bytes": 4,
+                    "body_bytes": len(body_data),
+                },
             )
             return body_data
 
@@ -615,9 +826,15 @@ class AsyncConnectionStateMachine(StateMachine):
             self._logger.warning("异步接收数据包超时")
             raise TimeoutError("异步接收数据包超时")
         except Exception as e:
-            self._logger.error(f"异步接收数据包失败: {e}")
+            self._logger.error(
+                "异步接收数据包失败",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+            )
             # 接收失败，断开连接
-            await self.disconnect()
+            await self.disconnect(None)
             raise
 
     async def _recv_exactly_async(self, size: int) -> bytes:
@@ -639,7 +856,12 @@ class AsyncConnectionStateMachine(StateMachine):
             # 连接被对方关闭
             return b""
         except asyncio.TimeoutError:
-            self._logger.warning(f"异步接收数据超时，请求{size}字节")
+            self._logger.warning(
+                "异步接收数据超时",
+                extra={
+                    "bytes_requested": size,
+                },
+            )
             raise
 
     @property

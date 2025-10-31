@@ -1,7 +1,7 @@
 """传输层配置管理模块"""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 
 @dataclass
@@ -36,9 +36,9 @@ class TransportConfig:
 
     # 高级配置
     max_message_size: int = 1024 * 1024  # 1MB
-    idle_timeout: Optional[float] = None
+    idle_timeout: float | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """配置验证"""
         if self.port < 0 or self.port > 65535:
             raise ValueError("Port must be between 0 and 65535")
@@ -88,9 +88,7 @@ class TransportConfig:
             retry_interval=kwargs.get("retry_interval", self.retry_interval),
             max_retries=kwargs.get("max_retries", self.max_retries),
             buffer_size=kwargs.get("buffer_size", self.buffer_size),
-            send_buffer_size=kwargs.get(
-                "send_buffer_size", self.send_buffer_size
-            ),
+            send_buffer_size=kwargs.get("send_buffer_size", self.send_buffer_size),
             receive_buffer_size=kwargs.get(
                 "receive_buffer_size", self.receive_buffer_size
             ),
@@ -105,13 +103,11 @@ class TransportConfig:
             enable_reuse_address=kwargs.get(
                 "enable_reuse_address", self.enable_reuse_address
             ),
-            max_message_size=kwargs.get(
-                "max_message_size", self.max_message_size
-            ),
+            max_message_size=kwargs.get("max_message_size", self.max_message_size),
             idle_timeout=kwargs.get("idle_timeout", self.idle_timeout),
         )
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | int | float | None]:
         """转换为字典"""
         return {
             "host": self.host,
@@ -133,7 +129,7 @@ class TransportConfig:
         }
 
     @classmethod
-    def from_dict(cls, config_dict: dict) -> "TransportConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> "TransportConfig":
         """从字典创建配置"""
         return cls(**config_dict)
 
@@ -148,10 +144,10 @@ class TransportConfig:
 
 
 # 预定义配置
-DEFAULT_CONFIG = TransportConfig()
+DEFAULT_CONFIG: TransportConfig = TransportConfig()
 
 # 高性能配置
-HIGH_PERFORMANCE_CONFIG = TransportConfig(
+HIGH_PERFORMANCE_CONFIG: TransportConfig = TransportConfig(
     timeout=10.0,
     connect_timeout=5.0,
     retry_interval=1.0,
@@ -164,7 +160,7 @@ HIGH_PERFORMANCE_CONFIG = TransportConfig(
 )
 
 # 调试配置
-DEBUG_CONFIG = TransportConfig(
+DEBUG_CONFIG: TransportConfig = TransportConfig(
     timeout=60.0,
     connect_timeout=30.0,
     retry_interval=10.0,
