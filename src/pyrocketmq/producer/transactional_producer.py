@@ -226,7 +226,7 @@ class TransactionProducer(Producer):
     ) -> None:
         """注册事务检查处理器，包含详细的错误处理"""
         try:
-            _: Any = broker_remote.register_request_processor_lazy(
+            _ = broker_remote.register_request_processor_lazy(
                 self._transaction_check_code,
                 self._handle_transaction_check,
             )

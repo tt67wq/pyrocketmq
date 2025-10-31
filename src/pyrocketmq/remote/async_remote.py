@@ -123,6 +123,24 @@ class AsyncRemote:
                 extra={"code": code},
             )
 
+    async def register_request_processor_lazy(
+        self, code: int, processor_factory: Callable[[], AsyncClientRequestFunc]
+    ) -> None:
+        """延迟注册请求处理器（仅在首次需要时创建处理器）
+
+        Args:
+            code: 请求代码
+            processor_factory: 处理函数工厂，用于按需创建处理器
+        """
+        async with self._processors_lock:
+            if code not in self._processors:
+                processor = processor_factory()
+                self._processors[code] = processor
+                self._logger.debug(
+                    "延迟注册异步请求处理器",
+                    extra={"code": code},
+                )
+
     async def unregister_request_processor(self, code: int) -> bool:
         """取消注册请求处理器
 
