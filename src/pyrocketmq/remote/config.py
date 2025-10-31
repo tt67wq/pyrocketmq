@@ -29,7 +29,7 @@ class RemoteConfig:
     # 传输层配置
     # transport_config: Optional[TransportConfig] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """后初始化处理"""
         # 验证配置值
         if self.rpc_timeout <= 0:
@@ -165,9 +165,7 @@ class RemoteConfig:
             raise ValueError(f"Invalid max_waiters: {self.max_waiters}")
 
         if self.cleanup_interval <= 0:
-            raise ValueError(
-                f"Invalid cleanup_interval: {self.cleanup_interval}"
-            )
+            raise ValueError(f"Invalid cleanup_interval: {self.cleanup_interval}")
 
         if self.waiter_timeout <= 0:
             raise ValueError(f"Invalid waiter_timeout: {self.waiter_timeout}")

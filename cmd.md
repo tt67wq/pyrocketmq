@@ -3,6 +3,9 @@
 - 把List[x, y] 类型标注改为 list[x, y]
 - 把Dict[x, y] 类型标注改为 dict[x, y]
 - 把Set[x] 类型标注改为 set[x]
+- 把Tuple[x, y] 类型标注改为 tuple[x, y]
+- 把Union[x, y] 类型标注改为 x | y
+- 把any类型改为Any(from typing)
 
 ---------
 
@@ -40,3 +43,6 @@ class A:
     def method(self, x: float, y: bool) -> None:
         pass
 ```
+
+-----
+重新组织一下这个模块下的依赖import顺序，让其有序易维护

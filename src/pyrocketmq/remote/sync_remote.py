@@ -2,9 +2,10 @@
 同步远程通信实现
 """
 
+import logging
 import threading
 import time
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
@@ -23,43 +24,41 @@ from .errors import (
 )
 
 # 客户端请求处理函数类型
-ClientRequestFunc = Callable[
-    [RemotingCommand, Tuple[str, int]], Optional[RemotingCommand]
-]
+ClientRequestFunc = Callable[[RemotingCommand, tuple[str, int]], RemotingCommand | None]
 
 
 class Remote:
     """同步远程通信类"""
 
-    def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig):
+    def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig) -> None:
         self.transport: ConnectionStateMachine = ConnectionStateMachine(transport_cfg)
-        self.config = config
-        self._logger = get_logger("remote.sync")
+        self.config: RemoteConfig = config
+        self._logger: logging.Logger = get_logger("remote.sync")
 
         # 请求等待者管理: opaque -> (event, response, timestamp)
-        self._waiters: Dict[
-            int, tuple[threading.Event, Optional[RemotingCommand], float]
+        self._waiters: dict[
+            int, tuple[threading.Event, RemotingCommand | None, float]
         ] = {}
-        self._waiters_lock = threading.Lock()
+        self._waiters_lock: threading.Lock = threading.Lock()
 
         # opaque生成器
-        self._opaque_lock = threading.Lock()
-        self._next_opaque = config.opaque_start
+        self._opaque_lock: threading.Lock = threading.Lock()
+        self._next_opaque: int = config.opaque_start
 
         # 请求处理器映射: code -> handler function
-        self._processors: Dict[int, ClientRequestFunc] = {}
-        self._processors_lock = threading.Lock()
+        self._processors: dict[int, ClientRequestFunc] = {}
+        self._processors_lock: threading.Lock = threading.Lock()
 
         # 清理线程
-        self._cleanup_thread: Optional[threading.Thread] = None
-        self._cleanup_stop_event = threading.Event()
+        self._cleanup_thread: threading.Thread | None = None
+        self._cleanup_stop_event: threading.Event = threading.Event()
 
         # 消息接收线程
-        self._recv_thread: Optional[threading.Thread] = None
-        self._recv_stop_event = threading.Event()
+        self._recv_thread: threading.Thread | None = None
+        self._recv_stop_event: threading.Event = threading.Event()
 
         # 序列化器
-        self._serializer = RemotingCommandSerializer()
+        self._serializer: RemotingCommandSerializer = RemotingCommandSerializer()
 
     def connect(self) -> None:
         """建立连接"""
@@ -150,7 +149,7 @@ class Remote:
             return False
 
     def rpc(
-        self, command: RemotingCommand, timeout: Optional[float] = None
+        self, command: RemotingCommand, timeout: float | None = None
     ) -> RemotingCommand:
         """发送RPC请求并等待响应
 
@@ -284,7 +283,7 @@ class Remote:
         with self._waiters_lock:
             return self._waiters.pop(opaque, None) is not None
 
-    def _get_waiter_response(self, opaque: int) -> Optional[RemotingCommand]:
+    def _get_waiter_response(self, opaque: int) -> RemotingCommand | None:
         """获取等待者的响应
 
         Returns:
@@ -357,12 +356,12 @@ class Remote:
         if expired_opaques:
             self._logger.warning(f"清理了 {len(expired_opaques)} 个过期的等待者")
 
-    def __enter__(self):
+    def __enter__(self) -> "Remote":
         """上下文管理器入口"""
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """上下文管理器出口"""
         self.close()
 

@@ -4,7 +4,9 @@
 
 import asyncio
 import time
-from typing import Awaitable, Callable, Dict, Optional, Tuple
+import logging
+from typing import Any, Callable
+from collections.abc import Awaitable
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
@@ -24,42 +26,42 @@ from .errors import (
 
 # 客户端请求处理函数类型（异步版本）
 AsyncClientRequestFunc = Callable[
-    [RemotingCommand, Tuple[str, int]], Awaitable[Optional[RemotingCommand]]
+    [RemotingCommand, tuple[str, int]], Awaitable[RemotingCommand | None]
 ]
 
 
 class AsyncRemote:
     """异步远程通信类"""
 
-    def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig):
-        self.transport: AsyncConnectionStateMachine = (
-            AsyncConnectionStateMachine(transport_cfg)
+    def __init__(self, transport_cfg: TransportConfig, config: RemoteConfig) -> None:
+        self.transport: AsyncConnectionStateMachine = AsyncConnectionStateMachine(
+            transport_cfg
         )
-        self.config = config
-        self._logger = get_logger("remote.async")
+        self.config: RemoteConfig = config
+        self._logger: logging.Logger = get_logger("remote.async")
 
         # 请求等待者管理: opaque -> (event, response, timestamp)
-        self._waiters: Dict[
-            int, tuple[asyncio.Event, Optional[RemotingCommand], float]
+        self._waiters: dict[
+            int, tuple[asyncio.Event, RemotingCommand | None, float]
         ] = {}
-        self._waiters_lock = asyncio.Lock()
+        self._waiters_lock: asyncio.Lock = asyncio.Lock()
 
         # opaque生成器
-        self._opaque_lock = asyncio.Lock()
-        self._next_opaque = config.opaque_start
+        self._opaque_lock: asyncio.Lock = asyncio.Lock()
+        self._next_opaque: int = config.opaque_start
 
         # 请求处理器映射: code -> handler function
-        self._processors: Dict[int, AsyncClientRequestFunc] = {}
-        self._processors_lock = asyncio.Lock()
+        self._processors: dict[int, AsyncClientRequestFunc] = {}
+        self._processors_lock: asyncio.Lock = asyncio.Lock()
 
         # 清理任务
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         # 消息接收任务
-        self._recv_task: Optional[asyncio.Task] = None
+        self._recv_task: asyncio.Task[None] | None = None
 
         # 序列化器
-        self._serializer = RemotingCommandSerializer()
+        self._serializer: RemotingCommandSerializer = RemotingCommandSerializer()
 
     async def connect(self) -> None:
         """建立连接"""
@@ -129,7 +131,7 @@ class AsyncRemote:
             return False
 
     async def rpc(
-        self, command: RemotingCommand, timeout: Optional[float] = None
+        self, command: RemotingCommand, timeout: float | None = None
     ) -> RemotingCommand:
         """发送RPC请求并等待响应
 
@@ -151,9 +153,7 @@ class AsyncRemote:
             raise ConnectionError("连接未建立")
 
         # 使用传入的超时或配置的超时
-        rpc_timeout = (
-            timeout if timeout is not None else self.config.rpc_timeout
-        )
+        rpc_timeout = timeout if timeout is not None else self.config.rpc_timeout
 
         # 生成opaque并设置为请求
         opaque = await self._generate_opaque()
@@ -174,9 +174,7 @@ class AsyncRemote:
             data = self._serializer.serialize(command)
             await self.transport.output(data)
 
-            self._logger.debug(
-                f"发送异步RPC请求: opaque={opaque}, code={command.code}"
-            )
+            self._logger.debug(f"发送异步RPC请求: opaque={opaque}, code={command.code}")
 
             # 等待响应
             try:
@@ -240,9 +238,7 @@ class AsyncRemote:
         except (ConnectionError, TransportError):
             raise
         except Exception as e:
-            self._logger.error(
-                f"异步单向消息发送失败: opaque={opaque}, error={e}"
-            )
+            self._logger.error(f"异步单向消息发送失败: opaque={opaque}, error={e}")
             raise RemoteError(f"单向消息发送失败: {e}") from e
 
     async def _generate_opaque(self) -> int:
@@ -274,9 +270,7 @@ class AsyncRemote:
         async with self._waiters_lock:
             return self._waiters.pop(opaque, None) is not None
 
-    async def _get_waiter_response(
-        self, opaque: int
-    ) -> Optional[RemotingCommand]:
+    async def _get_waiter_response(self, opaque: int) -> RemotingCommand | None:
         """获取等待者的响应
 
         Returns:
@@ -353,9 +347,7 @@ class AsyncRemote:
                     event.set()
 
         if expired_opaques:
-            self._logger.warning(
-                f"清理了 {len(expired_opaques)} 个过期的等待者"
-            )
+            self._logger.warning(f"清理了 {len(expired_opaques)} 个过期的等待者")
 
     def _start_recv_task(self) -> None:
         """启动消息接收任务"""
@@ -504,12 +496,12 @@ class AsyncRemote:
                 f"发送处理器响应失败: opaque={response.opaque}, error={e}"
             )
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncRemote":
         """异步上下文管理器入口"""
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """异步上下文管理器出口"""
         await self.close()
 

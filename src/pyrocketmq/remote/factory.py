@@ -2,8 +2,6 @@
 远程通信实例工厂
 """
 
-from typing import Optional, Tuple, Union
-
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig
 
@@ -17,9 +15,9 @@ class RemoteFactory:
 
     @staticmethod
     def create_sync_remote(
-        address: Union[str, Tuple[str, int]],
-        remote_config: Optional[RemoteConfig] = None,
-        transport_config: Optional[TransportConfig] = None,
+        address: str | tuple[str, int],
+        remote_config: RemoteConfig | None = None,
+        transport_config: TransportConfig | None = None,
     ) -> Remote:
         """创建同步远程通信实例
 
@@ -46,10 +44,7 @@ class RemoteFactory:
 
         # 设置传输层配置
         if transport_config is None:
-            transport_config = config.transport_config or TransportConfig()
-        else:
-            # 更新配置中的传输层配置
-            config = config.with_transport_config(transport_config)
+            transport_config = TransportConfig()
 
         # 设置传输层地址
         host, port = parsed_address
@@ -64,9 +59,9 @@ class RemoteFactory:
 
     @staticmethod
     def create_async_remote(
-        address: Union[str, Tuple[str, int]],
-        remote_config: Optional[RemoteConfig] = None,
-        transport_config: Optional[TransportConfig] = None,
+        address: str | tuple[str, int],
+        remote_config: RemoteConfig | None = None,
+        transport_config: TransportConfig | None = None,
     ) -> AsyncRemote:
         """创建异步远程通信实例
 
@@ -93,10 +88,7 @@ class RemoteFactory:
 
         # 设置传输层配置
         if transport_config is None:
-            transport_config = config.transport_config or TransportConfig()
-        else:
-            # 更新配置中的传输层配置
-            config = config.with_transport_config(transport_config)
+            transport_config = TransportConfig()
 
         # 设置传输层地址
         host, port = parsed_address
@@ -123,9 +115,7 @@ class RemoteFactory:
         import os
 
         # 从环境变量获取配置
-        server_address = os.getenv(
-            "PYROCKETMQ_SERVER_ADDRESS", "localhost:9876"
-        )
+        server_address = os.getenv("PYROCKETMQ_SERVER_ADDRESS", "localhost:9876")
         environment = os.getenv("PYROCKETMQ_ENVIRONMENT", "default")
 
         # 创建配置
@@ -147,9 +137,7 @@ class RemoteFactory:
         import os
 
         # 从环境变量获取配置
-        server_address = os.getenv(
-            "PYROCKETMQ_SERVER_ADDRESS", "localhost:9876"
-        )
+        server_address = os.getenv("PYROCKETMQ_SERVER_ADDRESS", "localhost:9876")
         environment = os.getenv("PYROCKETMQ_ENVIRONMENT", "default")
 
         # 创建配置
@@ -158,7 +146,7 @@ class RemoteFactory:
         return RemoteFactory.create_async_remote(server_address, config)
 
     @staticmethod
-    def _parse_address(address: Union[str, Tuple[str, int]]) -> Tuple[str, int]:
+    def _parse_address(address: str | tuple[str, int]) -> tuple[str, int]:
         """解析地址
 
         Args:
@@ -199,18 +187,18 @@ class RemoteFactory:
 
 # 便捷函数
 def create_sync_remote(
-    address: Union[str, Tuple[str, int]],
-    config: Optional[RemoteConfig] = None,
-    transport_config: Optional[TransportConfig] = None,
+    address: str | tuple[str, int],
+    config: RemoteConfig | None = None,
+    transport_config: TransportConfig | None = None,
 ) -> Remote:
     """创建同步远程通信实例的便捷函数"""
     return RemoteFactory.create_sync_remote(address, config, transport_config)
 
 
 def create_async_remote(
-    address: Union[str, Tuple[str, int]],
-    config: Optional[RemoteConfig] = None,
-    transport_config: Optional[TransportConfig] = None,
+    address: str | tuple[str, int],
+    config: RemoteConfig | None = None,
+    transport_config: TransportConfig | None = None,
 ) -> AsyncRemote:
     """创建异步远程通信实例的便捷函数"""
     return RemoteFactory.create_async_remote(address, config, transport_config)

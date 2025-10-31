@@ -5,8 +5,10 @@
 import asyncio
 import threading
 import time
+import logging
 from contextlib import asynccontextmanager, contextmanager
-from typing import List, Optional, Tuple, Union
+from typing import Any
+
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig
@@ -22,26 +24,24 @@ class ConnectionPool:
 
     def __init__(
         self,
-        address: Union[str, Tuple[str, int]],
+        address: str | tuple[str, int],
         pool_size: int = 1,
-        remote_config: Optional[RemoteConfig] = None,
-        transport_config: Optional[TransportConfig] = None,
-    ):
-        self.address = address
-        self.pool_size = pool_size
-        self.remote_config = remote_config or RemoteConfig()
-        self.transport_config = transport_config or TransportConfig()
+        remote_config: RemoteConfig | None = None,
+        transport_config: TransportConfig | None = None,
+    ) -> None:
+        self.address: str | tuple[str, int] = address
+        self.pool_size: int = pool_size
+        self.remote_config: RemoteConfig = remote_config or RemoteConfig()
+        self.transport_config: TransportConfig = transport_config or TransportConfig()
 
         # 更新配置中的连接池大小
-        self.remote_config = self.remote_config.with_connection_pool_size(
-            pool_size
-        )
+        self.remote_config = self.remote_config.with_connection_pool_size(pool_size)
 
-        self._logger = get_logger("remote.pool.sync")
+        self._logger: logging.Logger = get_logger("remote.pool.sync")
 
         # 连接池
-        self._pool: List[Remote] = []
-        self._pool_lock = threading.Lock()
+        self._pool: list[Remote] = []
+        self._pool_lock: threading.Lock = threading.Lock()
 
         # 创建连接池
         self._initialize_pool()
@@ -59,9 +59,7 @@ class ConnectionPool:
                     )
                     remote.connect()
                     self._pool.append(remote)
-                    self._logger.debug(
-                        f"连接池初始化连接 {i + 1}/{self.pool_size}"
-                    )
+                    self._logger.debug(f"连接池初始化连接 {i + 1}/{self.pool_size}")
                 except Exception as e:
                     self._logger.error(f"初始化连接池连接失败: {e}")
                     raise ConnectionError(f"初始化连接池失败: {e}") from e
@@ -69,7 +67,7 @@ class ConnectionPool:
             self._logger.info(f"连接池初始化完成，大小: {self.pool_size}")
 
     @contextmanager
-    def get_connection(self, timeout: Optional[float] = None):
+    def get_connection(self, timeout: float | None = None) -> Any:
         """获取连接
 
         Args:
@@ -82,7 +80,7 @@ class ConnectionPool:
             ResourceExhaustedError: 连接池耗尽
             TimeoutError: 获取连接超时
         """
-        connection: Optional[Remote] = None
+        connection: Remote | None = None
         start_time = time.time()
 
         try:
@@ -117,9 +115,7 @@ class ConnectionPool:
             with self._pool_lock:
                 if len(self._pool) < self.pool_size:
                     self._pool.append(connection)
-                    self._logger.debug(
-                        f"归还连接到池中，当前连接数: {len(self._pool)}"
-                    )
+                    self._logger.debug(f"归还连接到池中，当前连接数: {len(self._pool)}")
                     return
 
         # 连接已断开或池已满，关闭连接
@@ -157,11 +153,11 @@ class ConnectionPool:
         with self._pool_lock:
             return len(self._pool)
 
-    def __enter__(self):
+    def __enter__(self) -> "ConnectionPool":
         """上下文管理器入口"""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """上下文管理器出口"""
         self.close()
 
@@ -171,29 +167,27 @@ class AsyncConnectionPool:
 
     def __init__(
         self,
-        address: Union[str, Tuple[str, int]],
+        address: str | tuple[str, int],
         pool_size: int = 1,
-        remote_config: Optional[RemoteConfig] = None,
-        transport_config: Optional[TransportConfig] = None,
-    ):
-        self.address = address
-        self.pool_size = pool_size
-        self.remote_config = remote_config or RemoteConfig()
-        self.transport_config = transport_config or TransportConfig()
+        remote_config: RemoteConfig | None = None,
+        transport_config: TransportConfig | None = None,
+    ) -> None:
+        self.address: str | tuple[str, int] = address
+        self.pool_size: int = pool_size
+        self.remote_config: RemoteConfig = remote_config or RemoteConfig()
+        self.transport_config: TransportConfig = transport_config or TransportConfig()
 
         # 更新配置中的连接池大小
-        self.remote_config = self.remote_config.with_connection_pool_size(
-            pool_size
-        )
+        self.remote_config = self.remote_config.with_connection_pool_size(pool_size)
 
-        self._logger = get_logger("remote.pool.async")
+        self._logger: Any = get_logger("remote.pool.async")
 
         # 连接池
-        self._pool: List[AsyncRemote] = []
-        self._pool_lock = asyncio.Lock()
+        self._pool: list[AsyncRemote] = []
+        self._pool_lock: asyncio.Lock = asyncio.Lock()
 
         # 创建连接池
-        self._initialize_task: Optional[asyncio.Task] = None
+        self._initialize_task: asyncio.Task[None] | None = None
 
     async def _initialize_pool(self) -> None:
         """初始化连接池"""
@@ -208,9 +202,7 @@ class AsyncConnectionPool:
                     )
                     await remote.connect()
                     self._pool.append(remote)
-                    self._logger.debug(
-                        f"异步连接池初始化连接 {i + 1}/{self.pool_size}"
-                    )
+                    self._logger.debug(f"异步连接池初始化连接 {i + 1}/{self.pool_size}")
                 except Exception as e:
                     self._logger.error(f"初始化异步连接池连接失败: {e}")
                     raise ConnectionError(f"初始化连接池失败: {e}") from e
@@ -227,7 +219,7 @@ class AsyncConnectionPool:
         await self._initialize_task
 
     @asynccontextmanager
-    async def get_connection(self, timeout: Optional[float] = None):
+    async def get_connection(self, timeout: float | None = None) -> Any:
         """获取连接
 
         Args:
@@ -325,11 +317,11 @@ class AsyncConnectionPool:
         async with self._pool_lock:
             return len(self._pool)
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncConnectionPool":
         """异步上下文管理器入口"""
         await self.initialize()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """异步上下文管理器出口"""
         await self.close()
