@@ -5,7 +5,6 @@
 提供完整的本地事务执行和状态回查机制。
 """
 
-from dataclasses import dataclass
 from typing import Any
 
 from pyrocketmq.broker.client import BrokerClient
@@ -46,32 +45,8 @@ from .transaction import (
     TransactionListener,
     TransactionRollbackError,
     TransactionSendResult,
+    CheckTransactionStateCallback,
 )
-
-
-@dataclass
-class CheckTransactionStateCallback:
-    """事务状态检查回调数据结构
-
-    包含从事务检查请求中解析出的完整信息，用于事务状态回查。
-    """
-
-    # Broker服务端地址
-    addr: str
-
-    # 消息对象，从notify消息的body中解码得到
-    msg: MessageExt
-
-    # 请求头，从notify消息的header中解码得到
-    header: CheckTransactionStateRequestHeader
-
-    def __str__(self) -> str:
-        """字符串表示"""
-        return f"CheckTransactionStateCallback[addr={self.addr}, msg_id={self.msg.msg_id}, transaction_id={self.header.transaction_id}]"
-
-    def __repr__(self) -> str:
-        """详细字符串表示"""
-        return f"CheckTransactionStateCallback(addr='{self.addr}', msg={self.msg}, header={self.header})"
 
 
 class TransactionProducer(Producer):

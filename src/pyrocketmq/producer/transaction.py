@@ -21,8 +21,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from pyrocketmq.model import MessageQueue
+from pyrocketmq.model import MessageExt, MessageQueue
 from pyrocketmq.model.enums import LocalTransactionState
+from pyrocketmq.model.headers import CheckTransactionStateRequestHeader
 from pyrocketmq.model.result_data import SendMessageResult
 
 from ..model.message import Message
@@ -40,6 +41,31 @@ class TransactionState(Enum):
     COMMIT = 2  # 已提交
     ROLLBACK = 3  # 已回滚
     UNKNOW_STATEN = 4  # 状态未知
+
+
+@dataclass
+class CheckTransactionStateCallback:
+    """事务状态检查回调数据结构
+
+    包含从事务检查请求中解析出的完整信息，用于事务状态回查。
+    """
+
+    # Broker服务端地址
+    addr: str
+
+    # 消息对象，从notify消息的body中解码得到
+    msg: MessageExt
+
+    # 请求头，从notify消息的header中解码得到
+    header: CheckTransactionStateRequestHeader
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        return f"CheckTransactionStateCallback[addr={self.addr}, msg_id={self.msg.msg_id}, transaction_id={self.header.transaction_id}]"
+
+    def __repr__(self) -> str:
+        """详细字符串表示"""
+        return f"CheckTransactionStateCallback(addr='{self.addr}', msg={self.msg}, header={self.header})"
 
 
 @dataclass
