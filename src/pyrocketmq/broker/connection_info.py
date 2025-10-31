@@ -32,7 +32,7 @@ class BrokerConnectionInfo:
     avg_response_time: float = 0.0  # 平均响应时间
     last_used_time: float = field(default_factory=time.time)  # 最后使用时间
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """初始化后处理"""
         if not self.broker_addr:
             raise ValueError("broker_addr cannot be empty")
@@ -52,7 +52,7 @@ class BrokerConnectionInfo:
         """计算失败率"""
         return 1.0 - self.success_rate
 
-    def update_request_stats(self, success: bool, response_time: float):
+    def update_request_stats(self, success: bool, response_time: float) -> None:
         """更新请求统计信息"""
         self.total_requests += 1
         if not success:
@@ -65,7 +65,7 @@ class BrokerConnectionInfo:
         )
         self.last_used_time = time.time()
 
-    def reset_stats(self):
+    def reset_stats(self) -> None:
         """重置统计信息"""
         self.total_requests = 0
         self.failed_requests = 0

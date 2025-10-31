@@ -6,7 +6,7 @@
 
 ---------
 
-修改一下日志打印的风格，参考：
+修改这个模块的日志打印的风格，参考：
 ```python
 logger.info(
     "用户登录成功",
@@ -24,4 +24,13 @@ logger.info(
 
 -----
 
-为这个模块下的class成员和函数补全类型标注
+为这个模块下的class成员和函数补全类型标注，参考：
+```python
+class A:
+    def __init__(self, a: int, b: str) -> None:
+        self.a: int = a
+        self.b: str = b
+
+    def method(self, x: float, y: bool) -> None:
+        pass
+```

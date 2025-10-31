@@ -1,6 +1,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
 from typing import Any
 
 
@@ -17,6 +18,21 @@ class AsyncBrokerConnectionPool:
     管理到单个Broker的连接池，提供连接的获取、释放和维护功能。
     支持连接复用、健康检查和自动故障恢复。
     """
+
+    broker_addr: str
+    broker_name: str
+    transport_config: TransportConfig
+    remote_config: RemoteConfig
+    max_connections: int
+    connection_timeout: float
+    _logger: Any
+    _connections: list[AsyncRemote]
+    _available_connections: asyncio.Queue[AsyncRemote]
+    _lock: asyncio.Lock
+    _closed: bool
+    _total_created: int
+    _total_destroyed: int
+    _active_connections: int
 
     def __init__(
         self,
@@ -305,6 +321,19 @@ class AsyncBrokerManager:
     - 自动故障转移和恢复
     - 负载均衡和连接选择
     """
+
+    remote_config: RemoteConfig
+    transport_config: TransportConfig | None
+    health_check_interval: float
+    health_check_timeout: float
+    max_consecutive_failures: int
+    connection_pool_size: int
+    _logger: Any
+    _brokers: dict[str, BrokerConnectionInfo]
+    _broker_pools: dict[str, AsyncBrokerConnectionPool]
+    _lock: asyncio.Lock
+    _health_check_task: asyncio.Task[None] | None
+    _shutdown_event: asyncio.Event
 
     def __init__(
         self,
@@ -795,7 +824,7 @@ class AsyncBrokerManager:
         return len(self.get_healthy_brokers())
 
     @asynccontextmanager
-    async def connection(self, broker_addr: str):
+    async def connection(self, broker_addr: str) -> AsyncGenerator[AsyncRemote, None]:
         """异步with风格的connection获取方法
 
         自动获取和释放Broker连接，确保连接总是被正确释放。

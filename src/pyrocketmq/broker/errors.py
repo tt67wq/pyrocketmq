@@ -9,6 +9,8 @@ from ..remote.errors import RemoteError
 class BrokerError(RemoteError):
     """Broker 基础异常"""
 
+    error_code: int | None
+
     def __init__(self, message: str, error_code: int | None = None):
         """初始化Broker异常
 
@@ -22,6 +24,8 @@ class BrokerError(RemoteError):
 
 class BrokerConnectionError(BrokerError):
     """Broker 连接错误"""
+
+    broker_address: str | None
 
     def __init__(self, message: str, broker_address: str | None = None):
         """初始化连接错误
@@ -37,6 +41,8 @@ class BrokerConnectionError(BrokerError):
 class BrokerTimeoutError(BrokerError):
     """Broker 超时错误"""
 
+    timeout: float | None
+
     def __init__(self, message: str, timeout: float | None = None):
         """初始化超时错误
 
@@ -50,6 +56,8 @@ class BrokerTimeoutError(BrokerError):
 
 class BrokerResponseError(BrokerError):
     """Broker 响应错误"""
+
+    response_code: int | None
 
     def __init__(self, message: str, response_code: int | None = None):
         """初始化响应错误
@@ -77,6 +85,9 @@ class BrokerProtocolError(BrokerError):
 class AuthorizationError(BrokerError):
     """授权异常"""
 
+    operation: str | None
+    resource: str | None
+
     def __init__(
         self,
         message: str,
@@ -98,6 +109,8 @@ class AuthorizationError(BrokerError):
 class BrokerBusyError(BrokerError):
     """Broker 繁忙异常"""
 
+    broker_address: str | None
+
     def __init__(self, message: str, broker_address: str | None = None):
         """初始化Broker繁忙错误
 
@@ -111,6 +124,10 @@ class BrokerBusyError(BrokerError):
 
 class MessagePullError(BrokerError):
     """消息拉取异常"""
+
+    topic: str | None
+    queue_id: int | None
+    pull_offset: int | None
 
     def __init__(
         self,
@@ -136,6 +153,10 @@ class MessagePullError(BrokerError):
 class OffsetError(BrokerError):
     """偏移量异常"""
 
+    topic: str | None
+    queue_id: int | None
+    offset: int | None
+
     def __init__(
         self,
         message: str,
@@ -159,6 +180,8 @@ class OffsetError(BrokerError):
 
 class BrokerSystemError(BrokerError):
     """Broker 系统异常"""
+
+    error_code: int | None
 
     def __init__(self, message: str, error_code: int | None = None):
         """初始化Broker系统错误

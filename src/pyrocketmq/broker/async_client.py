@@ -40,6 +40,10 @@ class AsyncBrokerClient:
     使用 AsyncRemote 类进行异步通信，提供与Broker交互的基础功能
     """
 
+    remote: AsyncRemote
+    timeout: float
+    _client_id: str
+
     def __init__(self, remote: AsyncRemote, timeout: float = 30.0):
         """初始化异步客户端
 

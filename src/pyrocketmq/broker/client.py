@@ -41,6 +41,10 @@ class BrokerClient:
     使用 Remote 类进行同步通信，提供与Broker交互的基础功能
     """
 
+    remote: Remote
+    timeout: float
+    _client_id: str
+
     def __init__(self, remote: Remote, timeout: float = 30.0):
         """初始化同步客户端
 
@@ -1331,7 +1335,7 @@ class BrokerClient:
             logger.error(f"Unexpected error during end_transaction: {e}")
             raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
-    def get_consumers_by_group(self, consumer_group: str):
+    def get_consumers_by_group(self, consumer_group: str) -> list[str]:
         """获取指定消费者组的消费者列表
 
         Args:

@@ -2,6 +2,7 @@ import queue
 import threading
 import time
 from contextlib import contextmanager
+from typing import Generator
 from typing import Any
 
 
@@ -18,6 +19,21 @@ class BrokerConnectionPool:
     管理到单个Broker的同步连接池，提供连接的获取、释放和维护功能。
     支持连接复用、健康检查和自动故障恢复。使用线程和同步原语实现。
     """
+
+    broker_addr: str
+    broker_name: str
+    transport_config: TransportConfig
+    remote_config: RemoteConfig
+    max_connections: int
+    connection_timeout: float
+    _logger: Any
+    _connections: list[Remote]
+    _available_connections: queue.Queue[Remote]
+    _lock: threading.Lock
+    _closed: bool
+    _total_created: int
+    _total_destroyed: int
+    _active_connections: int
 
     def __init__(
         self,
@@ -306,6 +322,19 @@ class BrokerManager:
 
     使用线程和同步原语实现，适用于同步应用场景。
     """
+
+    remote_config: RemoteConfig
+    transport_config: TransportConfig | None
+    health_check_interval: float
+    health_check_timeout: float
+    max_consecutive_failures: int
+    connection_pool_size: int
+    _logger: Any
+    _brokers: dict[str, BrokerConnectionInfo]
+    _broker_pools: dict[str, BrokerConnectionPool]
+    _lock: threading.Lock
+    _health_check_thread: threading.Thread | None
+    _shutdown_event: threading.Event
 
     def __init__(
         self,
@@ -787,7 +816,7 @@ class BrokerManager:
         return len(self.get_healthy_brokers())
 
     @contextmanager
-    def connection(self, broker_addr: str):
+    def connection(self, broker_addr: str) -> Generator[Remote, None, None]:
         """with风格的connection获取方法
 
         自动获取和释放Broker连接，确保连接总是被正确释放。
