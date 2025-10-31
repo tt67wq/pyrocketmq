@@ -6,15 +6,21 @@
 
 ---------
 
-修改这个模块的日志打印的风格，参考：
+修改这个模块的日志打印的风格，从：
 ```python
 logger.info(
-    "用户登录成功",
+    f"this is a log: a={a}, "
+    f"this is another log, b={b}, c={c}"
+)
+```
+改为
+```python
+logger.info(
+    "this is a log",
     extra={
-        "user_id": 12345,
-        "username": "john_doe",
-        "ip_address": "192.168.1.100",
-        "login_time": time.time(),
+        "a": a,
+        "b": b,
+        "c": c,
     },
 )
 ```

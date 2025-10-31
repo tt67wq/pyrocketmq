@@ -10,7 +10,7 @@ import time
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
 
-from ..logging import LoggerFactory
+from ..logging import get_logger
 from ..model import (
     HeartbeatData,
     LocalTransactionState,
@@ -32,7 +32,7 @@ from .errors import (
     OffsetError,
 )
 
-logger = LoggerFactory.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class BrokerClient:
@@ -59,23 +59,71 @@ class BrokerClient:
     def connect(self) -> None:
         """建立连接"""
         try:
-            logger.info(f"Connecting to Broker at {self.remote}")
+            logger.info(
+                "Connecting to Broker",
+                extra={
+                    "client_id": self._client_id,
+                    "broker_host": getattr(self.remote, "host", "unknown"),
+                    "broker_port": getattr(self.remote, "port", "unknown"),
+                    "operation_type": "connect",
+                    "timestamp": time.time(),
+                },
+            )
             self.remote.connect()
             logger.info(
-                f"Connected to Broker successfully, client_id: {self._client_id}"
+                "Connected to Broker successfully",
+                extra={
+                    "client_id": self._client_id,
+                    "operation_type": "connect",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
         except Exception as e:
-            logger.error(f"Failed to connect to Broker: {e}")
+            logger.error(
+                "Failed to connect to Broker",
+                extra={
+                    "client_id": self._client_id,
+                    "error_message": str(e),
+                    "operation_type": "connect",
+                    "status": "failed",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerConnectionError(f"Connection failed: {e}")
 
     def disconnect(self) -> None:
         """断开连接"""
         try:
-            logger.info(f"Disconnecting from Broker, client_id: {self._client_id}")
+            logger.info(
+                "Disconnecting from Broker",
+                extra={
+                    "client_id": self._client_id,
+                    "operation_type": "disconnect",
+                    "timestamp": time.time(),
+                },
+            )
             self.remote.close()
-            logger.info("Disconnected from Broker successfully")
+            logger.info(
+                "Disconnected from Broker successfully",
+                extra={
+                    "client_id": self._client_id,
+                    "operation_type": "disconnect",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
+            )
         except Exception as e:
-            logger.error(f"Failed to disconnect from Broker: {e}")
+            logger.error(
+                "Failed to disconnect from Broker",
+                extra={
+                    "client_id": self._client_id,
+                    "error_message": str(e),
+                    "operation_type": "disconnect",
+                    "status": "failed",
+                    "timestamp": time.time(),
+                },
+            )
             # 不抛出异常，因为断开连接失败不应该影响程序退出
 
     @property
@@ -119,7 +167,17 @@ class BrokerClient:
         else:
             status = SendStatus.SEND_UNKNOWN_ERROR
             error_msg = response.ext_fields.get("remark", "Unknown error")
-            logger.error(f"Send message failed: {response.code} - {error_msg}")
+            logger.error(
+                "Send message failed",
+                extra={
+                    "client_id": self._client_id,
+                    "response_code": response.code,
+                    "error_message": error_msg,
+                    "operation_type": "process_send_response",
+                    "status": "failed",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(error_msg)
 
         # 从响应扩展字段中提取信息
@@ -162,8 +220,15 @@ class BrokerClient:
         )
 
         logger.debug(
-            f"Process send response: msgId={result.msg_id}, "
-            f"status={result.status_name}, queueOffset={result.queue_offset}"
+            "Process send response",
+            extra={
+                "client_id": self._client_id,
+                "message_id": result.msg_id,
+                "status": result.status_name,
+                "queue_offset": result.queue_offset,
+                "operation_type": "process_send_response",
+                "timestamp": time.time(),
+            },
         )
 
         return result
@@ -198,8 +263,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Sending message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}, "
+                "Sending message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "body_length": len(body),
+                    "operation_type": "send_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建发送消息请求
@@ -222,19 +295,54 @@ class BrokerClient:
                 error_msg = f"Send message failed with code {response.code}"
                 if response.language and response.body:
                     error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
-                logger.error(error_msg)
+                logger.error(
+                    "Send message failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "producer_group": producer_group,
+                        "topic": mq.topic,
+                        "queue_id": mq.queue_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "operation_type": "send_message",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(error_msg)
 
             try:
                 result = self._process_send_response(response, mq, properties)
             except Exception as e:
-                logger.error(f"Failed to parse SendMessageResult: {e}")
+                logger.error(
+                    "Failed to parse SendMessageResult",
+                    extra={
+                        "client_id": self._client_id,
+                        "producer_group": producer_group,
+                        "topic": mq.topic,
+                        "queue_id": mq.queue_id,
+                        "error_message": str(e),
+                        "operation_type": "send_message",
+                        "status": "parse_failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(f"Invalid response format: {e}")
 
             logger.info(
-                f"Successfully sent message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, msgId={result.msg_id}, "
-                f"queueOffset={result.queue_offset}, sendMsgRT={send_msg_rt:.3f}s"
+                "Successfully sent message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "message_id": result.msg_id,
+                    "queue_offset": result.queue_offset,
+                    "execution_time": send_msg_rt,
+                    "operation_type": "send_message",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
 
             return result
@@ -250,7 +358,19 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during send_message: {e}")
+            logger.error(
+                "Unexpected error during send_message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "error_message": str(e),
+                    "operation_type": "send_message",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(f"Unexpected error during send_message: {e}")
 
     def oneway_send_message(
@@ -279,8 +399,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Oneway sending message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}"
+                "Oneway sending message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "body_length": len(body),
+                    "operation_type": "oneway_send_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建发送消息请求
@@ -299,15 +427,36 @@ class BrokerClient:
             send_msg_rt = time.time() - start_time
 
             logger.info(
-                f"Successfully oneway sent message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, sendMsgRT={send_msg_rt:.3f}s"
+                "Successfully oneway sent message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "execution_time": send_msg_rt,
+                    "operation_type": "oneway_send_message",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
 
         except Exception as e:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(f"Unexpected error during oneway_send_message: {e}")
+            logger.error(
+                "Unexpected error during oneway_send_message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "error_message": str(e),
+                    "operation_type": "oneway_send_message",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(
                 f"Unexpected error during oneway_send_message: {e}"
             )
@@ -342,8 +491,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Sending batch message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}, "
+                "Sending batch message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "body_length": len(body),
+                    "operation_type": "send_batch_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建发送批量消息请求
@@ -365,8 +522,18 @@ class BrokerClient:
                 result = self._process_send_response(response, mq, properties)
 
                 logger.debug(
-                    f"Batch message sent successfully: msgId={result.msg_id}, "
-                    f"queueId={result.queue_id}, queueOffset={result.queue_offset}"
+                    "Batch message sent successfully",
+                    extra={
+                        "client_id": self._client_id,
+                        "producer_group": producer_group,
+                        "topic": mq.topic,
+                        "queue_id": mq.queue_id,
+                        "message_id": result.msg_id,
+                        "queue_offset": result.queue_offset,
+                        "operation_type": "send_batch_message",
+                        "status": "success",
+                        "timestamp": time.time(),
+                    },
                 )
 
                 return result
@@ -395,10 +562,35 @@ class BrokerClient:
                     "ConnectionRefusedError",
                 ]
             ):
-                logger.error(f"Network error during send_batch_message: {e}")
+                logger.error(
+                    "Network error during send_batch_message",
+                    extra={
+                        "client_id": self._client_id,
+                        "producer_group": producer_group,
+                        "topic": mq.topic,
+                        "queue_id": mq.queue_id,
+                        "error_message": str(e),
+                        "error_type": "network_error",
+                        "operation_type": "send_batch_message",
+                        "status": "network_failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerConnectionError(f"Network error: {e}")
 
-            logger.error(f"Unexpected error during send_batch_message: {e}")
+            logger.error(
+                "Unexpected error during send_batch_message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "error_message": str(e),
+                    "operation_type": "send_batch_message",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(
                 f"Unexpected error during send_batch_message: {e}"
             )
@@ -429,8 +621,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Oneway sending batch message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, bodyLength={len(body)}"
+                "Oneway sending batch message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "body_length": len(body),
+                    "operation_type": "oneway_batch_send_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建发送批量消息请求
@@ -449,15 +649,36 @@ class BrokerClient:
             send_msg_rt = time.time() - start_time
 
             logger.info(
-                f"Successfully oneway sent batch message: producerGroup={producer_group}, "
-                f"topic={mq.topic}, queueId={mq.queue_id}, sendMsgRT={send_msg_rt:.3f}s"
+                "Successfully oneway sent batch message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "execution_time": send_msg_rt,
+                    "operation_type": "oneway_batch_send_message",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
 
         except Exception as e:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(f"Unexpected error during oneway_batch_send_message: {e}")
+            logger.error(
+                "Unexpected error during oneway_batch_send_message",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "topic": mq.topic,
+                    "queue_id": mq.queue_id,
+                    "error_message": str(e),
+                    "operation_type": "oneway_batch_send_message",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(
                 f"Unexpected error during oneway_batch_send_message: {e}"
             )
@@ -495,9 +716,17 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Pulling message: consumerGroup={consumer_group}, "
-                f"topic={topic}, queueId={queue_id}, offset={queue_offset}, "
-                f"maxMsgNums={max_msg_nums}"
+                "Pulling message",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "queue_offset": queue_offset,
+                    "max_msg_nums": max_msg_nums,
+                    "operation_type": "pull_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建拉取消息请求
@@ -516,7 +745,17 @@ class BrokerClient:
             pull_rt = time.time() - start_time
 
             logger.debug(
-                f"Pull response received: code={response.code}, pullRT={pull_rt:.3f}s"
+                "Pull response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "response_code": response.code,
+                    "execution_time": pull_rt,
+                    "operation_type": "pull_message",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
@@ -526,14 +765,35 @@ class BrokerClient:
                     result = PullMessageResult.from_bytes(response.body)
                     result.pull_rt = pull_rt
                     logger.info(
-                        f"Successfully pulled {result.message_count} messages from "
-                        f"topic={topic}, queueId={queue_id}, nextOffset={result.next_begin_offset}"
+                        "Successfully pulled messages",
+                        extra={
+                            "client_id": self._client_id,
+                            "consumer_group": consumer_group,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "message_count": result.message_count,
+                            "next_offset": result.next_begin_offset,
+                            "execution_time": pull_rt,
+                            "operation_type": "pull_message",
+                            "status": "success",
+                            "timestamp": time.time(),
+                        },
                     )
                     return result
                 else:
                     # 没有消息但响应成功
                     logger.info(
-                        f"No messages found in topic={topic}, queueId={queue_id}"
+                        "No messages found",
+                        extra={
+                            "client_id": self._client_id,
+                            "consumer_group": consumer_group,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "execution_time": pull_rt,
+                            "operation_type": "pull_message",
+                            "status": "no_messages",
+                            "timestamp": time.time(),
+                        },
                     )
                     return PullMessageResult(
                         messages=[],
@@ -545,7 +805,20 @@ class BrokerClient:
 
             elif response.code == ResponseCode.PULL_NOT_FOUND:
                 # 没有找到消息
-                logger.info(f"No messages found in topic={topic}, queueId={queue_id}")
+                logger.info(
+                    "No messages found",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "execution_time": pull_rt,
+                        "operation_type": "pull_message",
+                        "status": "not_found",
+                        "timestamp": time.time(),
+                    },
+                )
                 return PullMessageResult(
                     messages=[],
                     next_begin_offset=queue_offset,
@@ -557,7 +830,19 @@ class BrokerClient:
             elif response.code == ResponseCode.PULL_OFFSET_MOVED:
                 # 偏移量已移动
                 logger.warning(
-                    f"Pull offset moved for topic={topic}, queueId={queue_id}"
+                    "Pull offset moved",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": response.remark,
+                        "execution_time": pull_rt,
+                        "operation_type": "pull_message",
+                        "status": "offset_moved",
+                        "timestamp": time.time(),
+                    },
                 )
                 raise MessagePullError(
                     f"Pull offset moved: {response.remark}",
@@ -568,7 +853,19 @@ class BrokerClient:
             elif response.code == ResponseCode.PULL_RETRY_IMMEDIATELY:
                 # 需要立即重试
                 logger.warning(
-                    f"Pull retry immediately for topic={topic}, queueId={queue_id}"
+                    "Pull retry immediately",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": response.remark,
+                        "execution_time": pull_rt,
+                        "operation_type": "pull_message",
+                        "status": "retry_immediately",
+                        "timestamp": time.time(),
+                    },
                 )
                 raise MessagePullError(
                     f"Pull retry immediately: {response.remark}",
@@ -579,7 +876,21 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = response.remark or f"Unknown pull error: {response.code}"
-                logger.error(f"Pull message failed: {error_msg}")
+                logger.error(
+                    "Pull message failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": pull_rt,
+                        "operation_type": "pull_message",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Pull message failed: {error_msg}",
                     response_code=response.code,
@@ -597,7 +908,19 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during pull_message: {e}")
+            logger.error(
+                "Unexpected error during pull_message",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "error_message": str(e),
+                    "operation_type": "pull_message",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise MessagePullError(
                 f"Unexpected error during pull_message: {e}",
                 topic=topic,
@@ -631,8 +954,15 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Querying consumer offset: consumerGroup={consumer_group}, "
-                f"topic={topic}, queueId={queue_id}"
+                "Querying consumer offset",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "operation_type": "query_consumer_offset",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建查询消费者偏移量请求
@@ -648,7 +978,17 @@ class BrokerClient:
             query_rt = time.time() - start_time
 
             logger.debug(
-                f"Query offset response received: code={response.code}, queryRT={query_rt:.3f}s"
+                "Query offset response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "response_code": response.code,
+                    "execution_time": query_rt,
+                    "operation_type": "query_consumer_offset",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
@@ -659,12 +999,34 @@ class BrokerClient:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
                         logger.info(
-                            f"Successfully queried consumer offset: consumerGroup={consumer_group}, "
-                            f"topic={topic}, queueId={queue_id}, offset={offset}"
+                            "Successfully queried consumer offset",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "offset": offset,
+                                "execution_time": query_rt,
+                                "operation_type": "query_consumer_offset",
+                                "status": "success",
+                                "timestamp": time.time(),
+                            },
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(f"Failed to parse offset from ext_fields: {e}")
+                        logger.error(
+                            "Failed to parse offset from ext_fields",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "error_message": str(e),
+                                "operation_type": "query_consumer_offset",
+                                "status": "parse_failed",
+                                "timestamp": time.time(),
+                            },
+                        )
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -673,16 +1035,36 @@ class BrokerClient:
                 else:
                     # 响应成功但没有offset字段，可能表示偏移量为0或未设置
                     logger.info(
-                        f"No offset field found for consumerGroup={consumer_group}, "
-                        f"topic={topic}, queueId={queue_id}, returning 0"
+                        "No offset field found, returning 0",
+                        extra={
+                            "client_id": self._client_id,
+                            "consumer_group": consumer_group,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "offset": 0,
+                            "execution_time": query_rt,
+                            "operation_type": "query_consumer_offset",
+                            "status": "no_offset_field",
+                            "timestamp": time.time(),
+                        },
                     )
                     return 0
 
             elif response.code == ResponseCode.QUERY_NOT_FOUND:
                 # 没有找到偏移量，通常返回-1或0
                 logger.info(
-                    f"Consumer offset not found for consumerGroup={consumer_group}, "
-                    f"topic={topic}, queueId={queue_id}"
+                    "Consumer offset not found",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "execution_time": query_rt,
+                        "operation_type": "query_consumer_offset",
+                        "status": "not_found",
+                        "timestamp": time.time(),
+                    },
                 )
                 raise OffsetError(
                     f"Consumer offset not found: consumerGroup={consumer_group}, "
@@ -693,7 +1075,20 @@ class BrokerClient:
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(f"Topic not exist: {topic}")
+                logger.error(
+                    "Topic not exist",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "execution_time": query_rt,
+                        "operation_type": "query_consumer_offset",
+                        "status": "topic_not_exist",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Topic not exist: {topic}",
                     response_code=response.code,
@@ -702,7 +1097,21 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误，可能包括消费者组不存在、系统错误、权限错误等
                 error_msg = response.remark or "General error"
-                logger.error(f"Query consumer offset error: {error_msg}")
+                logger.error(
+                    "Query consumer offset error",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "query_consumer_offset",
+                        "status": "error",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Query consumer offset error: {error_msg}",
                     response_code=response.code,
@@ -711,7 +1120,21 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(f"Service not available: {error_msg}")
+                logger.error(
+                    "Service not available",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "query_consumer_offset",
+                        "status": "service_unavailable",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Service not available: {error_msg}",
                     response_code=response.code,
@@ -722,7 +1145,21 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown query offset error: {response.code}"
                 )
-                logger.error(f"Query consumer offset failed: {error_msg}")
+                logger.error(
+                    "Query consumer offset failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "query_consumer_offset",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Query consumer offset failed: {error_msg}",
                     response_code=response.code,
@@ -740,7 +1177,19 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during query_consumer_offset: {e}")
+            logger.error(
+                "Unexpected error during query_consumer_offset",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "error_message": str(e),
+                    "operation_type": "query_consumer_offset",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise OffsetError(
                 f"Unexpected error during query_consumer_offset: {e}",
                 topic=topic,
@@ -771,8 +1220,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Updating consumer offset (oneway): consumerGroup={consumer_group}, "
-                f"topic={topic}, queueId={queue_id}, offset={commit_offset}"
+                "Updating consumer offset (oneway)",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "offset": commit_offset,
+                    "operation_type": "update_consumer_offset",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建更新消费者偏移量请求（使用oneway模式）
@@ -789,15 +1246,38 @@ class BrokerClient:
             update_rt = time.time() - start_time
 
             logger.info(
-                f"Successfully sent consumer offset update (oneway): consumerGroup={consumer_group}, "
-                f"topic={topic}, queueId={queue_id}, offset={commit_offset}, updateRT={update_rt:.3f}s"
+                "Successfully sent consumer offset update (oneway)",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "offset": commit_offset,
+                    "execution_time": update_rt,
+                    "operation_type": "update_consumer_offset",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
 
         except Exception as e:
             if isinstance(e, BrokerConnectionError):
                 raise
 
-            logger.error(f"Unexpected error during update_consumer_offset: {e}")
+            logger.error(
+                "Unexpected error during update_consumer_offset",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "offset": commit_offset,
+                    "error_message": str(e),
+                    "operation_type": "update_consumer_offset",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise OffsetError(
                 f"Unexpected error during update_consumer_offset: {e}",
                 topic=topic,
@@ -831,8 +1311,15 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Searching offset by timestamp: topic={topic}, "
-                f"queueId={queue_id}, timestamp={timestamp}"
+                "Searching offset by timestamp",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "timestamp": timestamp,
+                    "operation_type": "search_offset_by_timestamp",
+                    "timestamp_log": time.time(),
+                },
             )
 
             # 创建搜索偏移量请求
@@ -848,7 +1335,17 @@ class BrokerClient:
             search_rt = time.time() - start_time
 
             logger.debug(
-                f"Search offset response received: code={response.code}, searchRT={search_rt:.3f}s"
+                "Search offset response received",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "timestamp": timestamp,
+                    "response_code": response.code,
+                    "execution_time": search_rt,
+                    "operation_type": "search_offset_by_timestamp",
+                    "timestamp_log": time.time(),
+                },
             )
 
             # 处理响应
@@ -859,12 +1356,34 @@ class BrokerClient:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
                         logger.info(
-                            f"Successfully searched offset by timestamp: topic={topic}, "
-                            f"queueId={queue_id}, timestamp={timestamp}, offset={offset}"
+                            "Successfully searched offset by timestamp",
+                            extra={
+                                "client_id": self._client_id,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "timestamp": timestamp,
+                                "offset": offset,
+                                "execution_time": search_rt,
+                                "operation_type": "search_offset_by_timestamp",
+                                "status": "success",
+                                "timestamp_log": time.time(),
+                            },
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(f"Failed to parse offset from ext_fields: {e}")
+                        logger.error(
+                            "Failed to parse offset from ext_fields",
+                            extra={
+                                "client_id": self._client_id,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "timestamp": timestamp,
+                                "error_message": str(e),
+                                "operation_type": "search_offset_by_timestamp",
+                                "status": "parse_failed",
+                                "timestamp_log": time.time(),
+                            },
+                        )
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -873,8 +1392,16 @@ class BrokerClient:
                 else:
                     # 响应成功但没有offset字段
                     logger.error(
-                        f"No offset field found for topic={topic}, "
-                        f"queueId={queue_id}, timestamp={timestamp}"
+                        "No offset field found in response",
+                        extra={
+                            "client_id": self._client_id,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "timestamp": timestamp,
+                            "operation_type": "search_offset_by_timestamp",
+                            "status": "no_offset_field",
+                            "timestamp_log": time.time(),
+                        },
                     )
                     raise OffsetError(
                         f"No offset field found in response: topic={topic}, "
@@ -886,14 +1413,36 @@ class BrokerClient:
             elif response.code == ResponseCode.QUERY_NOT_FOUND:
                 # 没有找到对应的偏移量
                 logger.info(
-                    f"No offset found for timestamp: topic={topic}, "
-                    f"queueId={queue_id}, timestamp={timestamp}"
+                    "No offset found for timestamp",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "timestamp": timestamp,
+                        "execution_time": search_rt,
+                        "operation_type": "search_offset_by_timestamp",
+                        "status": "not_found",
+                        "timestamp_log": time.time(),
+                    },
                 )
                 return -1
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(f"Topic not exist: {topic}")
+                logger.error(
+                    "Topic not exist",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "timestamp": timestamp,
+                        "response_code": response.code,
+                        "execution_time": search_rt,
+                        "operation_type": "search_offset_by_timestamp",
+                        "status": "topic_not_exist",
+                        "timestamp_log": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Topic not exist: {topic}",
                     response_code=response.code,
@@ -902,7 +1451,20 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "General error"
-                logger.error(f"Search offset by timestamp error: {error_msg}")
+                logger.error(
+                    "Search offset by timestamp error",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "timestamp": timestamp,
+                        "error_message": error_msg,
+                        "execution_time": search_rt,
+                        "operation_type": "search_offset_by_timestamp",
+                        "status": "error",
+                        "timestamp_log": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Search offset by timestamp error: {error_msg}",
                     response_code=response.code,
@@ -911,7 +1473,20 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(f"Service not available: {error_msg}")
+                logger.error(
+                    "Service not available",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "timestamp": timestamp,
+                        "error_message": error_msg,
+                        "execution_time": search_rt,
+                        "operation_type": "search_offset_by_timestamp",
+                        "status": "service_unavailable",
+                        "timestamp_log": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Service not available: {error_msg}",
                     response_code=response.code,
@@ -921,7 +1496,20 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown search offset error: {response.code}"
                 )
-                logger.error(f"Search offset by timestamp failed: {error_msg}")
+                logger.error(
+                    "Search offset by timestamp failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "timestamp": timestamp,
+                        "error_message": error_msg,
+                        "execution_time": search_rt,
+                        "operation_type": "search_offset_by_timestamp",
+                        "status": "failed",
+                        "timestamp_log": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Search offset by timestamp failed: {error_msg}",
                     response_code=response.code,
@@ -939,7 +1527,19 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during search_offset_by_timestamp: {e}")
+            logger.error(
+                "Unexpected error during search_offset_by_timestamp",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "timestamp": timestamp,
+                    "error_message": str(e),
+                    "operation_type": "search_offset_by_timestamp",
+                    "status": "unexpected_error",
+                    "timestamp_log": time.time(),
+                },
+            )
             raise OffsetError(
                 f"Unexpected error during search_offset_by_timestamp: {e}",
                 topic=topic,
@@ -966,7 +1566,16 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(f"Getting max offset: topic={topic}, queueId={queue_id}")
+            logger.debug(
+                "Getting max offset",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "operation_type": "get_max_offset",
+                    "timestamp": time.time(),
+                },
+            )
 
             # 创建获取最大偏移量请求
             request = RemotingRequestFactory.create_get_max_offset_request(
@@ -980,7 +1589,16 @@ class BrokerClient:
             query_rt = time.time() - start_time
 
             logger.debug(
-                f"Get max offset response received: code={response.code}, queryRT={query_rt:.3f}s"
+                "Get max offset response received",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "response_code": response.code,
+                    "execution_time": query_rt,
+                    "operation_type": "get_max_offset",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
@@ -991,12 +1609,32 @@ class BrokerClient:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
                         logger.info(
-                            f"Successfully got max offset: topic={topic}, "
-                            f"queueId={queue_id}, maxOffset={offset}"
+                            "Successfully got max offset",
+                            extra={
+                                "client_id": self._client_id,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "max_offset": offset,
+                                "execution_time": query_rt,
+                                "operation_type": "get_max_offset",
+                                "status": "success",
+                                "timestamp": time.time(),
+                            },
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(f"Failed to parse offset from ext_fields: {e}")
+                        logger.error(
+                            "Failed to parse offset from ext_fields",
+                            extra={
+                                "client_id": self._client_id,
+                                "topic": topic,
+                                "queue_id": queue_id,
+                                "error_message": str(e),
+                                "operation_type": "get_max_offset",
+                                "status": "parse_failed",
+                                "timestamp": time.time(),
+                            },
+                        )
                         raise OffsetError(
                             f"Failed to parse offset from ext_fields: {e}",
                             topic=topic,
@@ -1005,7 +1643,15 @@ class BrokerClient:
                 else:
                     # 响应成功但没有offset字段
                     logger.error(
-                        f"No offset field found for topic={topic}, queueId={queue_id}"
+                        "No offset field found in response",
+                        extra={
+                            "client_id": self._client_id,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "operation_type": "get_max_offset",
+                            "status": "no_offset_field",
+                            "timestamp": time.time(),
+                        },
                     )
                     raise OffsetError(
                         f"No offset field found in response: topic={topic}, "
@@ -1016,7 +1662,19 @@ class BrokerClient:
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(f"Topic not exist: {topic}")
+                logger.error(
+                    "Topic not exist",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "execution_time": query_rt,
+                        "operation_type": "get_max_offset",
+                        "status": "topic_not_exist",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Topic not exist: {topic}",
                     response_code=response.code,
@@ -1025,7 +1683,19 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "General error"
-                logger.error(f"Get max offset error: {error_msg}")
+                logger.error(
+                    "Get max offset error",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "get_max_offset",
+                        "status": "error",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Get max offset error: {error_msg}",
                     response_code=response.code,
@@ -1034,7 +1704,19 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(f"Service not available: {error_msg}")
+                logger.error(
+                    "Service not available",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "get_max_offset",
+                        "status": "service_unavailable",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Service not available: {error_msg}",
                     response_code=response.code,
@@ -1044,7 +1726,19 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown get max offset error: {response.code}"
                 )
-                logger.error(f"Get max offset failed: {error_msg}")
+                logger.error(
+                    "Get max offset failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "error_message": error_msg,
+                        "execution_time": query_rt,
+                        "operation_type": "get_max_offset",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Get max offset failed: {error_msg}",
                     response_code=response.code,
@@ -1062,7 +1756,18 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during get_max_offset: {e}")
+            logger.error(
+                "Unexpected error during get_max_offset",
+                extra={
+                    "client_id": self._client_id,
+                    "topic": topic,
+                    "queue_id": queue_id,
+                    "error_message": str(e),
+                    "operation_type": "get_max_offset",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise OffsetError(
                 f"Unexpected error during get_max_offset: {e}",
                 topic=topic,
@@ -1085,9 +1790,15 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Sending heartbeat: clientId={heartbeat_data.client_id}, "
-                f"producers={len(heartbeat_data.producer_data_set)}, "
-                f"consumers={len(heartbeat_data.consumer_data_set)}"
+                "Sending heartbeat",
+                extra={
+                    "client_id": self._client_id,
+                    "heartbeat_client_id": heartbeat_data.client_id,
+                    "producer_count": len(heartbeat_data.producer_data_set),
+                    "consumer_count": len(heartbeat_data.consumer_data_set),
+                    "operation_type": "send_heartbeat",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建心跳请求
@@ -1099,21 +1810,46 @@ class BrokerClient:
             heartbeat_rt = time.time() - start_time
 
             logger.debug(
-                f"Heartbeat response received: code={response.code}, heartbeatRT={heartbeat_rt:.3f}s"
+                "Heartbeat response received",
+                extra={
+                    "client_id": self._client_id,
+                    "heartbeat_client_id": heartbeat_data.client_id,
+                    "response_code": response.code,
+                    "execution_time": heartbeat_rt,
+                    "operation_type": "send_heartbeat",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 心跳成功
                 logger.debug(
-                    f"Successfully sent heartbeat: clientId={heartbeat_data.client_id}, "
-                    f"producers={len(heartbeat_data.producer_data_set)}, "
-                    f"consumers={len(heartbeat_data.consumer_data_set)}, heartbeatRT={heartbeat_rt:.3f}s"
+                    "Successfully sent heartbeat",
+                    extra={
+                        "client_id": self._client_id,
+                        "heartbeat_client_id": heartbeat_data.client_id,
+                        "producer_count": len(heartbeat_data.producer_data_set),
+                        "consumer_count": len(heartbeat_data.consumer_data_set),
+                        "execution_time": heartbeat_rt,
+                        "operation_type": "send_heartbeat",
+                        "status": "success",
+                        "timestamp": time.time(),
+                    },
                 )
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 logger.warning(
-                    f"Service not available during heartbeat: clientId={heartbeat_data.client_id}, remark={response.remark}"
+                    "Service not available during heartbeat",
+                    extra={
+                        "client_id": self._client_id,
+                        "heartbeat_client_id": heartbeat_data.client_id,
+                        "error_message": response.remark,
+                        "execution_time": heartbeat_rt,
+                        "operation_type": "send_heartbeat",
+                        "status": "service_unavailable",
+                        "timestamp": time.time(),
+                    },
                 )
                 raise BrokerResponseError(
                     f"Service not available during heartbeat: {response.remark}",
@@ -1122,7 +1858,18 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "Heartbeat error"
-                logger.error(f"Heartbeat failed: {error_msg}")
+                logger.error(
+                    "Heartbeat failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "heartbeat_client_id": heartbeat_data.client_id,
+                        "error_message": error_msg,
+                        "execution_time": heartbeat_rt,
+                        "operation_type": "send_heartbeat",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Heartbeat failed: {error_msg}",
                     response_code=response.code,
@@ -1132,7 +1879,18 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown heartbeat error: {response.code}"
                 )
-                logger.error(f"Heartbeat failed: {error_msg}")
+                logger.error(
+                    "Heartbeat failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "heartbeat_client_id": heartbeat_data.client_id,
+                        "error_message": error_msg,
+                        "execution_time": heartbeat_rt,
+                        "operation_type": "send_heartbeat",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Heartbeat failed: {error_msg}",
                     response_code=response.code,
@@ -1149,7 +1907,17 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during send_heartbeat: {e}")
+            logger.error(
+                "Unexpected error during send_heartbeat",
+                extra={
+                    "client_id": self._client_id,
+                    "heartbeat_client_id": heartbeat_data.client_id,
+                    "error_message": str(e),
+                    "operation_type": "send_heartbeat",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(f"Unexpected error during send_heartbeat: {e}")
 
     def consumer_send_msg_back(
@@ -1177,9 +1945,16 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Sending consumer send msg back: consumerGroup={consumer_group}, "
-                f"originTopic={message_ext.topic}, originMsgId={message_ext.msg_id}, "
-                f"delayLevel={delay_level}"
+                "Sending consumer send msg back",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "origin_topic": message_ext.topic,
+                    "origin_msg_id": message_ext.msg_id,
+                    "delay_level": delay_level,
+                    "operation_type": "consumer_send_msg_back",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建消费者发送消息回退请求
@@ -1198,21 +1973,51 @@ class BrokerClient:
             send_back_rt = time.time() - start_time
 
             logger.debug(
-                f"Consumer send msg back response received: code={response.code}, sendBackRT={send_back_rt:.3f}s"
+                "Consumer send msg back response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "origin_topic": message_ext.topic,
+                    "origin_msg_id": message_ext.msg_id,
+                    "response_code": response.code,
+                    "execution_time": send_back_rt,
+                    "operation_type": "consumer_send_msg_back",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 发送回退成功
                 logger.info(
-                    f"Successfully sent consumer send msg back: consumerGroup={consumer_group}, "
-                    f"originTopic={message_ext.topic}, originMsgId={message_ext.msg_id}, "
-                    f"delayLevel={delay_level}, sendBackRT={send_back_rt:.3f}s"
+                    "Successfully sent consumer send msg back",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "origin_topic": message_ext.topic,
+                        "origin_msg_id": message_ext.msg_id,
+                        "delay_level": delay_level,
+                        "execution_time": send_back_rt,
+                        "operation_type": "consumer_send_msg_back",
+                        "status": "success",
+                        "timestamp": time.time(),
+                    },
                 )
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 logger.warning(
-                    f"Service not available during consumer send msg back: consumerGroup={consumer_group}, remark={response.remark}"
+                    "Service not available during consumer send msg back",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "origin_topic": message_ext.topic,
+                        "origin_msg_id": message_ext.msg_id,
+                        "error_message": response.remark,
+                        "execution_time": send_back_rt,
+                        "operation_type": "consumer_send_msg_back",
+                        "status": "service_unavailable",
+                        "timestamp": time.time(),
+                    },
                 )
                 raise BrokerResponseError(
                     f"Service not available during consumer send msg back: {response.remark}",
@@ -1221,7 +2026,20 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "Consumer send msg back error"
-                logger.error(f"Consumer send msg back failed: {error_msg}")
+                logger.error(
+                    "Consumer send msg back failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "origin_topic": message_ext.topic,
+                        "origin_msg_id": message_ext.msg_id,
+                        "error_message": error_msg,
+                        "execution_time": send_back_rt,
+                        "operation_type": "consumer_send_msg_back",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Consumer send msg back failed: {error_msg}",
                     response_code=response.code,
@@ -1232,7 +2050,20 @@ class BrokerClient:
                     response.remark
                     or f"Unknown consumer send msg back error: {response.code}"
                 )
-                logger.error(f"Consumer send msg back failed: {error_msg}")
+                logger.error(
+                    "Consumer send msg back failed",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "origin_topic": message_ext.topic,
+                        "origin_msg_id": message_ext.msg_id,
+                        "error_message": error_msg,
+                        "execution_time": send_back_rt,
+                        "operation_type": "consumer_send_msg_back",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(
                     f"Consumer send msg back failed: {error_msg}",
                     response_code=response.code,
@@ -1249,7 +2080,19 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during consumer_send_msg_back: {e}")
+            logger.error(
+                "Unexpected error during consumer_send_msg_back",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "origin_topic": message_ext.topic,
+                    "origin_msg_id": message_ext.msg_id,
+                    "error_message": str(e),
+                    "operation_type": "consumer_send_msg_back",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(
                 f"Unexpected error during consumer_send_msg_back: {e}"
             )
@@ -1295,12 +2138,20 @@ class BrokerClient:
             )
 
             logger.debug(
-                f"Sending end transaction {action}: producerGroup={producer_group}, "
-                f"tranStateTableOffset={tran_state_table_offset}, "
-                f"commitLogOffset={commit_log_offset}, "
-                f"localTransactionState={local_transaction_state.name}, "
-                f"commitOrRollback={commit_or_rollback}, "
-                f"msgId={msg_id}, transactionId={transaction_id}"
+                "Sending end transaction",
+                extra={
+                    "client_id": self._client_id,
+                    "action": action,
+                    "producer_group": producer_group,
+                    "tran_state_table_offset": tran_state_table_offset,
+                    "commit_log_offset": commit_log_offset,
+                    "local_transaction_state": local_transaction_state.name,
+                    "commit_or_rollback": commit_or_rollback,
+                    "msg_id": msg_id,
+                    "transaction_id": transaction_id,
+                    "operation_type": "end_transaction",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建结束事务请求
@@ -1320,19 +2171,44 @@ class BrokerClient:
             end_tx_rt = time.time() - start_time
 
             logger.info(
-                f"Successfully sent end transaction {action}: producerGroup={producer_group}, "
-                f"tranStateTableOffset={tran_state_table_offset}, "
-                f"commitLogOffset={commit_log_offset}, "
-                f"localTransactionState={local_transaction_state.name}, "
-                f"commitOrRollback={commit_or_rollback}, "
-                f"msgId={msg_id}, transactionId={transaction_id}, endTxRT={end_tx_rt:.3f}s"
+                "Successfully sent end transaction",
+                extra={
+                    "client_id": self._client_id,
+                    "action": action,
+                    "producer_group": producer_group,
+                    "tran_state_table_offset": tran_state_table_offset,
+                    "commit_log_offset": commit_log_offset,
+                    "local_transaction_state": local_transaction_state.name,
+                    "commit_or_rollback": commit_or_rollback,
+                    "msg_id": msg_id,
+                    "transaction_id": transaction_id,
+                    "execution_time": end_tx_rt,
+                    "operation_type": "end_transaction",
+                    "status": "success",
+                    "timestamp": time.time(),
+                },
             )
 
         except Exception as e:
             if isinstance(e, BrokerConnectionError):
                 raise
 
-            logger.error(f"Unexpected error during end_transaction: {e}")
+            logger.error(
+                "Unexpected error during end_transaction",
+                extra={
+                    "client_id": self._client_id,
+                    "producer_group": producer_group,
+                    "tran_state_table_offset": tran_state_table_offset,
+                    "commit_log_offset": commit_log_offset,
+                    "local_transaction_state": local_transaction_state.name,
+                    "msg_id": msg_id,
+                    "transaction_id": transaction_id,
+                    "error_message": str(e),
+                    "operation_type": "end_transaction",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
     def get_consumers_by_group(self, consumer_group: str) -> list[str]:
@@ -1353,7 +2229,15 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(f"Getting consumer list for group: {consumer_group}")
+            logger.debug(
+                "Getting consumer list for group",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "operation_type": "get_consumers_by_group",
+                    "timestamp": time.time(),
+                },
+            )
 
             # 创建获取消费者列表请求
             request = RemotingRequestFactory.create_get_consumer_list_request(
@@ -1366,8 +2250,15 @@ class BrokerClient:
             get_consumers_rt = time.time() - start_time
 
             logger.debug(
-                f"Get consumer list response received: code={response.code}, "
-                f"getConsumersRT={get_consumers_rt:.3f}s"
+                "Get consumer list response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "response_code": response.code,
+                    "execution_time": get_consumers_rt,
+                    "operation_type": "get_consumers_by_group",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
@@ -1389,31 +2280,83 @@ class BrokerClient:
                             consumer_list = consumer_data
                         else:
                             logger.warning(
-                                f"Unexpected consumer data format: {consumer_data}"
+                                "Unexpected consumer data format",
+                                extra={
+                                    "client_id": self._client_id,
+                                    "consumer_group": consumer_group,
+                                    "operation_type": "get_consumers_by_group",
+                                    "status": "unexpected_format",
+                                    "timestamp": time.time(),
+                                },
                             )
                             consumer_list = []
 
                         logger.info(
-                            f"Successfully got consumer list for group '{consumer_group}': "
-                            f"{len(consumer_list)} consumers"
+                            "Successfully got consumer list for group",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "consumer_count": len(consumer_list),
+                                "execution_time": get_consumers_rt,
+                                "operation_type": "get_consumers_by_group",
+                                "status": "success",
+                                "timestamp": time.time(),
+                            },
                         )
                         return consumer_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(f"Failed to parse consumer list response: {e}")
+                        logger.error(
+                            "Failed to parse consumer list response",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "error_message": str(e),
+                                "operation_type": "get_consumers_by_group",
+                                "status": "parse_failed",
+                                "timestamp": time.time(),
+                            },
+                        )
                         # 如果解析失败，返回空列表而不是抛出异常
                         logger.warning(
-                            "Returning empty consumer list due to parsing failure"
+                            "Returning empty consumer list due to parsing failure",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "operation_type": "get_consumers_by_group",
+                                "status": "parsing_failed_empty_result",
+                                "timestamp": time.time(),
+                            },
                         )
                         return []
                 else:
                     logger.info(
-                        f"No consumer data returned for group '{consumer_group}'"
+                        "No consumer data returned for group",
+                        extra={
+                            "client_id": self._client_id,
+                            "consumer_group": consumer_group,
+                            "execution_time": get_consumers_rt,
+                            "operation_type": "get_consumers_by_group",
+                            "status": "no_data",
+                            "timestamp": time.time(),
+                        },
                     )
                     return []
             else:
                 error_msg = f"Failed to get consumer list for group '{consumer_group}': {response.code}-{response.remark}"
-                logger.error(error_msg)
+                logger.error(
+                    "Failed to get consumer list for group",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": get_consumers_rt,
+                        "operation_type": "get_consumers_by_group",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(error_msg)
 
         except Exception as e:
@@ -1427,7 +2370,17 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during get_consumers_by_group: {e}")
+            logger.error(
+                "Unexpected error during get_consumers_by_group",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "error_message": str(e),
+                    "operation_type": "get_consumers_by_group",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(
                 f"Unexpected error during get_consumers_by_group: {e}"
             )
@@ -1455,8 +2408,15 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Locking batch message queues: consumerGroup={consumer_group}, "
-                f"clientId={client_id}, mqCount={len(mqs)}"
+                "Locking batch message queues",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "lock_client_id": client_id,
+                    "mq_count": len(mqs),
+                    "operation_type": "lock_batch_mq",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建批量锁定消息队列请求
@@ -1472,7 +2432,16 @@ class BrokerClient:
             lock_rt = time.time() - start_time
 
             logger.debug(
-                f"Lock batch MQ response received: code={response.code}, lockRT={lock_rt:.3f}s"
+                "Lock batch MQ response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "lock_client_id": client_id,
+                    "response_code": response.code,
+                    "execution_time": lock_rt,
+                    "operation_type": "lock_batch_mq",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
@@ -1494,7 +2463,16 @@ class BrokerClient:
                             locked_mqs = lock_result
                         else:
                             logger.warning(
-                                f"Unexpected lock result format: {lock_result}"
+                                "Unexpected lock result format",
+                                extra={
+                                    "client_id": self._client_id,
+                                    "consumer_group": consumer_group,
+                                    "lock_client_id": client_id,
+                                    "data_format": str(lock_result),
+                                    "operation_type": "lock_batch_mq",
+                                    "status": "unexpected_format",
+                                    "timestamp": time.time(),
+                                },
                             )
                             locked_mqs = []
 
@@ -1507,26 +2485,67 @@ class BrokerClient:
                         ]
 
                         logger.info(
-                            f"Successfully locked {len(locked_queue_list)} message queues "
-                            f"for consumerGroup={consumer_group}, clientId={client_id}"
+                            "Successfully locked message queues",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "lock_client_id": client_id,
+                                "locked_count": len(locked_queue_list),
+                                "execution_time": lock_rt,
+                                "operation_type": "lock_batch_mq",
+                                "status": "success",
+                                "timestamp": time.time(),
+                            },
                         )
                         return locked_queue_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(f"Failed to parse lock batch response: {e}")
+                        logger.error(
+                            "Failed to parse lock batch response",
+                            extra={
+                                "client_id": self._client_id,
+                                "consumer_group": consumer_group,
+                                "lock_client_id": client_id,
+                                "error_message": str(e),
+                                "operation_type": "lock_batch_mq",
+                                "status": "parse_failed",
+                                "timestamp": time.time(),
+                            },
+                        )
                         raise BrokerResponseError(
                             f"Failed to parse lock batch response: {e}",
                             response_code=response.code,
                         )
                 else:
                     logger.info(
-                        f"No locked queues returned for consumerGroup={consumer_group}, "
-                        f"clientId={client_id}"
+                        "No locked queues returned",
+                        extra={
+                            "client_id": self._client_id,
+                            "consumer_group": consumer_group,
+                            "lock_client_id": client_id,
+                            "execution_time": lock_rt,
+                            "operation_type": "lock_batch_mq",
+                            "status": "no_locked_queues",
+                            "timestamp": time.time(),
+                        },
                     )
                     return []
             else:
                 error_msg = f"Failed to lock batch message queues: {response.code}-{response.remark}"
-                logger.error(error_msg)
+                logger.error(
+                    "Failed to lock batch message queues",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "lock_client_id": client_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": lock_rt,
+                        "operation_type": "lock_batch_mq",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(error_msg)
 
         except Exception as e:
@@ -1540,7 +2559,18 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during lock_batch_mq: {e}")
+            logger.error(
+                "Unexpected error during lock_batch_mq",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "lock_client_id": client_id,
+                    "error_message": str(e),
+                    "operation_type": "lock_batch_mq",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(f"Unexpected error during lock_batch_mq: {e}")
 
     def unlock_batch_mq(
@@ -1563,8 +2593,15 @@ class BrokerClient:
 
         try:
             logger.debug(
-                f"Unlocking batch message queues: consumerGroup={consumer_group}, "
-                f"clientId={client_id}, mqCount={len(mqs)}"
+                "Unlocking batch message queues",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "unlock_client_id": client_id,
+                    "mq_count": len(mqs),
+                    "operation_type": "unlock_batch_mq",
+                    "timestamp": time.time(),
+                },
             )
 
             # 创建批量解锁消息队列请求
@@ -1580,19 +2617,50 @@ class BrokerClient:
             unlock_rt = time.time() - start_time
 
             logger.debug(
-                f"Unlock batch MQ response received: code={response.code}, unlockRT={unlock_rt:.3f}s"
+                "Unlock batch MQ response received",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "unlock_client_id": client_id,
+                    "response_code": response.code,
+                    "execution_time": unlock_rt,
+                    "operation_type": "unlock_batch_mq",
+                    "timestamp": time.time(),
+                },
             )
 
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 解锁成功
                 logger.info(
-                    f"Successfully unlocked {len(mqs)} message queues "
-                    f"for consumerGroup={consumer_group}, clientId={client_id}, unlockRT={unlock_rt:.3f}s"
+                    "Successfully unlocked message queues",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "unlock_client_id": client_id,
+                        "mq_count": len(mqs),
+                        "execution_time": unlock_rt,
+                        "operation_type": "unlock_batch_mq",
+                        "status": "success",
+                        "timestamp": time.time(),
+                    },
                 )
             else:
                 error_msg = f"Failed to unlock batch message queues: {response.code}-{response.remark}"
-                logger.error(error_msg)
+                logger.error(
+                    "Failed to unlock batch message queues",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "unlock_client_id": client_id,
+                        "response_code": response.code,
+                        "error_message": error_msg,
+                        "execution_time": unlock_rt,
+                        "operation_type": "unlock_batch_mq",
+                        "status": "failed",
+                        "timestamp": time.time(),
+                    },
+                )
                 raise BrokerResponseError(error_msg)
 
         except Exception as e:
@@ -1606,7 +2674,18 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(f"Unexpected error during unlock_batch_mq: {e}")
+            logger.error(
+                "Unexpected error during unlock_batch_mq",
+                extra={
+                    "client_id": self._client_id,
+                    "consumer_group": consumer_group,
+                    "unlock_client_id": client_id,
+                    "error_message": str(e),
+                    "operation_type": "unlock_batch_mq",
+                    "status": "unexpected_error",
+                    "timestamp": time.time(),
+                },
+            )
             raise BrokerResponseError(f"Unexpected error during unlock_batch_mq: {e}")
 
 

@@ -1,8 +1,9 @@
 import queue
 import threading
 import time
+import logging
 from contextlib import contextmanager
-from typing import Generator
+from collections.abc import Generator
 from typing import Any
 
 
@@ -61,7 +62,7 @@ class BrokerConnectionPool:
         self.max_connections = max_connections
         self.connection_timeout = connection_timeout
 
-        self._logger = get_logger(f"broker.pool.sync.{broker_name}")
+        self._logger: logging.Logger = get_logger(f"broker.pool.sync.{broker_name}")
 
         # 连接池状态 - 使用线程安全的数据结构
         self._connections: list[Remote] = []
@@ -74,7 +75,16 @@ class BrokerConnectionPool:
         self._total_destroyed = 0
         self._active_connections = 0
 
-        self._logger.info(f"初始化同步Broker连接池: {broker_addr}")
+        self._logger.info(
+            "初始化同步Broker连接池",
+            extra={
+                "broker_addr": broker_addr,
+                "broker_name": broker_name,
+                "max_connections": max_connections,
+                "connection_timeout": connection_timeout,
+                "timestamp": time.time(),
+            },
+        )
 
     def get_connection(self) -> Remote:
         """获取可用连接
@@ -99,16 +109,40 @@ class BrokerConnectionPool:
 
             # 检查连接是否仍然有效
             if connection.is_connected:
-                self._logger.debug(f"从连接池获取连接: {self.broker_addr}")
+                self._logger.debug(
+                    "从连接池获取连接",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(connection),
+                        "timestamp": time.time(),
+                    },
+                )
                 return connection
             else:
                 # 连接已断开，销毁并继续尝试
-                self._logger.warning(f"发现无效连接，销毁重建: {self.broker_addr}")
+                self._logger.warning(
+                    "发现无效连接，销毁重建",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(connection),
+                        "timestamp": time.time(),
+                    },
+                )
                 self._destroy_connection(connection)
 
         except queue.Empty:
             # 超时，说明没有可用连接
-            self._logger.debug(f"连接池超时，尝试创建新连接: {self.broker_addr}")
+            self._logger.debug(
+                "连接池超时，尝试创建新连接",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "timeout": self.connection_timeout,
+                    "timestamp": time.time(),
+                },
+            )
 
         # 创建新连接
         with self._lock:
@@ -117,11 +151,27 @@ class BrokerConnectionPool:
 
             if len(self._connections) < self.max_connections:
                 connection = self._create_connection()
-                self._logger.debug(f"创建新连接: {self.broker_addr}")
+                self._logger.debug(
+                    "创建新连接",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "timestamp": time.time(),
+                    },
+                )
                 return connection
 
         # 达到最大连接数限制，等待可用连接
-        self._logger.info(f"连接池已满，等待可用连接: {self.broker_addr}")
+        self._logger.info(
+            "连接池已满，等待可用连接",
+            extra={
+                "broker_addr": self.broker_addr,
+                "broker_name": self.broker_name,
+                "max_connections": self.max_connections,
+                "timeout": self.connection_timeout,
+                "timestamp": time.time(),
+            },
+        )
         connection = self._available_connections.get(timeout=self.connection_timeout)
 
         if not connection.is_connected:
@@ -145,14 +195,38 @@ class BrokerConnectionPool:
             # 连接仍然有效，放回连接池
             try:
                 self._available_connections.put(connection, block=False)
-                self._logger.debug(f"连接已释放回连接池: {self.broker_addr}")
+                self._logger.debug(
+                    "连接已释放回连接池",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(connection),
+                        "timestamp": time.time(),
+                    },
+                )
             except queue.Full:
                 # 队列已满（不应该发生），销毁连接
-                self._logger.warning(f"连接池队列已满，销毁连接: {self.broker_addr}")
+                self._logger.warning(
+                    "连接池队列已满，销毁连接",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(connection),
+                        "timestamp": time.time(),
+                    },
+                )
                 self._destroy_connection(connection)
         else:
             # 连接已断开，销毁
-            self._logger.warning(f"连接已断开，销毁连接: {self.broker_addr}")
+            self._logger.warning(
+                "连接已断开，销毁连接",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "connection_id": id(connection),
+                    "timestamp": time.time(),
+                },
+            )
             self._destroy_connection(connection)
 
     def close(self) -> None:
@@ -161,7 +235,16 @@ class BrokerConnectionPool:
         销毁所有连接并释放资源。
         """
         self._closed = True
-        self._logger.info(f"开始关闭连接池: {self.broker_addr}")
+        self._logger.info(
+            "开始关闭连接池",
+            extra={
+                "broker_addr": self.broker_addr,
+                "broker_name": self.broker_name,
+                "total_connections": len(self._connections),
+                "active_connections": self._active_connections,
+                "timestamp": time.time(),
+            },
+        )
 
         with self._lock:
             # 销毁所有连接
@@ -180,9 +263,14 @@ class BrokerConnectionPool:
                 break
 
         self._logger.info(
-            f"连接池已关闭: {self.broker_addr}, "
-            f"总共创建={self._total_created}, "
-            f"总共销毁={self._total_destroyed}"
+            "连接池已关闭",
+            extra={
+                "broker_addr": self.broker_addr,
+                "broker_name": self.broker_name,
+                "total_created": self._total_created,
+                "total_destroyed": self._total_destroyed,
+                "timestamp": time.time(),
+            },
         )
 
     def health_check(self) -> bool:
@@ -203,22 +291,52 @@ class BrokerConnectionPool:
         # 尝试创建测试连接并放回连接池复用
         try:
             test_connection = self._create_connection()
-            self._logger.debug(f"健康检查创建连接，放回连接池: {self.broker_addr}")
+            self._logger.debug(
+                "健康检查创建连接，放回连接池",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "connection_id": id(test_connection),
+                    "timestamp": time.time(),
+                },
+            )
 
             # 将健康检查创建的连接放回连接池，避免浪费
             try:
                 self._available_connections.put(test_connection, block=False)
-                self._logger.debug(f"健康检查连接已放回连接池: {self.broker_addr}")
+                self._logger.debug(
+                    "健康检查连接已放回连接池",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(test_connection),
+                        "timestamp": time.time(),
+                    },
+                )
             except queue.Full:
                 # 如果连接池满了，销毁连接
                 self._logger.warning(
-                    f"连接池已满，销毁健康检查连接: {self.broker_addr}"
+                    "连接池已满，销毁健康检查连接",
+                    extra={
+                        "broker_addr": self.broker_addr,
+                        "broker_name": self.broker_name,
+                        "connection_id": id(test_connection),
+                        "timestamp": time.time(),
+                    },
                 )
                 self._destroy_connection(test_connection)
 
             return True
         except Exception as e:
-            self._logger.error(f"健康检查失败: {self.broker_addr}, error={e}")
+            self._logger.error(
+                "健康检查失败",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
             return False
 
     def _create_connection(self) -> Remote:
@@ -244,13 +362,29 @@ class BrokerConnectionPool:
                 self._active_connections += 1
 
             self._logger.debug(
-                f"创建连接成功: {self.broker_addr}, 当前连接数={len(self._connections)}"
+                "创建连接成功",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "connection_id": id(connection),
+                    "total_connections": len(self._connections),
+                    "active_connections": self._active_connections,
+                    "timestamp": time.time(),
+                },
             )
 
             return connection
 
         except Exception as e:
-            self._logger.error(f"创建连接失败: {self.broker_addr}, error={e}")
+            self._logger.error(
+                "创建连接失败",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
             raise ConnectionError(f"无法连接到Broker {self.broker_addr}: {e}") from e
 
     def _destroy_connection(self, connection: Remote) -> None:
@@ -270,10 +404,28 @@ class BrokerConnectionPool:
             # 关闭连接
             connection.close()
 
-            self._logger.debug(f"销毁连接成功: {self.broker_addr}")
+            self._logger.debug(
+                "销毁连接成功",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "connection_id": id(connection),
+                    "active_connections": self._active_connections,
+                    "timestamp": time.time(),
+                },
+            )
 
         except Exception as e:
-            self._logger.error(f"销毁连接失败: {self.broker_addr}, error={e}")
+            self._logger.error(
+                "销毁连接失败",
+                extra={
+                    "broker_addr": self.broker_addr,
+                    "broker_name": self.broker_name,
+                    "connection_id": id(connection),
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
 
     @property
     def active_connections_count(self) -> int:
@@ -329,7 +481,7 @@ class BrokerManager:
     health_check_timeout: float
     max_consecutive_failures: int
     connection_pool_size: int
-    _logger: Any
+    _logger: logging.Logger
     _brokers: dict[str, BrokerConnectionInfo]
     _broker_pools: dict[str, BrokerConnectionPool]
     _lock: threading.Lock
@@ -373,7 +525,16 @@ class BrokerManager:
         self._health_check_thread: threading.Thread | None = None
         self._shutdown_event = threading.Event()
 
-        self._logger.info("同步Broker管理器初始化完成")
+        self._logger.info(
+            "同步Broker管理器初始化完成",
+            extra={
+                "health_check_interval": self.health_check_interval,
+                "health_check_timeout": self.health_check_timeout,
+                "max_consecutive_failures": self.max_consecutive_failures,
+                "connection_pool_size": self.connection_pool_size,
+                "timestamp": time.time(),
+            },
+        )
 
     def start(self) -> None:
         """启动Broker管理器
@@ -381,7 +542,14 @@ class BrokerManager:
         启动健康检查等后台线程。
         """
         if self._health_check_thread and self._health_check_thread.is_alive():
-            self._logger.warning("同步Broker管理器已经在运行")
+            self._logger.warning(
+                "同步Broker管理器已经在运行",
+                extra={
+                    "thread_name": self._health_check_thread.name,
+                    "thread_id": self._health_check_thread.native_id,
+                    "timestamp": time.time(),
+                },
+            )
             return
 
         self._shutdown_event.clear()
@@ -392,14 +560,31 @@ class BrokerManager:
         )
         self._health_check_thread.start()
 
-        self._logger.info("同步Broker管理器已启动")
+        self._logger.info(
+            "同步Broker管理器已启动",
+            extra={
+                "thread_name": self._health_check_thread.name,
+                "thread_id": self._health_check_thread.native_id,
+                "health_check_interval": self.health_check_interval,
+                "timestamp": time.time(),
+            },
+        )
 
     def shutdown(self) -> None:
         """关闭Broker管理器
 
         停止所有后台线程并关闭所有连接池。
         """
-        self._logger.info("开始关闭同步Broker管理器")
+        self._logger.info(
+            "开始关闭同步Broker管理器",
+            extra={
+                "total_brokers": len(self._brokers),
+                "total_pools": len(self._broker_pools),
+                "is_health_check_running": self._health_check_thread
+                and self._health_check_thread.is_alive(),
+                "timestamp": time.time(),
+            },
+        )
 
         # 停止健康检查线程
         self._shutdown_event.set()
@@ -414,7 +599,13 @@ class BrokerManager:
         for pool in broker_pools:
             pool.close()
 
-        self._logger.info("同步Broker管理器已关闭")
+        self._logger.info(
+            "同步Broker管理器已关闭",
+            extra={
+                "closed_brokers_count": len(broker_pools),
+                "timestamp": time.time(),
+            },
+        )
 
     def add_broker(self, broker_addr: str, broker_name: str | None = None) -> None:
         """添加Broker
@@ -423,11 +614,25 @@ class BrokerManager:
             broker_addr: Broker地址，格式为"host:port"
             broker_name: Broker名称，为None时从地址提取
         """
-        self._logger.info(f"开始添加同步Broker: {broker_addr}")
+        self._logger.info(
+            "开始添加同步Broker",
+            extra={
+                "broker_addr": broker_addr,
+                "broker_name": broker_name,
+                "timestamp": time.time(),
+            },
+        )
 
         # 验证broker_addr格式
         if not broker_addr or ":" not in broker_addr:
-            self._logger.error(f"无效的Broker地址格式: {broker_addr}")
+            self._logger.error(
+                "无效的Broker地址格式",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error_reason": "missing_colon_or_empty",
+                    "timestamp": time.time(),
+                },
+            )
             raise ValueError(f"无效的Broker地址格式: {broker_addr}")
 
         # 解析主机和端口
@@ -436,33 +641,84 @@ class BrokerManager:
             port = int(port_str)
             if not host or port <= 0 or port > 65535:
                 raise ValueError("无效的主机或端口")
-            self._logger.debug(f"同步Broker地址解析成功: host={host}, port={port}")
+            self._logger.debug(
+                "同步Broker地址解析成功",
+                extra={
+                    "broker_addr": broker_addr,
+                    "host": host,
+                    "port": port,
+                    "timestamp": time.time(),
+                },
+            )
         except ValueError as e:
-            self._logger.error(f"同步Broker地址解析失败: {broker_addr}, error={e}")
+            self._logger.error(
+                "同步Broker地址解析失败",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
             raise ValueError(f"无效的Broker地址格式: {broker_addr}") from e
 
         if not broker_name:
             broker_name = broker_addr.split(":")[0]
-            self._logger.debug(f"从地址提取同步Broker名称: {broker_name}")
+            self._logger.debug(
+                "从地址提取同步Broker名称",
+                extra={
+                    "broker_addr": broker_addr,
+                    "extracted_broker_name": broker_name,
+                    "timestamp": time.time(),
+                },
+            )
 
         with self._lock:
             if broker_addr in self._brokers:
-                self._logger.warning(f"同步Broker已存在，跳过添加: {broker_addr}")
+                self._logger.warning(
+                    "同步Broker已存在，跳过添加",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "timestamp": time.time(),
+                    },
+                )
                 return
 
             try:
                 # 创建连接信息
-                self._logger.debug(f"创建同步Broker连接信息: {broker_addr}")
+                self._logger.debug(
+                    "创建同步Broker连接信息",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "timestamp": time.time(),
+                    },
+                )
                 broker_info = BrokerConnectionInfo(
                     broker_addr=broker_addr,
                     broker_name=broker_name,
                     state=BrokerState.UNKNOWN,
                 )
                 self._brokers[broker_addr] = broker_info
-                self._logger.debug(f"同步Broker连接信息创建成功: {broker_addr}")
+                self._logger.debug(
+                    "同步Broker连接信息创建成功",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "broker_state": broker_info.state.value,
+                        "timestamp": time.time(),
+                    },
+                )
 
                 # 创建传输配置
-                self._logger.debug(f"创建同步传输配置: {broker_addr}")
+                self._logger.debug(
+                    "创建同步传输配置",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "has_existing_config": self.transport_config is not None,
+                        "timestamp": time.time(),
+                    },
+                )
                 if self.transport_config:
                     # Remove host and port from transport_config dict to avoid duplication
                     transport_config_dict = {
@@ -480,11 +736,26 @@ class BrokerManager:
                         host=broker_addr.split(":")[0],
                         port=int(broker_addr.split(":")[1]),
                     )
-                self._logger.debug(f"同步传输配置创建成功: {transport_config}")
+                self._logger.debug(
+                    "同步传输配置创建成功",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "transport_host": transport_config.host,
+                        "transport_port": transport_config.port,
+                        "timeout": transport_config.timeout,
+                        "timestamp": time.time(),
+                    },
+                )
 
                 # 创建同步连接池
                 self._logger.debug(
-                    f"创建同步连接池: {broker_addr}, max_connections={self.connection_pool_size}"
+                    "创建同步连接池",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "max_connections": self.connection_pool_size,
+                        "timestamp": time.time(),
+                    },
                 )
                 pool = BrokerConnectionPool(
                     broker_addr=broker_addr,
@@ -494,10 +765,26 @@ class BrokerManager:
                     max_connections=self.connection_pool_size,
                 )
                 self._broker_pools[broker_addr] = pool
-                self._logger.debug(f"同步连接池创建成功: {broker_addr}")
+                self._logger.debug(
+                    "同步连接池创建成功",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "pool_id": id(pool),
+                        "timestamp": time.time(),
+                    },
+                )
 
                 # 立即尝试建立连接
-                self._logger.info(f"正在建立与同步Broker的初始连接: {broker_addr}")
+                self._logger.info(
+                    "正在建立与同步Broker的初始连接",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "pool_id": id(pool),
+                        "timestamp": time.time(),
+                    },
+                )
                 try:
                     # 执行健康检查来建立初始连接
                     connection_success = pool.health_check()
@@ -505,30 +792,67 @@ class BrokerManager:
                         broker_info.state = BrokerState.HEALTHY
                         broker_info.consecutive_failures = 0
                         self._logger.info(
-                            f"与同步Broker建立初始连接成功: {broker_addr}"
+                            "与同步Broker建立初始连接成功",
+                            extra={
+                                "broker_addr": broker_addr,
+                                "broker_name": broker_name,
+                                "broker_state": broker_info.state.value,
+                                "pool_id": id(pool),
+                                "timestamp": time.time(),
+                            },
                         )
                     else:
                         broker_info.state = BrokerState.UNHEALTHY
                         broker_info.consecutive_failures = 1
                         self._logger.warning(
-                            f"与同步Broker建立初始连接失败: {broker_addr}"
+                            "与同步Broker建立初始连接失败",
+                            extra={
+                                "broker_addr": broker_addr,
+                                "broker_name": broker_name,
+                                "broker_state": broker_info.state.value,
+                                "pool_id": id(pool),
+                                "timestamp": time.time(),
+                            },
                         )
                 except Exception as e:
                     broker_info.state = BrokerState.FAILED
                     broker_info.consecutive_failures = 1
                     self._logger.error(
-                        f"与同步Broker建立初始连接时发生异常: {broker_addr}, error={e}"
+                        "与同步Broker建立初始连接时发生异常",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "broker_name": broker_name,
+                            "broker_state": broker_info.state.value,
+                            "pool_id": id(pool),
+                            "error_message": str(e),
+                            "timestamp": time.time(),
+                        },
                     )
 
                 self._logger.info(
-                    f"同步Broker添加完成: {broker_addr} ({broker_name}), "
-                    f"状态={broker_info.state.name}, "
-                    f"总Broker数={len(self._brokers)}, 总连接池数={len(self._broker_pools)}"
+                    "同步Broker添加完成",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "broker_state": broker_info.state.value,
+                        "total_brokers": len(self._brokers),
+                        "total_pools": len(self._broker_pools),
+                        "consecutive_failures": broker_info.consecutive_failures,
+                        "timestamp": time.time(),
+                    },
                 )
 
             except Exception as e:
                 # 添加失败时清理
-                self._logger.error(f"添加同步Broker失败: {broker_addr}, error={e}")
+                self._logger.error(
+                    "添加同步Broker失败",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_name,
+                        "error_message": str(e),
+                        "timestamp": time.time(),
+                    },
+                )
                 if broker_addr in self._brokers:
                     del self._brokers[broker_addr]
                 if broker_addr in self._broker_pools:
@@ -543,7 +867,13 @@ class BrokerManager:
         """
         with self._lock:
             if broker_addr not in self._brokers:
-                self._logger.warning(f"Broker不存在: {broker_addr}")
+                self._logger.warning(
+                    "Broker不存在，无法移除",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "timestamp": time.time(),
+                    },
+                )
                 return
 
             # 关闭连接池
@@ -552,9 +882,18 @@ class BrokerManager:
                 pool.close()
 
             # 移除Broker信息
+            broker_name = self._brokers[broker_addr].broker_name
             del self._brokers[broker_addr]
 
-            self._logger.info(f"已移除Broker: {broker_addr}")
+            self._logger.info(
+                "已移除Broker",
+                extra={
+                    "broker_addr": broker_addr,
+                    "broker_name": broker_name,
+                    "remaining_brokers": len(self._brokers),
+                    "timestamp": time.time(),
+                },
+            )
 
     def get_connection(self, broker_addr: str) -> Remote:
         """获取Broker连接
@@ -593,8 +932,14 @@ class BrokerManager:
             if broker_info.consecutive_failures >= self.max_consecutive_failures:
                 broker_info.state = BrokerState.FAILED
                 self._logger.error(
-                    f"Broker标记为故障: {broker_addr}, "
-                    f"连续失败次数={broker_info.consecutive_failures}"
+                    "Broker标记为故障",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_info.broker_name,
+                        "consecutive_failures": broker_info.consecutive_failures,
+                        "max_consecutive_failures": self.max_consecutive_failures,
+                        "timestamp": time.time(),
+                    },
                 )
 
             raise ConnectionError(f"无法获取连接: {broker_addr}, error={e}") from e
@@ -608,7 +953,15 @@ class BrokerManager:
         """
         with self._lock:
             if broker_addr not in self._broker_pools:
-                self._logger.warning(f"Broker不存在，直接关闭连接: {broker_addr}")
+                self._logger.warning(
+                    "Broker不存在，直接关闭连接",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "operation_type": "release_connection",
+                        "status": "warning",
+                        "timestamp": time.time(),
+                    },
+                )
                 connection.close()
                 return
 
@@ -621,9 +974,28 @@ class BrokerManager:
             broker_info.consecutive_failures = 0
             if broker_info.state == BrokerState.FAILED:
                 broker_info.state = BrokerState.RECOVERING
-                self._logger.info(f"Broker开始恢复: {broker_addr}")
+                self._logger.info(
+                    "Broker开始恢复",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_info.broker_name,
+                        "previous_state": BrokerState.FAILED.value,
+                        "new_state": broker_info.state.value,
+                        "connection_id": id(connection),
+                        "timestamp": time.time(),
+                    },
+                )
         except Exception as e:
-            self._logger.error(f"释放连接失败: {broker_addr}, error={e}")
+            self._logger.error(
+                "释放连接失败",
+                extra={
+                    "broker_addr": broker_addr,
+                    "broker_name": broker_info.broker_name,
+                    "connection_id": id(connection),
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
 
     def get_healthy_brokers(self) -> list[str]:
         """获取健康的Broker列表
@@ -631,7 +1003,7 @@ class BrokerManager:
         Returns:
             list[str]: 健康的Broker地址列表
         """
-        healthy_brokers = []
+        healthy_brokers: list[str] = []
         for broker_addr, broker_info in self._brokers.items():
             if broker_info.state == BrokerState.HEALTHY:
                 healthy_brokers.append(broker_addr)
@@ -643,7 +1015,7 @@ class BrokerManager:
         Returns:
             list[str]: 可用的Broker地址列表（健康和恢复中）
         """
-        available_brokers = []
+        available_brokers: list[str] = []
         for broker_addr, broker_info in self._brokers.items():
             if broker_info.state in [
                 BrokerState.HEALTHY,
@@ -697,16 +1069,39 @@ class BrokerManager:
 
         定期对所有Broker执行健康检查。
         """
-        self._logger.info("健康检查线程启动")
+        self._logger.info(
+            "健康检查线程启动",
+            extra={
+                "thread_name": threading.current_thread().name,
+                "thread_id": threading.current_thread().native_id,
+                "health_check_interval": self.health_check_interval,
+                "timestamp": time.time(),
+            },
+        )
 
         while not self._shutdown_event.wait(self.health_check_interval):
             try:
                 self._perform_health_checks()
             except Exception as e:
-                self._logger.error(f"健康检查任务异常: {e}")
+                self._logger.error(
+                    "健康检查任务异常",
+                    extra={
+                        "thread_name": threading.current_thread().name,
+                        "thread_id": threading.current_thread().native_id,
+                        "error_message": str(e),
+                        "timestamp": time.time(),
+                    },
+                )
                 time.sleep(5.0)  # 出错后短暂等待
 
-        self._logger.info("健康检查线程结束")
+        self._logger.info(
+            "健康检查线程结束",
+            extra={
+                "thread_name": threading.current_thread().name,
+                "thread_id": threading.current_thread().native_id,
+                "timestamp": time.time(),
+            },
+        )
 
     def _perform_health_checks(self) -> None:
         """执行健康检查
@@ -768,20 +1163,42 @@ class BrokerManager:
                 if broker_info.state != BrokerState.HEALTHY:
                     broker_info.state = BrokerState.HEALTHY
                     broker_info.consecutive_failures = 0
-                    self._logger.info(f"Broker恢复健康: {broker_addr}")
+                    self._logger.info(
+                        "Broker恢复健康",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "broker_name": broker_info.broker_name,
+                            "previous_state": broker_info.state.value,
+                            "response_time": response_time,
+                            "timestamp": time.time(),
+                        },
+                    )
             else:
                 broker_info.consecutive_failures += 1
                 if broker_info.consecutive_failures >= self.max_consecutive_failures:
                     if broker_info.state != BrokerState.FAILED:
                         broker_info.state = BrokerState.FAILED
                         self._logger.error(
-                            f"Broker健康检查失败，标记为故障: {broker_addr}"
+                            "Broker健康检查失败，标记为故障",
+                            extra={
+                                "broker_addr": broker_addr,
+                                "broker_name": broker_info.broker_name,
+                                "consecutive_failures": broker_info.consecutive_failures,
+                                "max_consecutive_failures": self.max_consecutive_failures,
+                                "timestamp": time.time(),
+                            },
                         )
                 else:
                     broker_info.state = BrokerState.UNHEALTHY
                     self._logger.warning(
-                        f"Broker健康检查失败: {broker_addr}, "
-                        f"连续失败次数={broker_info.consecutive_failures}"
+                        "Broker健康检查失败",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "broker_name": broker_info.broker_name,
+                            "consecutive_failures": broker_info.consecutive_failures,
+                            "max_consecutive_failures": self.max_consecutive_failures,
+                            "timestamp": time.time(),
+                        },
                     )
 
         except Exception as e:
@@ -790,11 +1207,29 @@ class BrokerManager:
             if broker_info.consecutive_failures >= self.max_consecutive_failures:
                 broker_info.state = BrokerState.FAILED
                 self._logger.error(
-                    f"Broker健康检查异常，标记为故障: {broker_addr}, error={e}"
+                    "Broker健康检查异常，标记为故障",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_info.broker_name,
+                        "consecutive_failures": broker_info.consecutive_failures,
+                        "max_consecutive_failures": self.max_consecutive_failures,
+                        "error_message": str(e),
+                        "timestamp": time.time(),
+                    },
                 )
             else:
                 broker_info.state = BrokerState.UNHEALTHY
-                self._logger.warning(f"Broker健康检查异常: {broker_addr}, error={e}")
+                self._logger.warning(
+                    "Broker健康检查异常",
+                    extra={
+                        "broker_addr": broker_addr,
+                        "broker_name": broker_info.broker_name,
+                        "consecutive_failures": broker_info.consecutive_failures,
+                        "max_consecutive_failures": self.max_consecutive_failures,
+                        "error_message": str(e),
+                        "timestamp": time.time(),
+                    },
+                )
 
     @property
     def is_running(self) -> bool:
@@ -849,7 +1284,14 @@ class BrokerManager:
             yield connection
         except ConnectionError as e:
             # 连接相关的异常，直接重新抛出
-            self._logger.error(f"连接获取失败: {broker_addr}, error={e}")
+            self._logger.error(
+                "连接获取失败",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
             raise
         finally:
             # 确保连接被释放
@@ -857,5 +1299,13 @@ class BrokerManager:
                 try:
                     self.release_connection(broker_addr, connection)
                 except Exception as e:
-                    self._logger.error(f"释放连接时发生异常: {broker_addr}, error={e}")
+                    self._logger.error(
+                        "释放连接时发生异常",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "connection_id": id(connection),
+                            "error_message": str(e),
+                            "timestamp": time.time(),
+                        },
+                    )
                     # 不抛出异常，避免掩盖原始异常
