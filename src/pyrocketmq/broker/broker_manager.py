@@ -2,7 +2,8 @@ import queue
 import threading
 import time
 from contextlib import contextmanager
-from typing import Dict, List
+from typing import Any
+
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
 from pyrocketmq.logging import get_logger
@@ -275,11 +276,11 @@ class BrokerConnectionPool:
         with self._lock:
             return len(self._connections)
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, str | int | bool]:
         """获取连接池统计信息
 
         Returns:
-            Dict: 包含各种统计指标的字典
+            dict: 包含各种统计指标的字典
         """
         return {
             "broker_addr": self.broker_addr,
@@ -595,11 +596,11 @@ class BrokerManager:
         except Exception as e:
             self._logger.error(f"释放连接失败: {broker_addr}, error={e}")
 
-    def get_healthy_brokers(self) -> List[str]:
+    def get_healthy_brokers(self) -> list[str]:
         """获取健康的Broker列表
 
         Returns:
-            List[str]: 健康的Broker地址列表
+            list[str]: 健康的Broker地址列表
         """
         healthy_brokers = []
         for broker_addr, broker_info in self._brokers.items():
@@ -607,11 +608,11 @@ class BrokerManager:
                 healthy_brokers.append(broker_addr)
         return healthy_brokers
 
-    def get_available_brokers(self) -> List[str]:
+    def get_available_brokers(self) -> list[str]:
         """获取可用的Broker列表
 
         Returns:
-            List[str]: 可用的Broker地址列表（健康和恢复中）
+            list[str]: 可用的Broker地址列表（健康和恢复中）
         """
         available_brokers = []
         for broker_addr, broker_info in self._brokers.items():
@@ -622,7 +623,7 @@ class BrokerManager:
                 available_brokers.append(broker_addr)
         return available_brokers
 
-    def get_broker_stats(self, broker_addr: str) -> Dict | None:
+    def get_broker_stats(self, broker_addr: str) -> dict[str, Any] | None:
         """获取Broker统计信息
 
         Args:
@@ -651,11 +652,11 @@ class BrokerManager:
             "connection_pool": pool_info,
         }
 
-    def get_all_brokers_stats(self) -> Dict[str, Dict]:
+    def get_all_brokers_stats(self) -> dict[str, dict[str, Any]]:
         """获取所有Broker的统计信息
 
         Returns:
-            Dict[str, Dict]: 所有Broker的统计信息，key为broker_addr
+            dict[str, dict]: 所有Broker的统计信息，key为broker_addr
         """
         stats = {}
         for broker_addr in self._brokers:

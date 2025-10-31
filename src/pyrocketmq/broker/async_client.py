@@ -3,9 +3,11 @@
 提供异步方式与 RocketMQ Broker 进行通信。
 """
 
+from asyncio import AbstractEventLoopPolicy
 import json
 import time
-from typing import Dict, List
+from typing import Any
+
 
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
@@ -85,7 +87,7 @@ class AsyncBrokerClient:
         self,
         response,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
     ) -> SendMessageResult:
         """处理发送消息的响应结果（参考Go语言实现）
 
@@ -166,7 +168,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """异步发送消息
@@ -251,7 +253,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """异步单向发送消息（不等待响应）
@@ -310,7 +312,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> SendMessageResult:
         """异步批量发送消息
@@ -401,7 +403,7 @@ class AsyncBrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """异步单向批量发送消息（不等待响应）
@@ -1216,7 +1218,7 @@ class AsyncBrokerClient:
             logger.error(f"Unexpected error during end_transaction: {e}")
             raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
-    async def get_consumers_by_group(self, consumer_group: str) -> list:
+    async def get_consumers_by_group(self, consumer_group: str) -> list[Any]:
         """异步获取指定消费者组的消费者列表
 
         Args:
@@ -1315,7 +1317,7 @@ class AsyncBrokerClient:
 
     async def lock_batch_mq(
         self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
-    ) -> list:
+    ) -> list[Any]:
         """异步批量锁定消息队列
 
         Args:

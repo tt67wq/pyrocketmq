@@ -1,7 +1,8 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, List
+from typing import Any
+
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
 from pyrocketmq.logging import get_logger
@@ -47,7 +48,7 @@ class AsyncBrokerConnectionPool:
 
         # 连接池状态
         self._connections: list[AsyncRemote] = []
-        self._available_connections: asyncio.Queue = asyncio.Queue()
+        self._available_connections: asyncio.Queue[AsyncRemote] = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -276,7 +277,7 @@ class AsyncBrokerConnectionPool:
         """获取总连接数"""
         return len(self._connections)
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict[str, str | int | bool]:
         """获取连接池统计信息
 
         Returns:
@@ -339,7 +340,7 @@ class AsyncBrokerManager:
         self._lock = asyncio.Lock()
 
         # 后台任务
-        self._health_check_task: asyncio.Task | None = None
+        self._health_check_task: asyncio.Task[None] | None = None
         self._shutdown_event = asyncio.Event()
 
         self._logger.info("Broker管理器初始化完成")
@@ -596,11 +597,11 @@ class AsyncBrokerManager:
         except Exception as e:
             self._logger.error(f"释放连接失败: {broker_addr}, error={e}")
 
-    def get_healthy_brokers(self) -> List[str]:
+    def get_healthy_brokers(self) -> list[str]:
         """获取健康的Broker列表
 
         Returns:
-            List[str]: 健康的Broker地址列表
+            list[str]: 健康的Broker地址列表
         """
         healthy_brokers = []
         for broker_addr, broker_info in self._brokers.items():
@@ -608,11 +609,11 @@ class AsyncBrokerManager:
                 healthy_brokers.append(broker_addr)
         return healthy_brokers
 
-    def get_available_brokers(self) -> List[str]:
+    def get_available_brokers(self) -> list[str]:
         """获取可用的Broker列表
 
         Returns:
-            List[str]: 可用的Broker地址列表（健康和恢复中）
+            list[str]: 可用的Broker地址列表（健康和恢复中）
         """
         available_brokers = []
         for broker_addr, broker_info in self._brokers.items():
@@ -623,7 +624,11 @@ class AsyncBrokerManager:
                 available_brokers.append(broker_addr)
         return available_brokers
 
-    def get_broker_stats(self, broker_addr: str) -> Dict | None:
+    def get_broker_stats(
+        self, broker_addr: str
+    ) -> (
+        dict[str, str | int | float | bool | dict[str, str | int | bool] | None] | None
+    ):
         """获取Broker统计信息
 
         Args:
@@ -652,11 +657,11 @@ class AsyncBrokerManager:
             "connection_pool": pool_info,
         }
 
-    def get_all_brokers_stats(self) -> Dict[str, Dict]:
+    def get_all_brokers_stats(self) -> dict[str, dict[str, Any]]:
         """获取所有Broker的统计信息
 
         Returns:
-            Dict[str, Dict]: 所有Broker的统计信息，key为broker_addr
+            dict[str, dict]: 所有Broker的统计信息，key为broker_addr
         """
         stats = {}
         for broker_addr in self._brokers:

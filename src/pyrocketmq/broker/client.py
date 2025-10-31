@@ -5,7 +5,7 @@ Broker 客户端实现
 
 import json
 import time
-from typing import Dict, List, Optional
+
 
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
@@ -404,7 +404,7 @@ class BrokerClient:
         producer_group: str,
         body: bytes,
         mq: MessageQueue,
-        properties: Dict[str, str] | None = None,
+        properties: dict[str, str] | None = None,
         **kwargs,
     ) -> None:
         """单向批量发送消息（不等待响应）
