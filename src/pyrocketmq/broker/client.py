@@ -5,6 +5,7 @@ Broker 客户端实现
 
 import json
 import time
+from typing import Any
 
 
 from pyrocketmq.model.message import MessageProperty

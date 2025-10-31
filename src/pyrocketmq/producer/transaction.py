@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from pyrocketmq.model import MessageQueue
 from pyrocketmq.model.enums import LocalTransactionState
 from pyrocketmq.model.result_data import SendMessageResult
 
@@ -51,7 +52,7 @@ class TransactionSendResult(SendMessageResult):
     transaction_timeout: bool = False  # 是否事务超时
     check_times: int = 0  # 回查次数
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """后处理，确保数据类型正确"""
         super().__post_init__()
         if self.transaction_id is None:
@@ -180,7 +181,14 @@ class SimpleTransactionListener(TransactionListener):
         self, message: Message, transaction_id: str, arg: ... = None
     ) -> LocalTransactionState:
         """执行本地事务"""
-        logger.info(f"执行本地事务，事务ID: {transaction_id}, 主题: {message.topic}")
+        logger.info(
+            "Executing local transaction",
+            extra={
+                "transaction_id": transaction_id,
+                "topic": message.topic,
+                "message_size": len(message.body),
+            },
+        )
 
         if self.always_commit:
             logger.info(f"事务 {transaction_id} 配置为总是提交")
@@ -226,50 +234,50 @@ class SimpleTransactionListener(TransactionListener):
         return state
 
 
-@dataclass
-class TransactionMetadata:
-    """事务元数据
+# @dataclass
+# class TransactionMetadata:
+#     """事务元数据
 
-    存储事务相关的元数据信息，用于跟踪事务状态。
-    """
+#     存储事务相关的元数据信息，用于跟踪事务状态。
+#     """
 
-    transaction_id: str
-    message: Message
-    local_transaction_state: LocalTransactionState | None = None
-    create_time: int = field(
-        default_factory=lambda: int(__import__("time").time() * 1000)
-    )
-    last_check_time: int = field(
-        default_factory=lambda: int(__import__("time").time() * 1000)
-    )
-    check_times: int = 0
-    timeout_ms: int = 60000  # 默认60秒超时
+#     transaction_id: str
+#     message: Message
+#     local_transaction_state: LocalTransactionState | None = None
+#     create_time: int = field(
+#         default_factory=lambda: int(__import__("time").time() * 1000)
+#     )
+#     last_check_time: int = field(
+#         default_factory=lambda: int(__import__("time").time() * 1000)
+#     )
+#     check_times: int = 0
+#     timeout_ms: int = 60000  # 默认60秒超时
 
-    @property
-    def is_timeout(self) -> bool:
-        """检查是否超时"""
-        current_time = int(__import__("time").time() * 1000)
-        return (current_time - self.create_time) > self.timeout_ms
+#     @property
+#     def is_timeout(self) -> bool:
+#         """检查是否超时"""
+#         current_time = int(__import__("time").time() * 1000)
+#         return (current_time - self.create_time) > self.timeout_ms
 
-    @property
-    def need_check(self) -> bool:
-        """检查是否需要回查"""
-        return (
-            self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
-            and not self.is_timeout
-        )
+#     @property
+#     def need_check(self) -> bool:
+#         """检查是否需要回查"""
+#         return (
+#             self.local_transaction_state == LocalTransactionState.UNKNOW_STATE
+#             and not self.is_timeout
+#         )
 
-    def update_check_time(self) -> None:
-        """更新回查时间"""
-        self.last_check_time = int(__import__("time").time() * 1000)
-        self.check_times += 1
+#     def update_check_time(self) -> None:
+#         """更新回查时间"""
+#         self.last_check_time = int(__import__("time").time() * 1000)
+#         self.check_times += 1
 
 
 # 便利函数
 def create_transaction_send_result(
     status: int,
     msg_id: str,
-    message_queue,
+    message_queue: MessageQueue,
     queue_offset: int,
     transaction_id: str,
     local_state: LocalTransactionState | None = None,

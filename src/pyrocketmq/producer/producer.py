@@ -146,7 +146,7 @@ class Producer:
         self._background_thread: threading.Thread | None = None
         self._shutdown_event: threading.Event = threading.Event()
 
-        logger.info("producer_initialized")
+        logger.info("Producer initialized")
 
     def start(self) -> None:
         """启动Producer
@@ -227,7 +227,7 @@ class Producer:
 
             # 2. 更新路由信息
             if message.topic not in self._topic_mapping.get_all_topics():
-                self.update_route_info(message.topic)
+                _ = self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
@@ -252,7 +252,12 @@ class Producer:
                     f"No available broker address for topic: {message.topic}"
                 )
             logger.debug(
-                f"Sending message to {target_broker_addr}, queue: {message_queue.full_name}"
+                "Sending message to broker",
+                extra={
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": message.topic,
+                },
             )
 
             # 4. 发送消息到Broker
@@ -269,7 +274,15 @@ class Producer:
 
         except Exception as e:
             self._total_failed += 1
-            logger.error(f"Failed to send message: {e}")
+            logger.error(
+                "Failed to send message",
+                extra={
+                    "topic": message.topic,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -321,8 +334,12 @@ class Producer:
                 MessageProperty.PRODUCER_GROUP, self._config.producer_group
             )
             logger.debug(
-                f"Encoded {len(messages)} messages into batch message, "
-                f"batch size: {len(batch_message.body)} bytes"
+                "Encoded messages into batch message",
+                extra={
+                    "message_count": len(messages),
+                    "batch_size_bytes": len(batch_message.body),
+                    "topic": batch_message.topic,
+                },
             )
 
             # 3. 更新路由信息
@@ -356,8 +373,13 @@ class Producer:
                     f"No available broker address for topic: {batch_message.topic}"
                 )
             logger.debug(
-                f"Sending batch message ({len(messages)} messages) to {target_broker_addr}, "
-                f"queue: {message_queue.full_name}"
+                "Sending batch message to broker",
+                extra={
+                    "message_count": len(messages),
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": batch_message.topic,
+                },
             )
 
             # 5. 发送批量消息到Broker
@@ -368,7 +390,13 @@ class Producer:
             if send_result.is_success:
                 self._total_sent += len(messages)
                 logger.info(
-                    f"Batch send success: {len(messages)} messages to topic {batch_message.topic}"
+                    "Batch send success",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": batch_message.topic,
+                        "queue_id": send_result.queue_id,
+                        "msg_id": send_result.msg_id,
+                    },
                 )
                 return send_result
             else:
@@ -377,7 +405,16 @@ class Producer:
 
         except Exception as e:
             self._total_failed += len(messages)
-            logger.error(f"Failed to send batch messages: {e}")
+            logger.error(
+                "Failed to send batch messages",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -410,7 +447,7 @@ class Producer:
 
             # 2. 更新路由信息
             if message.topic not in self._topic_mapping.get_all_topics():
-                self.update_route_info(message.topic)
+                _ = self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
@@ -438,7 +475,12 @@ class Producer:
                 )
 
             logger.debug(
-                f"Sending oneway message to {target_broker_addr}, queue: {message_queue.full_name}"
+                "Sending oneway message to broker",
+                extra={
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": message.topic,
+                },
             )
 
             # 5. 发送消息到Broker
@@ -450,7 +492,15 @@ class Producer:
             logger.debug("Oneway message sent successfully")
 
         except Exception as e:
-            logger.error(f"Failed to send oneway message: {e}")
+            logger.error(
+                "Failed to send oneway message",
+                extra={
+                    "topic": message.topic,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -503,13 +553,17 @@ class Producer:
                 MessageProperty.PRODUCER_GROUP, self._config.producer_group
             )
             logger.debug(
-                f"Encoded {len(messages)} messages into batch message, "
-                f"batch size: {len(batch_message.body)} bytes"
+                "Encoded messages into batch message for oneway batch",
+                extra={
+                    "message_count": len(messages),
+                    "batch_size_bytes": len(batch_message.body),
+                    "topic": batch_message.topic,
+                },
             )
 
             # 3. 更新路由信息
             if batch_message.topic not in self._topic_mapping.get_all_topics():
-                self.update_route_info(batch_message.topic)
+                _ = self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
             routing_result = self._message_router.route_message(
@@ -541,8 +595,13 @@ class Producer:
                 )
 
             logger.debug(
-                f"Sending oneway batch message ({len(messages)} messages) to {target_broker_addr}, "
-                f"queue: {message_queue.full_name}"
+                "Sending oneway batch message to broker",
+                extra={
+                    "message_count": len(messages),
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": batch_message.topic,
+                },
             )
 
             # 6. 单向发送批量消息到Broker
@@ -552,11 +611,24 @@ class Producer:
 
             # 更新统计（单向发送不计入成功/失败）
             logger.debug(
-                f"Oneway batch message sent successfully: {len(messages)} messages"
+                "Oneway batch message sent successfully",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                },
             )
 
         except Exception as e:
-            logger.error(f"Failed to send oneway batch messages: {e}")
+            logger.error(
+                "Failed to send oneway batch messages",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -572,7 +644,7 @@ class Producer:
         Returns:
             dict[str, str]: 地址字典 {addr: host:port}
         """
-        addrs = {}
+        addrs: dict[str, str] = {}
         for addr in namesrv_addr.split(";"):
             addr = addr.strip()
             if addr:
@@ -594,10 +666,23 @@ class Producer:
 
                 remote.connect()
                 self._nameserver_connections[addr] = remote
-                logger.info(f"Connected to NameServer: {addr}")
+                logger.info(
+                    "Connected to NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                    },
+                )
 
             except Exception as e:
-                logger.error(f"Failed to connect to NameServer {addr}: {e}")
+                logger.error(
+                    "Failed to connect to NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         if not self._nameserver_connections:
             raise ProducerStartError("No NameServer connections available")
@@ -631,7 +716,12 @@ class Producer:
                     current_time - last_route_refresh_time
                     >= self._config.update_topic_route_info_interval / 1000.0
                 ):
-                    logger.info(f"Refreshing routes (loop #{loop_count})")
+                    logger.info(
+                        "Refreshing routes",
+                        extra={
+                            "loop_count": loop_count,
+                        },
+                    )
                     self._refresh_all_routes()
                     _ = self._topic_mapping.clear_expired_routes()
                     last_route_refresh_time = current_time
@@ -642,7 +732,13 @@ class Producer:
                     >= self._config.heartbeat_broker_interval / 1000.0
                 ):
                     logger.info(
-                        f"Sending heartbeat (loop #{loop_count}, {current_time - last_heartbeat_time:.1f}s since last heartbeat)"
+                        "Sending heartbeat",
+                        extra={
+                            "loop_count": loop_count,
+                            "time_since_last_heartbeat": round(
+                                current_time - last_heartbeat_time, 1
+                            ),
+                        },
                     )
                     self._send_heartbeat_to_all_broker()
                     last_heartbeat_time = current_time
@@ -651,11 +747,23 @@ class Producer:
                 if loop_count % 10 == 0:
                     topics = list(self._topic_mapping.get_all_topics())
                     logger.debug(
-                        f"Background task active (loop #{loop_count}, cached topics: {len(topics)})"
+                        "Background task active",
+                        extra={
+                            "loop_count": loop_count,
+                            "cached_topics_count": len(topics),
+                        },
                     )
 
             except Exception as e:
-                logger.error(f"Background task error: {e}")
+                logger.error(
+                    "Background task error",
+                    extra={
+                        "loop_count": loop_count,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         logger.info("Background task loop stopped")
 
@@ -666,9 +774,15 @@ class Producer:
         for topic in topics:
             try:
                 if self._topic_mapping.get_route_info(topic) is None:
-                    self.update_route_info(topic)
+                    _ = self.update_route_info(topic)
             except Exception as e:
-                logger.debug(f"Failed to refresh route for {topic}: {e}")
+                logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
 
     def _send_message_to_broker(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
@@ -760,7 +874,7 @@ class Producer:
                 self._config.producer_group,
                 batch_message.body,
                 message_queue,
-                properties=batch_message.properties,
+                batch_message.properties,
                 flag=batch_message.flag,
             )
 
@@ -831,19 +945,42 @@ class Producer:
                     with self._broker_manager.connection(broker_addr) as broker_remote:
                         BrokerClient(broker_remote).send_heartbeat(heartbeat_data)
                         success_count += 1
-                        logger.debug(f"Heartbeat sent to broker: {broker_addr}")
+                        logger.debug(
+                            "Heartbeat sent to broker",
+                            extra={
+                                "broker_address": broker_addr,
+                            },
+                        )
 
                 except Exception as e:
                     failed_count += 1
-                    logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
+                    logger.debug(
+                        "Failed to send heartbeat to broker",
+                        extra={
+                            "broker_address": broker_addr,
+                            "error": str(e),
+                        },
+                    )
 
             if success_count > 0 or failed_count > 0:
                 logger.info(
-                    f"Heartbeat sent: {success_count} succeeded, {failed_count} failed"
+                    "Heartbeat sent",
+                    extra={
+                        "success_count": success_count,
+                        "failed_count": failed_count,
+                        "total_brokers": success_count + failed_count,
+                    },
                 )
 
         except Exception as e:
-            logger.error(f"Error sending heartbeat to brokers: {e}")
+            logger.error(
+                "Error sending heartbeat to brokers",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
     def _close_nameserver_connections(self) -> None:
         """关闭所有NameServer连接"""
@@ -862,25 +999,45 @@ class Producer:
                 if hasattr(remote, "close"):
                     remote.close()
                     closed_count += 1
-                    logger.debug(f"Closed NameServer connection: {addr}")
+                    logger.debug(
+                        "Closed NameServer connection",
+                        extra={
+                            "nameserver_address": addr,
+                        },
+                    )
                 else:
                     logger.warning(
-                        f"Remote object for {addr} does not have close() method"
+                        "Remote object does not have close() method",
+                        extra={
+                            "nameserver_address": addr,
+                        },
                     )
                     failed_count += 1
             except Exception as e:
-                logger.error(f"Failed to close NameServer connection {addr}: {e}")
+                logger.error(
+                    "Failed to close NameServer connection",
+                    extra={
+                        "nameserver_address": addr,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
                 failed_count += 1
 
         # 清空连接字典
         self._nameserver_connections.clear()
 
         logger.info(
-            f"NameServer connections closed: {closed_count} succeeded, "
-            f"{failed_count} failed"
+            "NameServer connections closed",
+            extra={
+                "closed_count": closed_count,
+                "failed_count": failed_count,
+                "total_connections": closed_count + failed_count,
+            },
         )
 
-    def get_stats(self):
+    def get_stats(self) -> dict[str, str | int | bool | None]:
         """获取Producer统计信息
 
         Returns:
@@ -914,7 +1071,12 @@ class Producer:
         Returns:
             bool: 更新是否成功
         """
-        logger.info(f"Updating route info for topic: {topic}")
+        logger.info(
+            "Updating route info for topic",
+            extra={
+                "topic": topic,
+            },
+        )
 
         for addr, remote in self._nameserver_connections.items():
             try:
@@ -929,7 +1091,14 @@ class Producer:
                 # 维护broker连接
                 for broker_data in topic_route_data.broker_data_list:
                     for idx, broker_addr in broker_data.broker_addresses.items():
-                        logger.info(f"Adding broker {idx} {broker_addr}")
+                        logger.info(
+                            "Adding broker",
+                            extra={
+                                "broker_id": idx,
+                                "broker_address": broker_addr,
+                                "broker_name": broker_data.broker_name,
+                            },
+                        )
                         self._broker_manager.add_broker(
                             broker_addr,
                             broker_data.broker_name,
@@ -939,13 +1108,35 @@ class Producer:
                 success = self._topic_mapping.update_route_info(topic, topic_route_data)
 
                 if success:
-                    logger.info(f"Route info updated for topic {topic} from {addr}")
+                    logger.info(
+                        "Route info updated for topic",
+                        extra={
+                            "topic": topic,
+                            "nameserver_address": addr,
+                            "brokers_count": len(topic_route_data.broker_data_list),
+                        },
+                    )
                     return True
                 else:
-                    logger.warning(f"Failed to update route cache for topic {topic}")
+                    logger.warning(
+                        "Failed to update route cache for topic",
+                        extra={
+                            "topic": topic,
+                            "nameserver_address": addr,
+                        },
+                    )
 
             except Exception as e:
-                logger.error(f"Failed to get route info from {addr}: {e}")
+                logger.error(
+                    "Failed to get route info from NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                        "topic": topic,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_mapping.force_refresh(topic)

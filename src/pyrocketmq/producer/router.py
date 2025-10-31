@@ -82,7 +82,7 @@ class BrokerHealthInfo:
     consecutive_failures: int = 0
     consecutive_successes: int = 0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         pass
 
     def update_success(self, latency_ms: float) -> None:
@@ -96,7 +96,7 @@ class BrokerHealthInfo:
         # 更新延迟统计
         self.recent_latencies.append(latency_ms)
         if len(self.recent_latencies) > 100:  # 只保留最近100次
-            self.recent_latencies.pop(0)
+            _ = self.recent_latencies.pop(0)
 
         self.avg_latency = sum(self.recent_latencies) / len(self.recent_latencies)
         self.max_latency = max(self.max_latency, latency_ms)
@@ -164,7 +164,7 @@ class RoutingResult:
     retry_count: int = 0
     routing_strategy: RoutingStrategy | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.success and (not self.message_queue or not self.broker_data):
             raise ValueError(
                 "Successful routing must have message_queue and broker_data"
@@ -216,7 +216,13 @@ class MessageRouter:
         }
         self._stats_lock: threading.RLock = threading.RLock()
 
-        logger.info(f"MessageRouter initialized with strategy={default_strategy.value}")
+        logger.info(
+            "MessageRouter initialized",
+            extra={
+                "strategy": default_strategy.value,
+                "health_check_interval": health_check_interval,
+            },
+        )
 
     def route_message(
         self,
@@ -362,7 +368,7 @@ class MessageRouter:
     def report_routing_failure(
         self,
         broker_name: str,
-        error: Exception,
+        _error: Exception,
         broker_data: BrokerData | None = None,
     ) -> None:
         """
@@ -472,7 +478,7 @@ class MessageRouter:
         Returns:
             list[str]: 可用的Broker名称列表
         """
-        available_brokers = []
+        available_brokers: list[str] = []
         with self._health_lock:
             for broker_name, health_info in self.broker_health.items():
                 if health_info.is_available():

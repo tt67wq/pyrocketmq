@@ -36,9 +36,11 @@ logger.info(
 为这个模块下的class成员和函数补全类型标注，参考：
 ```python
 class A:
+    a: int
+    b: str
     def __init__(self, a: int, b: str) -> None:
-        self.a: int = a
-        self.b: str = b
+        self.a = a
+        self.b = b
 
     def method(self, x: float, y: bool) -> None:
         pass

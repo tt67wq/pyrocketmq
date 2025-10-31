@@ -98,7 +98,7 @@ class TransactionProducer(Producer):
 
     def __init__(
         self,
-        config=None,
+        config: ProducerConfig | None = None,
         transaction_listener: TransactionListener | None = None,
     ):
         """初始化TransactionProducer
@@ -198,7 +198,16 @@ class TransactionProducer(Producer):
             )
 
         except Exception as e:
-            self._logger.error(f"发送事务消息失败: {e}")
+            self._logger.error(
+                "Failed to send transaction message",
+                extra={
+                    "topic": message.topic,
+                    "transaction_id": transaction_id,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
             raise MessageSendError(
                 message=f"发送事务消息失败: {e}",
                 topic=message.topic,
@@ -670,7 +679,7 @@ class TransactionProducer(Producer):
         self._logger.warning(f"未找到broker {broker_name} 的地址信息")
         return None
 
-    def get_stats(self) -> dict[str, int]:
+    def get_stats(self) -> dict[str, str | int | float]:
         """获取TransactionProducer统计信息
 
         Returns:

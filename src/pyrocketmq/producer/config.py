@@ -275,7 +275,7 @@ class ProducerConfig:
     仅在开发和调试时使用，生产环境建议关闭。
     """
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """后初始化处理
 
         在dataclass创建实例后自动调用，用于完成以下初始化工作：
@@ -344,7 +344,7 @@ class ProducerConfig:
         except Exception:
             return "localhost", 9876
 
-    def _validate_config(self):
+    def _validate_config(self) -> None:
         """验证所有配置参数的有效性
 
         检查各个配置参数是否符合RocketMQ的要求和业务逻辑，

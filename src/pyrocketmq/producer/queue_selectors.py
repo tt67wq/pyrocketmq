@@ -65,18 +65,23 @@ class RoundRobinSelector(QueueSelector):
             self._counters[topic] = counter + 1
 
             logger.debug(
-                f"RoundRobin selected queue for topic {topic}: {selected_queue.full_name} "
-                f"(broker: {selected_broker.broker_name}, index: {queue_index})"
+                "RoundRobin selected queue for topic",
+                extra={
+                    "topic": topic,
+                    "queue": selected_queue.full_name,
+                    "broker_name": selected_broker.broker_name,
+                    "queue_index": queue_index,
+                },
             )
 
             return selected_queue, selected_broker
 
-    def reset_counter(self, topic: str):
+    def reset_counter(self, topic: str) -> None:
         with self._lock:
             if topic in self._counters:
                 del self._counters[topic]
 
-    def reset_all_counters(self):
+    def reset_all_counters(self) -> None:
         with self._lock:
             self._counters.clear()
 
@@ -96,8 +101,12 @@ class RandomSelector(QueueSelector):
 
         selected_queue, selected_broker = random.choice(available_queues)
         logger.debug(
-            f"Random selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name})"
+            "Random selected queue for topic",
+            extra={
+                "topic": topic,
+                "queue": selected_queue.full_name,
+                "broker_name": selected_broker.broker_name,
+            },
         )
         return selected_queue, selected_broker
 
@@ -129,8 +138,14 @@ class MessageHashSelector(QueueSelector):
         selected_queue, selected_broker = available_queues[queue_index]
 
         logger.debug(
-            f"MessageHash selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name}, sharding_key: {sharding_key}, hash: {hash_value})"
+            "MessageHash selected queue for topic",
+            extra={
+                "topic": topic,
+                "queue": selected_queue.full_name,
+                "broker_name": selected_broker.broker_name,
+                "sharding_key": sharding_key,
+                "hash_value": hash_value,
+            },
         )
 
         return selected_queue, selected_broker
@@ -179,18 +194,23 @@ class AsyncRoundRobinSelector(AsyncQueueSelector):
             self._counters[topic] = counter + 1
 
             logger.debug(
-                f"AsyncRoundRobin selected queue for topic {topic}: {selected_queue.full_name} "
-                f"(broker: {selected_broker.broker_name}, index: {queue_index})"
+                "AsyncRoundRobin selected queue for topic",
+                extra={
+                    "topic": topic,
+                    "queue": selected_queue.full_name,
+                    "broker_name": selected_broker.broker_name,
+                    "queue_index": queue_index,
+                },
             )
 
             return selected_queue, selected_broker
 
-    async def reset_counter(self, topic: str):
+    async def reset_counter(self, topic: str) -> None:
         async with self._lock:
             if topic in self._counters:
                 del self._counters[topic]
 
-    async def reset_all_counters(self):
+    async def reset_all_counters(self) -> None:
         async with self._lock:
             self._counters.clear()
 
@@ -214,8 +234,12 @@ class AsyncRandomSelector(AsyncQueueSelector):
         )
 
         logger.debug(
-            f"AsyncRandom selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name})"
+            "AsyncRandom selected queue for topic",
+            extra={
+                "topic": topic,
+                "queue": selected_queue.full_name,
+                "broker_name": selected_broker.broker_name,
+            },
         )
 
         return selected_queue, selected_broker
@@ -254,8 +278,14 @@ class AsyncMessageHashSelector(AsyncQueueSelector):
         selected_queue, selected_broker = available_queues[queue_index]
 
         logger.debug(
-            f"AsyncMessageHash selected queue for topic {topic}: {selected_queue.full_name} "
-            f"(broker: {selected_broker.broker_name}, sharding_key: {sharding_key}, hash: {hash_value})"
+            "AsyncMessageHash selected queue for topic",
+            extra={
+                "topic": topic,
+                "queue": selected_queue.full_name,
+                "broker_name": selected_broker.broker_name,
+                "sharding_key": sharding_key,
+                "hash_value": hash_value,
+            },
         )
 
         return selected_queue, selected_broker

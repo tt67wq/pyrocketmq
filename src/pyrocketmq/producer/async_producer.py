@@ -146,8 +146,11 @@ class AsyncProducer:
         self._shutdown_event: asyncio.Event = asyncio.Event()
 
         logger.info(
-            f"AsyncProducer initialized with config: {self._config.producer_group}, "
-            f"NameServer addrs: {self._nameserver_addrs}"
+            "AsyncProducer initialized",
+            extra={
+                "producer_group": self._config.producer_group,
+                "nameserver_addrs": list(self._nameserver_addrs.keys()),
+            },
         )
 
     async def start(self) -> None:
@@ -179,12 +182,22 @@ class AsyncProducer:
             self._running = True
 
             logger.info(
-                f"AsyncProducer started successfully. Group: {self._config.producer_group}, "
-                f"Client ID: {self._config.client_id}"
+                "AsyncProducer started successfully",
+                extra={
+                    "producer_group": self._config.producer_group,
+                    "client_id": self._config.client_id,
+                },
             )
 
         except Exception as e:
-            logger.error(f"Failed to start async producer: {e}")
+            logger.error(
+                "Failed to start async producer",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
             raise ProducerStartError(f"AsyncProducer start failed: {e}") from e
 
     async def shutdown(self) -> None:
@@ -213,12 +226,22 @@ class AsyncProducer:
             await self._close_nameserver_connections()
 
             logger.info(
-                f"AsyncProducer shutdown completed. Total sent: {self._total_sent}, "
-                f"Total failed: {self._total_failed}"
+                "AsyncProducer shutdown completed",
+                extra={
+                    "total_sent": self._total_sent,
+                    "total_failed": self._total_failed,
+                },
             )
 
         except Exception as e:
-            logger.error(f"Error during async producer shutdown: {e}")
+            logger.error(
+                "Error during async producer shutdown",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
     async def send(self, message: Message) -> SendMessageResult:
         """异步发送消息
@@ -246,7 +269,7 @@ class AsyncProducer:
 
             # 2. 更新路由信息
             if message.topic not in self._topic_mapping.get_all_topics():
-                await self.update_route_info(message.topic)
+                _ = await self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
@@ -271,7 +294,12 @@ class AsyncProducer:
                     f"No available broker address for topic: {message.topic}"
                 )
             logger.debug(
-                f"Sending message async to {target_broker_addr}, queue: {message_queue.full_name}"
+                "Sending message async to broker",
+                extra={
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": message.topic,
+                },
             )
 
             # 4. 发送消息到Broker
@@ -288,7 +316,15 @@ class AsyncProducer:
 
         except Exception as e:
             self._total_failed += 1
-            logger.error(f"Failed to send async message: {e}")
+            logger.error(
+                "Failed to send async message",
+                extra={
+                    "topic": message.topic,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -340,8 +376,12 @@ class AsyncProducer:
                 MessageProperty.PRODUCER_GROUP, self._config.producer_group
             )
             logger.debug(
-                f"Encoded {len(messages)} messages into async batch message, "
-                f"batch size: {len(batch_message.body)} bytes"
+                "Encoded messages into async batch message",
+                extra={
+                    "message_count": len(messages),
+                    "batch_size_bytes": len(batch_message.body),
+                    "topic": batch_message.topic,
+                },
             )
 
             # 3. 更新路由信息
@@ -375,8 +415,13 @@ class AsyncProducer:
                     f"No available broker address for topic: {batch_message.topic}"
                 )
             logger.debug(
-                f"Sending async batch message ({len(messages)} messages) to {target_broker_addr}, "
-                f"queue: {message_queue.full_name}"
+                "Sending async batch message to broker",
+                extra={
+                    "message_count": len(messages),
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": batch_message.topic,
+                },
             )
 
             # 5. 发送批量消息到Broker
@@ -387,7 +432,13 @@ class AsyncProducer:
             if send_result.is_success:
                 self._total_sent += len(messages)
                 logger.info(
-                    f"Async batch send success: {len(messages)} messages to topic {batch_message.topic}"
+                    "Async batch send success",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": batch_message.topic,
+                        "queue_id": send_result.queue_id,
+                        "msg_id": send_result.msg_id,
+                    },
                 )
                 return send_result
             else:
@@ -396,7 +447,16 @@ class AsyncProducer:
 
         except Exception as e:
             self._total_failed += len(messages)
-            logger.error(f"Failed to send async batch messages: {e}")
+            logger.error(
+                "Failed to send async batch messages",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -429,7 +489,7 @@ class AsyncProducer:
 
             # 2. 更新路由信息
             if message.topic not in self._topic_mapping.get_all_topics():
-                await self.update_route_info(message.topic)
+                _ = await self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
@@ -457,7 +517,12 @@ class AsyncProducer:
                 )
 
             logger.debug(
-                f"Sending async oneway message to {target_broker_addr}, queue: {message_queue.full_name}"
+                "Sending async oneway message to broker",
+                extra={
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": message.topic,
+                },
             )
 
             # 5. 发送消息到Broker
@@ -469,7 +534,15 @@ class AsyncProducer:
             logger.debug("Async oneway message sent successfully")
 
         except Exception as e:
-            logger.error(f"Failed to send async oneway message: {e}")
+            logger.error(
+                "Failed to send async oneway message",
+                extra={
+                    "topic": message.topic,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -522,13 +595,17 @@ class AsyncProducer:
                 MessageProperty.PRODUCER_GROUP, self._config.producer_group
             )
             logger.debug(
-                f"Encoded {len(messages)} messages into batch message, "
-                f"batch size: {len(batch_message.body)} bytes"
+                "Encoded messages into batch message for async oneway",
+                extra={
+                    "message_count": len(messages),
+                    "batch_size_bytes": len(batch_message.body),
+                    "topic": batch_message.topic,
+                },
             )
 
             # 3. 更新路由信息
             if batch_message.topic not in self._topic_mapping.get_all_topics():
-                await self.update_route_info(batch_message.topic)
+                _ = await self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
             routing_result = self._message_router.route_message(
@@ -560,8 +637,13 @@ class AsyncProducer:
                 )
 
             logger.debug(
-                f"Sending async oneway batch message ({len(messages)} messages) to {target_broker_addr}, "
-                f"queue: {message_queue.full_name}"
+                "Sending async oneway batch message to broker",
+                extra={
+                    "message_count": len(messages),
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": batch_message.topic,
+                },
             )
 
             # 6. 异步单向发送批量消息到Broker
@@ -571,11 +653,24 @@ class AsyncProducer:
 
             # 更新统计（单向发送不计入成功/失败）
             logger.debug(
-                f"Async oneway batch message sent successfully: {len(messages)} messages"
+                "Async oneway batch message sent successfully",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                },
             )
 
         except Exception as e:
-            logger.error(f"Failed to send async oneway batch messages: {e}")
+            logger.error(
+                "Failed to send async oneway batch messages",
+                extra={
+                    "message_count": len(messages),
+                    "topic": messages[0].topic if messages else "unknown",
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
             if isinstance(e, ProducerError):
                 raise
@@ -593,7 +688,7 @@ class AsyncProducer:
         Returns:
             dict[str, str]: 地址字典 {addr: host:port}
         """
-        addrs = {}
+        addrs: dict[str, str] = {}
         for addr in namesrv_addr.split(";"):
             addr = addr.strip()
             if addr:
@@ -606,6 +701,8 @@ class AsyncProducer:
 
         for addr in self._nameserver_addrs:
             try:
+                host: str
+                port: str
                 host, port = addr.split(":")
                 transport_config = TransportConfig(host=host, port=int(port))
                 remote_config = RemoteConfig().with_rpc_timeout(
@@ -615,10 +712,23 @@ class AsyncProducer:
 
                 await remote.connect()
                 self._nameserver_connections[addr] = remote
-                logger.info(f"Connected to NameServer: {addr}")
+                logger.info(
+                    "Connected to NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                    },
+                )
 
             except Exception as e:
-                logger.error(f"Failed to connect to NameServer {addr}: {e}")
+                logger.error(
+                    "Failed to connect to NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         if not self._nameserver_connections:
             raise ProducerStartError("No NameServer connections available")
@@ -636,20 +746,20 @@ class AsyncProducer:
         logger.info("Async background task loop started")
 
         # 记录各任务的执行时间
-        last_route_refresh_time = 0
-        last_heartbeat_time = 0
-        loop_count = 0
+        last_route_refresh_time: float = 0
+        last_heartbeat_time: float = 0
+        loop_count: int = 0
 
         while not self._shutdown_event.is_set():
             try:
                 # 使用asyncio.wait_for来实现超时等待
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=1.0)
+                _ = await asyncio.wait_for(self._shutdown_event.wait(), timeout=1.0)
                 break  # 如果收到停止信号就退出
             except asyncio.TimeoutError:
                 # 超时表示继续执行后台任务
                 pass
 
-            current_time = time.time()
+            current_time: float = time.time()
             loop_count += 1
 
             try:
@@ -658,7 +768,12 @@ class AsyncProducer:
                     current_time - last_route_refresh_time
                     >= self._config.update_topic_route_info_interval / 1000.0
                 ):
-                    logger.info(f"Async refreshing routes (loop #{loop_count})")
+                    logger.info(
+                        "Async refreshing routes",
+                        extra={
+                            "loop_count": loop_count,
+                        },
+                    )
                     await self._refresh_all_routes()
                     _ = self._topic_mapping.clear_expired_routes()
                     last_route_refresh_time = current_time
@@ -669,20 +784,38 @@ class AsyncProducer:
                     >= self._config.heartbeat_broker_interval / 1000.0
                 ):
                     logger.info(
-                        f"Async sending heartbeat (loop #{loop_count}, {current_time - last_heartbeat_time:.1f}s since last heartbeat)"
+                        "Async sending heartbeat",
+                        extra={
+                            "loop_count": loop_count,
+                            "time_since_last_heartbeat": round(
+                                current_time - last_heartbeat_time, 1
+                            ),
+                        },
                     )
                     await self._send_heartbeat_to_all_broker_async()
                     last_heartbeat_time = current_time
 
                 # 每10次循环记录一次状态
                 if loop_count % 10 == 0:
-                    topics = list(self._topic_mapping.get_all_topics())
+                    topics: list[str] = list(self._topic_mapping.get_all_topics())
                     logger.debug(
-                        f"Async background task active (loop #{loop_count}, cached topics: {len(topics)})"
+                        "Async background task active",
+                        extra={
+                            "loop_count": loop_count,
+                            "cached_topics_count": len(topics),
+                        },
                     )
 
             except Exception as e:
-                logger.error(f"Async background task error: {e}")
+                logger.error(
+                    "Async background task error",
+                    extra={
+                        "loop_count": loop_count,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         logger.info("Async background task loop stopped")
 
@@ -693,9 +826,15 @@ class AsyncProducer:
         for topic in topics:
             try:
                 if self._topic_mapping.get_route_info(topic) is None:
-                    await self.update_route_info(topic)
+                    _ = await self.update_route_info(topic)
             except Exception as e:
-                logger.debug(f"Failed to refresh route for {topic}: {e}")
+                logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
 
     async def _send_message_to_broker_async(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
@@ -811,7 +950,7 @@ class AsyncProducer:
                 await asyncio.wait_for(self._background_task, timeout=5.0)
             except asyncio.TimeoutError:
                 logger.warning("Async background task did not stop gracefully")
-                self._background_task.cancel()
+                _ = self._background_task.cancel()
                 try:
                     await self._background_task
                 except asyncio.CancelledError:
@@ -826,7 +965,7 @@ class AsyncProducer:
         try:
             # 获取所有已知的Broker地址
             broker_addrs: set[str] = set()
-            all_topics = self._topic_mapping.get_all_topics()
+            all_topics: set[str] = self._topic_mapping.get_all_topics()
 
             for topic in all_topics:
                 route_info = self._topic_mapping.get_route_info(topic)
@@ -855,8 +994,8 @@ class AsyncProducer:
             )
 
             # 统计结果
-            success_count = 0
-            failed_count = 0
+            success_count: int = 0
+            failed_count: int = 0
 
             # 向每个Broker发送心跳
             for broker_addr in broker_addrs:
@@ -869,11 +1008,22 @@ class AsyncProducer:
                             heartbeat_data
                         )
                         success_count += 1
-                        logger.debug(f"Heartbeat sent to broker: {broker_addr}")
+                        logger.debug(
+                            "Heartbeat sent to broker",
+                            extra={
+                                "broker_address": broker_addr,
+                            },
+                        )
 
                 except Exception as e:
                     failed_count += 1
-                    logger.debug(f"Failed to send heartbeat to {broker_addr}: {e}")
+                    logger.debug(
+                        "Failed to send heartbeat to broker",
+                        extra={
+                            "broker_address": broker_addr,
+                            "error": str(e),
+                        },
+                    )
 
             if success_count > 0 or failed_count > 0:
                 logger.info(
@@ -881,7 +1031,14 @@ class AsyncProducer:
                 )
 
         except Exception as e:
-            logger.error(f"Error sending async heartbeat to brokers: {e}")
+            logger.error(
+                "Error sending async heartbeat to brokers",
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
 
     async def _close_nameserver_connections(self) -> None:
         """异步关闭所有NameServer连接"""
@@ -891,8 +1048,8 @@ class AsyncProducer:
             logger.debug("No NameServer connections to close")
             return
 
-        closed_count = 0
-        failed_count = 0
+        closed_count: int = 0
+        failed_count: int = 0
 
         # 关闭所有连接
         for addr, remote in list(self._nameserver_connections.items()):
@@ -900,31 +1057,48 @@ class AsyncProducer:
                 if hasattr(remote, "close"):
                     await remote.close()
                     closed_count += 1
-                    logger.debug(f"Closed NameServer connection: {addr}")
+                    logger.debug(
+                        "Closed NameServer connection",
+                        extra={
+                            "nameserver_address": addr,
+                        },
+                    )
                 else:
                     logger.warning(
                         f"AsyncRemote object for {addr} does not have close() method"
                     )
                     failed_count += 1
             except Exception as e:
-                logger.error(f"Failed to close NameServer connection {addr}: {e}")
+                logger.error(
+                    "Failed to close NameServer connection",
+                    extra={
+                        "nameserver_address": addr,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
                 failed_count += 1
 
         # 清空连接字典
         self._nameserver_connections.clear()
 
         logger.info(
-            f"NameServer connections closed: {closed_count} succeeded, "
-            f"{failed_count} failed"
+            "NameServer connections closed",
+            extra={
+                "closed_count": closed_count,
+                "failed_count": failed_count,
+                "total_connections": closed_count + failed_count,
+            },
         )
 
-    def get_stats(self):
+    def get_stats(self) -> dict[str, str | int | bool | None]:
         """获取Producer统计信息
 
         Returns:
             dict: 统计信息
         """
-        success_rate = (
+        success_rate: float = (
             self._total_sent / (self._total_sent + self._total_failed)
             if (self._total_sent + self._total_failed) > 0
             else 0.0
@@ -952,7 +1126,12 @@ class AsyncProducer:
         Returns:
             bool: 更新是否成功
         """
-        logger.info(f"Updating async route info for topic: {topic}")
+        logger.info(
+            "Updating async route info for topic",
+            extra={
+                "topic": topic,
+            },
+        )
 
         for addr, remote in self._nameserver_connections.items():
             try:
@@ -967,23 +1146,54 @@ class AsyncProducer:
                 # 维护broker连接
                 for broker_data in topic_route_data.broker_data_list:
                     for idx, broker_addr in broker_data.broker_addresses.items():
-                        logger.info(f"Adding broker {idx} {broker_addr}")
+                        logger.info(
+                            "Adding broker",
+                            extra={
+                                "broker_id": idx,
+                                "broker_address": broker_addr,
+                                "broker_name": broker_data.broker_name,
+                            },
+                        )
                         await self._broker_manager.add_broker(
                             broker_addr,
                             broker_data.broker_name,
                         )
 
                 # 更新本地缓存
-                success = self._topic_mapping.update_route_info(topic, topic_route_data)
+                success: bool = self._topic_mapping.update_route_info(
+                    topic, topic_route_data
+                )
 
                 if success:
-                    logger.info(f"Route info updated for topic {topic} from {addr}")
+                    logger.info(
+                        "Route info updated for topic",
+                        extra={
+                            "topic": topic,
+                            "nameserver_address": addr,
+                            "brokers_count": len(topic_route_data.broker_data_list),
+                        },
+                    )
                     return True
                 else:
-                    logger.warning(f"Failed to update route cache for topic {topic}")
+                    logger.warning(
+                        "Failed to update route cache for topic",
+                        extra={
+                            "topic": topic,
+                            "nameserver_address": addr,
+                        },
+                    )
 
             except Exception as e:
-                logger.error(f"Failed to get async route info from {addr}: {e}")
+                logger.error(
+                    "Failed to get async route info from NameServer",
+                    extra={
+                        "nameserver_address": addr,
+                        "topic": topic,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
         # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_mapping.force_refresh(topic)

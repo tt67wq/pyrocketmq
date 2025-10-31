@@ -46,7 +46,7 @@ class RouteInfo:
         """检查路由信息是否过期"""
         return time.time() - self.last_update_time > default_timeout
 
-    def refresh_update_time(self):
+    def refresh_update_time(self) -> None:
         """刷新更新时间"""
         self.last_update_time = time.time()
 
@@ -113,12 +113,17 @@ class TopicBrokerMapping:
         self._route_cache: dict[str, RouteInfo] = {}
 
         # 线程安全锁
-        self._lock = threading.RLock()
+        self._lock: threading.RLock = threading.RLock()
 
         # 默认路由过期时间 (秒)
-        self._default_route_timeout = route_timeout
+        self._default_route_timeout: float = route_timeout
 
-        logger.info(f"TopicBrokerMapping initialized with timeout={route_timeout}s")
+        logger.info(
+            "TopicBrokerMapping initialized",
+            extra={
+                "route_timeout": route_timeout,
+            },
+        )
 
     def get_route_info(self, topic: str) -> TopicRouteData | None:
         """
@@ -157,7 +162,6 @@ class TopicBrokerMapping:
             bool: 更新是否成功
         """
         if not topic_route_data:
-            logger.warning(f"Empty route data provided for topic: {topic}")
             return False
 
         with self._lock:
@@ -169,10 +173,13 @@ class TopicBrokerMapping:
                 self._route_cache[topic] = new_route_info
 
                 logger.info(
-                    f"Route info updated for topic: {topic}, "
-                    f"brokers: {len(topic_route_data.broker_data_list)}, "
-                    f"queue_data: {len(topic_route_data.queue_data_list)}, "
-                    f"available_queues: {len(new_route_info.available_queues)}"
+                    "Route info updated for topic",
+                    extra={
+                        "topic": topic,
+                        "brokers_count": len(topic_route_data.broker_data_list),
+                        "queue_data_count": len(topic_route_data.queue_data_list),
+                        "available_queues_count": len(new_route_info.available_queues),
+                    },
                 )
                 return True
 
@@ -280,7 +287,7 @@ class TopicBrokerMapping:
             timeout = self._default_route_timeout
 
         current_time = time.time()
-        expired_topics = []
+        expired_topics: list[str] = []
 
         with self._lock:
             for topic, route_info in self._route_cache.items():
@@ -298,7 +305,7 @@ class TopicBrokerMapping:
 
         return len(expired_topics)
 
-    def get_cache_stats(self):
+    def get_cache_stats(self) -> dict[str, int | list[str] | float]:
         """
         获取缓存统计信息
 
