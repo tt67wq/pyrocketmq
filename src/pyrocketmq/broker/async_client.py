@@ -15,9 +15,11 @@ from pyrocketmq.model.result_data import SendStatus
 from ..logging import LoggerFactory
 from ..model import (
     HeartbeatData,
+    LocalTransactionState,
     MessageExt,
     MessageQueue,
     PullMessageResult,
+    RemotingCommand,
     SendMessageResult,
 )
 from ..model.enums import ResponseCode
@@ -143,7 +145,7 @@ class AsyncBrokerClient:
 
     def _process_send_response(
         self,
-        response,
+        response: RemotingCommand,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
     ) -> SendMessageResult:
@@ -1054,16 +1056,36 @@ class AsyncBrokerClient:
                 else:
                     # 响应成功但没有offset字段，可能表示偏移量为0或未设置
                     logger.info(
-                        f"No offset field found for consumerGroup={consumer_group}, "
-                        f"topic={topic}, queueId={queue_id}, returning 0"
+                        "No offset field found for consumerGroup, topic, queueId, returning 0",
+                        extra={
+                            "client_id": self._client_id,
+                            "operation_type": "query_consumer_offset",
+                            "consumer_group": consumer_group,
+                            "topic": topic,
+                            "queue_id": queue_id,
+                            "response_code": ResponseCode.SUCCESS,
+                            "offset_returned": 0,
+                            "reason": "no_offset_field",
+                            "timestamp": time.time(),
+                        },
                     )
                     return 0
 
             elif response.code == ResponseCode.QUERY_NOT_FOUND:
                 # 没有找到偏移量，通常返回-1或0
                 logger.info(
-                    f"Consumer offset not found for consumerGroup={consumer_group}, "
-                    f"topic={topic}, queueId={queue_id}"
+                    "Consumer offset not found for consumerGroup, topic, queueId",
+                    extra={
+                        "client_id": self._client_id,
+                        "operation_type": "query_consumer_offset",
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": ResponseCode.QUERY_NOT_FOUND,
+                        "reason": "offset_not_found",
+                        "execution_time": query_rt,
+                        "timestamp": time.time(),
+                    },
                 )
                 raise OffsetError(
                     f"Consumer offset not found: consumerGroup={consumer_group}, "
@@ -1913,42 +1935,56 @@ class AsyncBrokerClient:
         producer_group: str,
         tran_state_table_offset: int,
         commit_log_offset: int,
-        commit_or_rollback: int,
-        msg_id: str | None = None,
-        transaction_id: str | None = None,
-        **kwargs,
+        local_transaction_state: LocalTransactionState,
+        msg_id: str = "",
+        transaction_id: str = "",
+        from_transaction_check: bool = True,
     ) -> None:
-        """异步结束事务
+        """异步结束事务请求（使用oneway通信，无需等待响应）
 
         Args:
-            producer_group: 生产者组名
+            producer_group: 生产者组
             tran_state_table_offset: 事务状态表偏移量
             commit_log_offset: 提交日志偏移量
-            commit_or_rollback: 提交或回滚标志
-            msg_id: 消息ID，默认None
-            transaction_id: 事务ID，默认None
-            **kwargs: 其他参数
+            local_transaction_state: 本地事务状态
+            msg_id: 消息ID
+            transaction_id: 事务ID
+            from_transaction_check: 是否从事务检查而来
 
         Raises:
             BrokerConnectionError: 连接错误
-            BrokerTimeoutError: 请求超时
-            BrokerResponseError: 响应错误
         """
         if not self.is_connected:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
+            # 将本地事务状态转换为事务类型
+            from pyrocketmq.model.utils import transaction_state
+
+            commit_or_rollback = transaction_state(local_transaction_state)
+
+            action = (
+                "commit"
+                if local_transaction_state == LocalTransactionState.COMMIT_MESSAGE_STATE
+                else "rollback"
+                if local_transaction_state
+                == LocalTransactionState.ROLLBACK_MESSAGE_STATE
+                else "unknown"
+            )
+
             logger.debug(
-                "Ending transaction",
+                "Sending end transaction",
                 extra={
                     "client_id": self._client_id,
-                    "operation_type": "end_transaction",
+                    "action": action,
                     "producer_group": producer_group,
                     "tran_state_table_offset": tran_state_table_offset,
                     "commit_log_offset": commit_log_offset,
+                    "local_transaction_state": local_transaction_state.name,
                     "commit_or_rollback": commit_or_rollback,
                     "msg_id": msg_id,
                     "transaction_id": transaction_id,
+                    "operation_type": "end_transaction",
                     "timestamp": time.time(),
                 },
             )
@@ -1961,73 +1997,50 @@ class AsyncBrokerClient:
                 commit_or_rollback=commit_or_rollback,
                 msg_id=msg_id,
                 transaction_id=transaction_id,
-                **kwargs,
+                from_transaction_check=from_transaction_check,
             )
 
-            # 发送请求并获取响应
-            response = await self.remote.rpc(request, timeout=self.timeout)
-
-            # 检查响应状态
-            if response.code != ResponseCode.SUCCESS:
-                error_msg = f"End transaction failed with code {response.code}"
-                if response.body:
-                    error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
-                logger.error(
-                    "End transaction failed",
-                    extra={
-                        "client_id": self._client_id,
-                        "operation_type": "end_transaction",
-                        "producer_group": producer_group,
-                        "tran_state_table_offset": tran_state_table_offset,
-                        "commit_log_offset": commit_log_offset,
-                        "commit_or_rollback": commit_or_rollback,
-                        "msg_id": msg_id,
-                        "transaction_id": transaction_id,
-                        "response_code": response.code,
-                        "error_message": error_msg,
-                        "timestamp": time.time(),
-                    },
-                )
-                raise BrokerResponseError(error_msg)
+            # 使用oneway模式发送请求，不等待响应
+            start_time = time.time()
+            await self.remote.oneway(request)
+            end_tx_rt = time.time() - start_time
 
             logger.info(
-                "Successfully ended transaction",
+                "Successfully sent end transaction",
                 extra={
                     "client_id": self._client_id,
-                    "operation_type": "end_transaction",
+                    "action": action,
                     "producer_group": producer_group,
                     "tran_state_table_offset": tran_state_table_offset,
                     "commit_log_offset": commit_log_offset,
+                    "local_transaction_state": local_transaction_state.name,
                     "commit_or_rollback": commit_or_rollback,
                     "msg_id": msg_id,
                     "transaction_id": transaction_id,
+                    "execution_time": end_tx_rt,
+                    "operation_type": "end_transaction",
+                    "status": "success",
                     "timestamp": time.time(),
                 },
             )
 
         except Exception as e:
-            if isinstance(
-                e,
-                (
-                    BrokerConnectionError,
-                    BrokerTimeoutError,
-                    BrokerResponseError,
-                ),
-            ):
+            if isinstance(e, BrokerConnectionError):
                 raise
 
             logger.error(
                 "Unexpected error during end_transaction",
                 extra={
                     "client_id": self._client_id,
-                    "operation_type": "end_transaction",
                     "producer_group": producer_group,
                     "tran_state_table_offset": tran_state_table_offset,
                     "commit_log_offset": commit_log_offset,
-                    "commit_or_rollback": commit_or_rollback,
+                    "local_transaction_state": local_transaction_state.name,
                     "msg_id": msg_id,
                     "transaction_id": transaction_id,
                     "error_message": str(e),
+                    "operation_type": "end_transaction",
+                    "status": "unexpected_error",
                     "timestamp": time.time(),
                 },
             )
