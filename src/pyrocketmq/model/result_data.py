@@ -5,7 +5,7 @@
 
 import ast
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from .errors import DeserializationError
 from .message_queue import MessageQueue
@@ -18,45 +18,43 @@ if TYPE_CHECKING:
 class ConsumeType:
     """消费类型"""
 
-    PUSH = "PUSH"  # 推式消费
-    PULL = "PULL"  # 拉式消费
+    PUSH: str = "PUSH"  # 推式消费
+    PULL: str = "PULL"  # 拉式消费
 
 
 # 消息模式枚举
 class MessageModel:
     """消息模式"""
 
-    BROADCASTING = "BROADCASTING"  # 广播模式
-    CLUSTERING = "CLUSTERING"  # 集群模式
+    BROADCASTING: str = "BROADCASTING"  # 广播模式
+    CLUSTERING: str = "CLUSTERING"  # 集群模式
 
 
 # 消费起始位置枚举
 class ConsumeFromWhere:
     """消费起始位置"""
 
-    CONSUME_FROM_LAST_OFFSET = (
-        "CONSUME_FROM_LAST_OFFSET"  # 从最后偏移量开始消费
-    )
-    CONSUME_FROM_FIRST_OFFSET = (
+    CONSUME_FROM_LAST_OFFSET: str = "CONSUME_FROM_LAST_OFFSET"  # 从最后偏移量开始消费
+    CONSUME_FROM_FIRST_OFFSET: str = (
         "CONSUME_FROM_FIRST_OFFSET"  # 从第一个偏移量开始消费
     )
-    CONSUME_FROM_TIMESTAMP = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
+    CONSUME_FROM_TIMESTAMP: str = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
 
 
 # 发送状态枚举
 class SendStatus:
     """发送状态枚举"""
 
-    SEND_OK = 0  # 发送成功
-    SEND_FLUSH_DISK_TIMEOUT = 1  # 刷盘超时
-    SEND_FLUSH_SLAVE_TIMEOUT = 2  # 从节点刷盘超时
-    SEND_SLAVE_NOT_AVAILABLE = 3  # 从节点不可用
-    SEND_UNKNOWN_ERROR = 4  # 未知错误
+    SEND_OK: int = 0  # 发送成功
+    SEND_FLUSH_DISK_TIMEOUT: int = 1  # 刷盘超时
+    SEND_FLUSH_SLAVE_TIMEOUT: int = 2  # 从节点刷盘超时
+    SEND_SLAVE_NOT_AVAILABLE: int = 3  # 从节点不可用
+    SEND_UNKNOWN_ERROR: int = 4  # 未知错误
 
     @classmethod
     def from_name(cls, name: str) -> int:
         """从状态名称获取状态值"""
-        status_map = {
+        status_map: dict[str, int] = {
             "SEND_OK": cls.SEND_OK,
             "SEND_FLUSH_DISK_TIMEOUT": cls.SEND_FLUSH_DISK_TIMEOUT,
             "SEND_FLUSH_SLAVE_TIMEOUT": cls.SEND_FLUSH_SLAVE_TIMEOUT,
@@ -68,7 +66,7 @@ class SendStatus:
     @classmethod
     def to_name(cls, status: int) -> str:
         """从状态值获取状态名称"""
-        name_map = {
+        name_map: dict[int, str] = {
             cls.SEND_OK: "SEND_OK",
             cls.SEND_FLUSH_DISK_TIMEOUT: "SEND_FLUSH_DISK_TIMEOUT",
             cls.SEND_FLUSH_SLAVE_TIMEOUT: "SEND_FLUSH_SLAVE_TIMEOUT",
@@ -94,8 +92,8 @@ class SendMessageResult:
     msg_id: str  # 消息ID
     message_queue: MessageQueue  # 消息队列信息
     queue_offset: int  # 队列偏移量
-    transaction_id: Optional[str] = None  # 事务ID
-    offset_msg_id: Optional[str] = None  # 偏移量消息ID
+    transaction_id: str | None = None  # 事务ID
+    offset_msg_id: str | None = None  # 偏移量消息ID
     region_id: str = "DefaultRegion"  # 区域ID
     trace_on: bool = False  # 是否开启Trace
 
@@ -118,9 +116,9 @@ class SendMessageResult:
         """获取队列ID (兼容性属性)"""
         return self.message_queue.queue_id
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
-        result = {
+        result: dict[str, Any] = {
             "status": self.status,
             "statusName": self.status_name,
             "msgId": self.msg_id,
@@ -138,11 +136,11 @@ class SendMessageResult:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SendMessageResult":
+    def from_dict(cls, data: dict[str, Any]) -> "SendMessageResult":
         """从字典创建实例"""
         # 解析MessageQueue
-        mq_data = data.get("messageQueue", {})
-        message_queue = MessageQueue(
+        mq_data: dict[str, Any] = data.get("messageQueue", {})
+        message_queue: MessageQueue = MessageQueue(
             topic=mq_data.get("topic", ""),
             broker_name=mq_data.get("brokerName", ""),
             queue_id=mq_data.get("queueId", 0),
@@ -173,8 +171,8 @@ class SendMessageResult:
             DeserializationError: 数据格式无效时抛出异常
         """
         try:
-            data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            data_str: str = data.decode("utf-8")
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
             raise DeserializationError(
@@ -200,12 +198,12 @@ class PullMessageResult:
     包含从Broker拉取的消息列表和相关信息
     """
 
-    messages: List["MessageExt"]  # 消息列表
+    messages: list["MessageExt"]  # 消息列表
     next_begin_offset: int  # 下次拉取的起始偏移量
     min_offset: int  # 最小偏移量
     max_offset: int  # 最大偏移量
-    suggest_which_broker_id: Optional[int] = None  # 建议的broker ID
-    pull_rt: Optional[float] = None  # 拉取耗时
+    suggest_which_broker_id: int | None = None  # 建议的broker ID
+    pull_rt: float | None = None  # 拉取耗时
 
     @property
     def is_found(self) -> bool:
@@ -217,9 +215,9 @@ class PullMessageResult:
         """拉取到的消息数量"""
         return len(self.messages)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
-        result = {
+        result: dict[str, Any] = {
             "messages": [msg.to_dict() for msg in self.messages],
             "nextBeginOffset": self.next_begin_offset,
             "minOffset": self.min_offset,
@@ -236,14 +234,13 @@ class PullMessageResult:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PullMessageResult":
+    def from_dict(cls, data: dict[str, Any]) -> "PullMessageResult":
         """从字典创建实例"""
         # 需要从message_ext导入MessageExt
         from .message_ext import MessageExt
 
-        messages = [
-            MessageExt.from_dict(msg_data)
-            for msg_data in data.get("messages", [])
+        messages: list["MessageExt"] = [
+            MessageExt.from_dict(msg_data) for msg_data in data.get("messages", [])
         ]
 
         return cls(
@@ -269,8 +266,8 @@ class PullMessageResult:
             DeserializationError: 数据格式无效时抛出异常
         """
         try:
-            data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            data_str: str = data.decode("utf-8")
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
             raise DeserializationError(
@@ -299,12 +296,12 @@ class OffsetResult:
     offset: int  # 偏移量值
     retry_times: int = 0  # 重试次数
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式"""
         return {"offset": self.offset, "retryTimes": self.retry_times}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OffsetResult":
+    def from_dict(cls, data: dict[str, Any]) -> "OffsetResult":
         """从字典创建实例"""
         return cls(offset=data["offset"], retry_times=data.get("retryTimes", 0))
 
@@ -322,18 +319,14 @@ class OffsetResult:
             DeserializationError: 数据格式无效时抛出异常
         """
         try:
-            data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            data_str: str = data.decode("utf-8")
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
             return cls.from_dict(parsed_data)
         except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse OffsetResult from bytes: {e}"
-            )
+            raise DeserializationError(f"Failed to parse OffsetResult from bytes: {e}")
         except Exception as e:
             raise DeserializationError(f"Invalid OffsetResult format: {e}")
 
     def __str__(self) -> str:
         """字符串表示"""
-        return (
-            f"OffsetResult[offset={self.offset}, retryTimes={self.retry_times}]"
-        )
+        return f"OffsetResult[offset={self.offset}, retryTimes={self.retry_times}]"

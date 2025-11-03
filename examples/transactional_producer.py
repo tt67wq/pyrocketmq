@@ -38,7 +38,7 @@ from pyrocketmq.producer.transaction import create_simple_transaction_listener
 def main():
     """主函数"""
     # 设置日志
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG"))
+    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG", json_output=True))
 
     print("=== 事务消息Producer示例 ===")
 
@@ -64,7 +64,11 @@ def main():
             )
 
             ret = producer.send_message_in_transaction(message)
-            print("Message sent ret:", ret)
+            print("Message sent ret")
+            print("offset_msg_id=", ret.offset_msg_id)
+            print("msg_id=", ret.msg_id)
+            print("state=", ret.status)
+            print("queue=", ret.message_queue)
         except ProducerError as e:
             print(f"Failed to send message: {e}")
             time.sleep(5)

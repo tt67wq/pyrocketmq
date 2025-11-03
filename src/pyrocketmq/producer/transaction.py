@@ -130,6 +130,7 @@ class TransactionSendResult(SendMessageResult):
             f"transactionId='{self.transaction_id}', "
             f"state={state_str}, "
             f"queue={self.message_queue}]"
+            f"offset_msg_id={self.offset_msg_id}"
         )
 
 

@@ -43,6 +43,9 @@ class LoggingConfig:
     # 是否显示日志级别颜色
     colored_output: bool = True
 
+    # 是否输出json格式日志
+    json_output: bool = False
+
     @classmethod
     def from_env(cls) -> "LoggingConfig":
         """
@@ -72,6 +75,13 @@ class LoggingConfig:
                 "yes",
             )
 
+        if json_output := os.getenv("PYROCKETMQ_LOG_JSON"):
+            config.json_output = json_output.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+
         return config
 
     def to_dict(self) -> dict[str, str | int | bool | None]:
@@ -88,6 +98,7 @@ class LoggingConfig:
             "backup_count": self.backup_count,
             "capture_exceptions": self.capture_exceptions,
             "colored_output": self.colored_output,
+            "json_output": self.json_output,
         }
 
     def __post_init__(self):

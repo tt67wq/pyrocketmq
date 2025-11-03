@@ -5,6 +5,7 @@
 提供完整的本地事务执行和状态回查机制。
 """
 
+import logging
 from typing import Any
 from typing_extensions import override
 
@@ -86,7 +87,7 @@ class TransactionProducer(Producer):
         """
         super().__init__(config)
         self._transaction_listener: TransactionListener | None = transaction_listener
-        self._logger = get_logger(__name__)
+        self._logger: logging.Logger = get_logger(__name__)
 
         # 事务检查请求码（根据RocketMQ协议定义）
         self._transaction_check_code: int = RequestCode.CHECK_TRANSACTION_STATE.value
@@ -173,6 +174,7 @@ class TransactionProducer(Producer):
                 message_queue=send_result.message_queue,
                 queue_offset=send_result.queue_offset,
                 transaction_id=transaction_id,
+                offset_msg_id=send_result.offset_msg_id,
                 local_transaction_state=local_state,
             )
 

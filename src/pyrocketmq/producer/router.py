@@ -15,6 +15,7 @@ MVP版本功能:
 版本: MVP 1.0
 """
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -216,7 +217,9 @@ class MessageRouter:
         }
         self._stats_lock: threading.RLock = threading.RLock()
 
-        logger.info(
+        self._logger: logging.Logger = get_logger(__name__)
+
+        self._logger.info(
             "MessageRouter initialized",
             extra={
                 "strategy": default_strategy.value,
@@ -245,7 +248,7 @@ class MessageRouter:
         start_time = time.time()
 
         # Debug: 记录路由请求开始
-        logger.debug(
+        self._logger.debug(
             "Starting message routing",
             extra={
                 "operation": "route_message",
@@ -265,7 +268,7 @@ class MessageRouter:
                 self._routing_stats["strategy_usage"][routing_strategy.value] += 1
 
             # Debug: 记录即将获取可用队列
-            logger.debug(
+            self._logger.debug(
                 "Fetching available queues for topic",
                 extra={
                     "operation": "route_message",
@@ -280,7 +283,7 @@ class MessageRouter:
             )
 
             # Debug: 记录可用队列信息
-            logger.debug(
+            self._logger.debug(
                 "Retrieved available queues",
                 extra={
                     "operation": "route_message",
@@ -296,7 +299,7 @@ class MessageRouter:
                 )
 
                 # Debug: 记录队列为空的情况
-                logger.debug(
+                self._logger.debug(
                     "No available queues found",
                     extra={
                         "operation": "route_message",
@@ -321,7 +324,7 @@ class MessageRouter:
             selector = self._create_selector(routing_strategy)
 
             # Debug: 记录选择器创建
-            logger.debug(
+            self._logger.debug(
                 "Created queue selector",
                 extra={
                     "operation": "route_message",
@@ -335,7 +338,7 @@ class MessageRouter:
             selected_result = selector.select(topic, available_queues, message)
 
             # Debug: 记录队列选择结果
-            logger.debug(
+            self._logger.debug(
                 "Selected queue from available options",
                 extra={
                     "operation": "route_message",
@@ -349,7 +352,7 @@ class MessageRouter:
                 error = QueueNotAvailableError(f"No queue selected for topic: {topic}")
 
                 # Debug: 记录队列选择失败
-                logger.debug(
+                self._logger.debug(
                     "Queue selection failed",
                     extra={
                         "operation": "route_message",
@@ -373,7 +376,7 @@ class MessageRouter:
             message_queue, broker_data = selected_result
 
             # Debug: 记录选择的队列和broker信息
-            logger.debug(
+            self._logger.debug(
                 "Queue and broker selected",
                 extra={
                     "operation": "route_message",
@@ -391,7 +394,7 @@ class MessageRouter:
             broker_address = self._select_broker_address(broker_data)
 
             # Debug: 记录broker地址选择结果
-            logger.debug(
+            self._logger.debug(
                 "Selected broker address",
                 extra={
                     "operation": "route_message",
@@ -412,7 +415,7 @@ class MessageRouter:
                 )
 
                 # Debug: 记录broker地址选择失败
-                logger.debug(
+                self._logger.debug(
                     "Broker address selection failed",
                     extra={
                         "operation": "route_message",
@@ -451,7 +454,7 @@ class MessageRouter:
             routing_time = (time.time() - start_time) * 1000  # ms
 
             # Debug: 记录成功路由的结构化日志
-            logger.debug(
+            self._logger.debug(
                 "Message routed successfully",
                 extra={
                     "operation": "route_message",
@@ -480,7 +483,7 @@ class MessageRouter:
                 self._routing_stats["failed_routing"] += 1
 
             # Error: 记录路由失败的结构化日志
-            logger.error(
+            self._logger.error(
                 "Routing failed with exception",
                 extra={
                     "operation": "route_message",
@@ -514,7 +517,7 @@ class MessageRouter:
 
         broker_name = result.get_broker_name()
         if not broker_name:
-            logger.warning("Cannot report routing result: no broker name")
+            self._logger.warning("Cannot report routing result: no broker name")
             return
 
         with self._health_lock:
@@ -525,7 +528,7 @@ class MessageRouter:
                     health_info = BrokerHealthInfo(broker_data=result.broker_data)
                     self.broker_health[broker_name] = health_info
                 else:
-                    logger.warning(
+                    self._logger.warning(
                         f"Cannot create health info for broker {broker_name}: no broker data"
                     )
                     return
@@ -597,7 +600,7 @@ class MessageRouter:
                 "broker_usage": {},
             }
 
-        logger.info("Routing stats reset")
+        self._logger.info("Routing stats reset")
 
     def update_broker_health_info(
         self,
@@ -638,7 +641,9 @@ class MessageRouter:
                 health_info.status = BrokerState.HEALTHY
                 health_info.consecutive_failures = 0
                 health_info.consecutive_successes = 0
-                logger.info(f"Force recovered broker {broker_name} to healthy status")
+                self._logger.info(
+                    f"Force recovered broker {broker_name} to healthy status"
+                )
                 return True
             return False
 
