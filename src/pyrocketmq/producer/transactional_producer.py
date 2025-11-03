@@ -6,6 +6,7 @@
 """
 
 from typing import Any
+from typing_extensions import override
 
 from pyrocketmq.broker.client import BrokerClient
 from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError
@@ -96,6 +97,7 @@ class TransactionProducer(Producer):
 
         self._failed_registrations: set[str] = set()
 
+    @override
     def start(self) -> None:
         """启动TransactionProducer"""
         super().start()

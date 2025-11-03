@@ -91,7 +91,7 @@ class Remote:
 
             # 清理所有等待者
             with self._waiters_lock:
-                for opaque, (event, _, _) in self._waiters.items():
+                for _opaque, (event, _, _) in self._waiters.items():
                     event.set()
                 self._waiters.clear()
 
@@ -209,7 +209,7 @@ class Remote:
             # 等待响应
             if not event.wait(rpc_timeout):
                 # 超时，移除等待者
-                self._unregister_waiter(opaque)
+                _ = self._unregister_waiter(opaque)
                 raise RpcTimeoutError(f"RPC请求超时: opaque={opaque}")
 
             # 获取响应
@@ -224,17 +224,17 @@ class Remote:
             raise
         except (ConnectionError, TransportError):
             # 连接或传输错误，移除等待者
-            self._unregister_waiter(opaque)
+            _ = self._unregister_waiter(opaque)
             raise
         except RpcTimeoutError:
-            self._unregister_waiter(opaque)
+            _ = self._unregister_waiter(opaque)
             self._logger.error(
                 "RPC调用失败",
                 extra={"opaque": opaque, "reason": "timeout"},
             )
             raise
         except Exception as e:
-            self._unregister_waiter(opaque)
+            _ = self._unregister_waiter(opaque)
             raise RemoteError(f"RPC调用失败: {e}") from e
 
     def oneway(self, command: RemotingCommand) -> None:
@@ -320,7 +320,7 @@ class Remote:
         with self._waiters_lock:
             waiter = self._waiters.get(opaque)
             if waiter:
-                event, _, timestamp = waiter
+                event, _, _timestamp = waiter
                 # 更新响应和时间戳
                 self._waiters[opaque] = (event, response, time.time())
                 event.set()
@@ -355,7 +355,7 @@ class Remote:
     def _cleanup_expired_waiters(self) -> None:
         """清理过期的等待者"""
         current_time = time.time()
-        expired_opaques = []
+        expired_opaques: list[int] = []
 
         with self._waiters_lock:
             for opaque, (_, _, timestamp) in self._waiters.items():
@@ -462,9 +462,9 @@ class Remote:
     def _handle_response_message(self, response: RemotingCommand) -> None:
         """处理响应消息"""
         opaque = response.opaque
-        if opaque is None:
-            self._logger.warning("响应消息缺少opaque字段")
-            return
+        # if opaque is None:
+        #     self._logger.warning("响应消息缺少opaque字段")
+        #     return
 
         # 查找对应的等待者并设置响应
         if self._set_waiter_response(opaque, response):
@@ -509,13 +509,13 @@ class Remote:
             )
 
     def _send_processor_response(
-        self, request: RemotingCommand, response: RemotingCommand
+        self, _request: RemotingCommand, response: RemotingCommand
     ) -> None:
         """发送处理器生成的响应"""
         try:
             # 设置响应的opaque和flag
-            if request.opaque is not None:
-                response.opaque = request.opaque
+            # if request.opaque is not None:
+            #     response.opaque = request.opaque
             response.set_response()
 
             # 序列化并发送响应

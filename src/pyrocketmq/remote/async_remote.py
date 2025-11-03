@@ -94,7 +94,7 @@ class AsyncRemote:
 
             # 清理所有等待者
             async with self._waiters_lock:
-                for opaque, (event, _, _) in self._waiters.items():
+                for _opaque, (event, _, _) in self._waiters.items():
                     event.set()
                 self._waiters.clear()
 
@@ -124,7 +124,7 @@ class AsyncRemote:
             )
 
     async def register_request_processor_lazy(
-        self, code: int, processor_factory: Callable[[], AsyncClientRequestFunc]
+        self, code: int, processor: AsyncClientRequestFunc
     ) -> None:
         """延迟注册请求处理器（仅在首次需要时创建处理器）
 
@@ -134,7 +134,6 @@ class AsyncRemote:
         """
         async with self._processors_lock:
             if code not in self._processors:
-                processor = processor_factory()
                 self._processors[code] = processor
                 self._logger.debug(
                     "延迟注册异步请求处理器",
@@ -211,10 +210,10 @@ class AsyncRemote:
 
             # 等待响应
             try:
-                await asyncio.wait_for(event.wait(), timeout=rpc_timeout)
+                _ = await asyncio.wait_for(event.wait(), timeout=rpc_timeout)
             except asyncio.TimeoutError:
                 # 超时，移除等待者
-                await self._unregister_waiter(opaque)
+                _ = await self._unregister_waiter(opaque)
                 raise RpcTimeoutError(f"RPC请求超时: opaque={opaque}")
 
             # 获取响应
@@ -231,11 +230,11 @@ class AsyncRemote:
             raise
         except (ConnectionError, TransportError):
             # 连接或传输错误，移除等待者
-            await self._unregister_waiter(opaque)
+            _ = await self._unregister_waiter(opaque)
             raise
         except Exception as e:
             # 其他错误，移除等待者
-            await self._unregister_waiter(opaque)
+            _ = await self._unregister_waiter(opaque)
             self._logger.error(
                 "异步RPC调用失败",
                 extra={"opaque": opaque, "error": str(e)},
@@ -333,7 +332,7 @@ class AsyncRemote:
         async with self._waiters_lock:
             waiter = self._waiters.get(opaque)
             if waiter:
-                event, _, timestamp = waiter
+                event, _, _timestamp = waiter
                 # 更新响应和时间戳
                 self._waiters[opaque] = (event, response, time.time())
                 event.set()
@@ -351,7 +350,7 @@ class AsyncRemote:
     async def _stop_cleanup_task(self) -> None:
         """停止清理任务"""
         if self._cleanup_task and not self._cleanup_task.done():
-            self._cleanup_task.cancel()
+            _ = self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
             except asyncio.CancelledError:
@@ -375,7 +374,7 @@ class AsyncRemote:
     async def _cleanup_expired_waiters(self) -> None:
         """清理过期的等待者"""
         current_time = time.time()
-        expired_opaques = []
+        expired_opaques: list[int] = []
 
         async with self._waiters_lock:
             for opaque, (_, _, timestamp) in self._waiters.items():
@@ -402,7 +401,7 @@ class AsyncRemote:
     async def _stop_recv_task(self) -> None:
         """停止消息接收任务"""
         if self._recv_task and not self._recv_task.done():
-            self._recv_task.cancel()
+            _ = self._recv_task.cancel()
             try:
                 await self._recv_task
             except asyncio.CancelledError:
@@ -453,7 +452,7 @@ class AsyncRemote:
                 continue
             except Exception as e:
                 self._logger.error(
-                    f"接收消息时发生错误",
+                    "接收消息时发生错误",
                     extra={"error": str(e)},
                 )
                 await asyncio.sleep(1.0)
@@ -472,9 +471,6 @@ class AsyncRemote:
     async def _handle_response_message(self, response: RemotingCommand) -> None:
         """处理响应消息"""
         opaque = response.opaque
-        if opaque is None:
-            self._logger.warning("响应消息缺少opaque字段")
-            return
 
         # 查找对应的等待者并设置响应
         if await self._set_waiter_response(opaque, response):
@@ -524,7 +520,7 @@ class AsyncRemote:
         """发送处理器生成的响应"""
         try:
             # 设置响应的opaque和flag
-            if request.opaque is not None:
+            if not request.opaque:
                 response.opaque = request.opaque
             response.set_response()
 

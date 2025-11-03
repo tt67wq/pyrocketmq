@@ -7,6 +7,7 @@
 
 import logging
 from typing import Any
+
 from typing_extensions import override
 
 from pyrocketmq.broker.async_client import AsyncBrokerClient
@@ -15,17 +16,17 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     LocalTransactionState,
     Message,
+    MessageID,
+    MessageQueue,
     RemotingCommand,
     SendMessageResult,
-    MessageQueue,
+    unmarshal_msg_id,
 )
 from pyrocketmq.model.enums import RequestCode
-from pyrocketmq.model.headers import (
-    CheckTransactionStateRequestHeader,
-)
+from pyrocketmq.model.headers import CheckTransactionStateRequestHeader
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.message_ext import MessageExt
-from pyrocketmq.model.message_id import MessageID, unmarshal_msg_id
+from pyrocketmq.nameserver.client import AsyncNameServerClient
 from pyrocketmq.nameserver.models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
@@ -36,19 +37,18 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.nameserver.client import AsyncNameServerClient
 from pyrocketmq.producer.router import RoutingResult
 from pyrocketmq.remote.async_remote import AsyncRemote
 
 from .async_producer import AsyncProducer
 from .transaction import (
+    AsyncTransactionListener,
+    CheckTransactionStateCallback,
     TransactionCheckError,
     TransactionCommitError,
     TransactionError,
-    AsyncTransactionListener,
     TransactionRollbackError,
     TransactionSendResult,
-    CheckTransactionStateCallback,
 )
 
 
@@ -264,73 +264,14 @@ class AsyncTransactionProducer(AsyncProducer):
         broker_remote: AsyncRemote,
         message: Message,
         message_queue: MessageQueue,
-        broker_addr: str,
-        one_way: bool = False,
     ) -> SendMessageResult:
         """异步发送消息到指定Broker"""
-        try:
-            # 创建发送命令
-            request: RemotingCommand = (
-                self._request_factory.create_send_message_request(
-                    message=message,
-                    message_queue=message_queue,
-                    one_way=one_way,
-                )
-            )
-
-            # 发送消息
-            if one_way:
-                # 单向发送，不等待响应
-                future = await broker_remote.send_oneway(request)
-                # TODO: 创建单向发送结果
-                return SendMessageResult()
-            else:
-                # 同步发送，等待响应
-                response: RemotingCommand = await broker_remote.send_sync(
-                    request, timeout=self._config.send_msg_timeout
-                )
-
-                # 解析响应
-                return self._parse_send_response(response, message_queue)
-
-        except BrokerTimeoutError as e:
-            self._logger.warning(
-                "异步发送消息到Broker超时",
-                extra={
-                    "broker_addr": broker_addr,
-                    "topic": message.topic,
-                    "timeout": self._config.send_msg_timeout,
-                    "error": str(e),
-                },
-            )
-            raise
-        except BrokerError as e:
-            self._logger.error(
-                "异步发送消息到Broker失败",
-                extra={
-                    "broker_addr": broker_addr,
-                    "topic": message.topic,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            raise
-        except Exception as e:
-            self._logger.error(
-                "异步发送消息时发生未知错误",
-                extra={
-                    "broker_addr": broker_addr,
-                    "topic": message.topic,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
-            raise MessageSendError(
-                message=f"异步发送消息失败: {e}",
-                topic=message.topic,
-                broker=broker_addr,
-            )
+        return await AsyncBrokerClient(broker_remote).async_send_message(
+            self._config.producer_group,
+            message.body,
+            message_queue,
+            message.properties,
+        )
 
     async def _send_message_with_transaction_flag(
         self, message: Message
@@ -357,9 +298,7 @@ class AsyncTransactionProducer(AsyncProducer):
                 raise QueueNotAvailableError(topic=message.topic)
 
             # 发送事务消息
-            async with self._broker_manager.connection_async(
-                broker_addr
-            ) as broker_remote:
+            async with self._broker_manager.connection(broker_addr) as broker_remote:
                 # 注册事务检查处理器
                 await self._register_transaction_check_handler(
                     broker_remote, broker_addr
@@ -367,7 +306,9 @@ class AsyncTransactionProducer(AsyncProducer):
 
                 # 发送消息
                 return await self._send_to_broker(
-                    broker_remote, message, routing_result.message_queue, broker_addr
+                    broker_remote,
+                    message,
+                    routing_result.message_queue,
                 )
 
         except (ProducerError, BrokerError):
@@ -426,81 +367,83 @@ class AsyncTransactionProducer(AsyncProducer):
 
     async def _send_transaction_confirmation(
         self,
-        send_result: SendMessageResult,
+        result: SendMessageResult,
         local_state: LocalTransactionState,
         message_queue: MessageQueue,
         transaction_id: str,
     ) -> None:
-        """异步发送事务状态确认"""
+        """异步发送事务状态确认
+
+        Args:
+            result: 发送结果
+            local_state: 本地事务状态
+            message_queue: 消息队列信息
+            transaction_id: 事务ID
+        """
+        # 验证并提取消息ID
+        msg_id: MessageID
+        if result.offset_msg_id:
+            msg_id = unmarshal_msg_id(result.offset_msg_id)
+        elif result.msg_id:
+            msg_id = unmarshal_msg_id(result.msg_id)
+        else:
+            raise ValueError("Invalid message ID")
+
         try:
-            broker_addr = self._get_broker_addr_by_name(message_queue.broker_name)
+            # 获取Broker地址（传入topic参数）
+            broker_addr: str | None = await self._get_broker_addr_by_name(
+                message_queue.broker_name, message_queue.topic
+            )
+            if not broker_addr:
+                raise ValueError("Broker address not found")
 
-            # 根据本地事务状态创建确认命令
-            if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
-                request_code = RequestCode.END_TRANSACTION
-                commit_or_log = 1  # COMMIT
-            elif local_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
-                request_code = RequestCode.END_TRANSACTION
-                commit_or_log = 0  # ROLLBACK
-            else:
-                self._logger.warning(
-                    "未知的事务状态，跳过确认",
-                    extra={
-                        "transaction_id": transaction_id,
-                        "local_state": local_state.name,
-                    },
+            # 使用连接池获取Broker客户端
+            async with self._broker_manager.connection(broker_addr) as broker_remote:
+                broker_client: AsyncBrokerClient = AsyncBrokerClient(broker_remote)
+
+                await broker_client.end_transaction(
+                    self._config.producer_group,
+                    result.queue_offset,
+                    msg_id.offset,
+                    local_state,
+                    result.msg_id,
+                    transaction_id,
+                    True,
                 )
-                return
 
-            # 创建事务确认命令
-            request: RemotingCommand = (
-                self._request_factory.create_end_transaction_request(
-                    transaction_id=transaction_id,
-                    commit_or_log=commit_or_log,
-                    from_transaction_check=False,
-                )
-            )
-
-            # 获取Broker客户端并发送确认
-            broker_client: AsyncBrokerClient = (
-                await self._broker_manager.get_broker_client_async(broker_addr)
-            )
-            broker_remote: AsyncRemote = AsyncRemote(
-                transport_config=self._remote_config,
-                connect_callback=broker_client.handle_connection,
-                data_callback=broker_client.handle_data,
-                error_callback=broker_client.handle_error,
-            )
-
-            await broker_remote.connect(broker_addr)
-            await broker_remote.send_oneway(request)
-
-            self._logger.info(
-                "事务确认发送完成",
-                extra={
-                    "transaction_id": transaction_id,
-                    "local_state": local_state.name,
-                    "commit_or_log": commit_or_log,
-                },
-            )
+                # 根据状态记录日志
+                if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
+                    self._logger.debug(
+                        "提交事务", extra={"transaction_id": transaction_id}
+                    )
+                elif local_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
+                    self._logger.debug(
+                        "回滚事务", extra={"transaction_id": transaction_id}
+                    )
+                elif local_state == LocalTransactionState.UNKNOW_STATE:
+                    self._logger.debug(
+                        "未知事务状态", extra={"transaction_id": transaction_id}
+                    )
 
         except Exception as e:
-            error_msg = f"发送事务确认失败: {e}"
             self._logger.error(
-                "发送事务确认失败",
-                extra={
-                    "transaction_id": transaction_id,
-                    "local_state": local_state.name,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
+                "发送事务状态确认失败",
+                extra={"transaction_id": transaction_id, "error": str(e)},
             )
 
+            # 根据状态类型抛出不同的异常
             if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
-                raise TransactionCommitError(error_msg)
+                raise TransactionCommitError(
+                    f"Failed to commit transaction: {transaction_id}"
+                )
+            elif local_state == LocalTransactionState.ROLLBACK_MESSAGE_STATE:
+                raise TransactionRollbackError(
+                    f"Failed to rollback transaction: {transaction_id}"
+                )
             else:
-                raise TransactionRollbackError(error_msg)
+                raise TransactionError(
+                    f"Failed to handle unknown transaction state: {transaction_id}"
+                )
 
     async def _handle_transaction_check(
         self, request: RemotingCommand, remote_addr: tuple[str, int]
@@ -575,11 +518,10 @@ class AsyncTransactionProducer(AsyncProducer):
             )
 
             # 异步连接到Broker并发送响应
-            async with self._broker_manager.connection_async(
-                broker_addr
-            ) as broker_remote:
+            async with self._broker_manager.connection(broker_addr) as broker_remote:
                 broker_client = AsyncBrokerClient(broker_remote)
-                await broker_client.end_transaction_async(
+
+                await broker_client.end_transaction(
                     self._config.producer_group,
                     callback.header.tran_state_table_offset,
                     callback.header.commit_log_offset,
@@ -669,16 +611,76 @@ class AsyncTransactionProducer(AsyncProducer):
         self._max_check_times = max_times
         self._logger.info("设置最大异步事务检查次数", extra={"max_times": max_times})
 
-    async def _get_broker_addr_by_name(self, broker_name: str) -> str:
-        """异步根据Broker名称获取地址"""
-        route_info = await self._nameserver_client.get_topic_route_info_async(
-            broker_name
-        )
-        for broker_data in route_info.broker_datas:
-            if broker_data.broker_name == broker_name:
-                return broker_data.broker_addrs[0]  # 简化处理，返回第一个地址
+    async def _get_broker_addr_by_name(
+        self, broker_name: str, topic: str | None = None
+    ) -> str | None:
+        """异步根据broker名称查询broker地址
 
-        raise BrokerNotAvailableError(f"Broker not found: {broker_name}")
+        通过查询NameServer获取指定broker名称的地址信息。
+        如果提供了topic，会优先从该topic的路由信息中查找；否则遍历所有已知topic。
+
+        Args:
+            broker_name: 要查询的broker名称
+            topic: 可选的topic名称，用于缩小搜索范围
+
+        Returns:
+            str | None: 找到的broker地址，格式为"host:port"，未找到则返回None
+
+        Raises:
+            ProducerError: 当NameServer连接不可用或查询失败时抛出
+        """
+        self._logger.debug(
+            "查询broker地址", extra={"broker_name": broker_name, "topic": topic}
+        )
+
+        if not self._nameserver_connections:
+            raise ProducerError("NameServer客户端不可用，无法查询broker地址")
+
+        # 准备要查询的topic列表
+        topics_to_check: list[str] = []
+        if topic:
+            topics_to_check.append(topic)
+        else:
+            # 如果没有提供topic，从本地缓存中获取已知topic
+            topics_to_check.extend(self._topic_mapping.get_all_topics())
+
+            # 如果本地缓存为空，尝试一些常见的topic
+            if not topics_to_check:
+                topics_to_check.extend(["TBW102", "SELF_TEST_TOPIC"])
+
+        for addr, remote in self._nameserver_connections.items():
+            try:
+                client: AsyncNameServerClient = AsyncNameServerClient(
+                    remote, self._config.send_msg_timeout / 1000.0
+                )
+                for check_topic in topics_to_check:
+                    try:
+                        # 查询Topic路由信息
+                        topic_route_data: TopicRouteData = (
+                            await client.query_topic_route_info(check_topic)
+                        )
+
+                        # 在路由数据中查找目标broker
+                        for broker_data in topic_route_data.broker_data_list:
+                            if broker_data.broker_name == broker_name:
+                                return self._message_router.select_broker_address(
+                                    broker_data
+                                )
+
+                    except Exception as e:
+                        self._logger.debug(
+                            "查询topic失败",
+                            extra={"topic": check_topic, "error": str(e)},
+                        )
+                        continue
+
+            except Exception as e:
+                self._logger.warning(
+                    "从NameServer查询失败", extra={"error": str(e), "addr": addr}
+                )
+
+        self._logger.warning("未找到broker地址信息", extra={"broker_name": broker_name})
+        return None
 
     def get_stats(self) -> dict[str, Any]:
         """获取异步事务Producer统计信息"""
