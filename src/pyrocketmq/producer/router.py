@@ -219,11 +219,16 @@ class MessageRouter:
 
         self._logger: logging.Logger = get_logger(__name__)
 
+        # 预创建队列选择器（性能优化）
+        self._selectors: dict[RoutingStrategy, QueueSelector] = {}
+        self._create_selectors()
+
         self._logger.info(
             "MessageRouter initialized",
             extra={
                 "strategy": default_strategy.value,
                 "health_check_interval": health_check_interval,
+                "pre_created_selectors": list(self._selectors.keys()),
             },
         )
 
@@ -320,12 +325,34 @@ class MessageRouter:
                     routing_strategy=routing_strategy,
                 )
 
-            # 根据策略选择队列
-            selector = self._create_selector(routing_strategy)
+            # 获取预创建的选择器
+            selector = self._selectors.get(routing_strategy)
+            if selector is None:
+                # 这种情况不应该发生，因为我们预创建了所有策略
+                error = ValueError(
+                    f"Selector not found for strategy: {routing_strategy.value}"
+                )
+                self._logger.error(
+                    "Unexpected error: selector not found",
+                    extra={
+                        "operation": "route_message",
+                        "topic": topic,
+                        "routing_strategy": routing_strategy.value,
+                        "available_strategies": list(self._selectors.keys()),
+                        "timestamp": time.time(),
+                    },
+                )
+                with self._stats_lock:
+                    self._routing_stats["failed_routing"] += 1
+                return RoutingResult(
+                    success=False,
+                    error=error,
+                    routing_strategy=routing_strategy,
+                )
 
-            # Debug: 记录选择器创建
+            # Debug: 记录选择器使用
             self._logger.debug(
-                "Created queue selector",
+                "Using pre-created queue selector",
                 extra={
                     "operation": "route_message",
                     "topic": topic,
@@ -667,26 +694,31 @@ class MessageRouter:
         """获取Topic的可用队列列表"""
         return self.topic_mapping.get_available_queues(topic)
 
-    def _create_selector(self, strategy: RoutingStrategy) -> QueueSelector:
-        """根据策略创建队列选择器"""
-        if strategy == RoutingStrategy.ROUND_ROBIN:
-            from pyrocketmq.producer.queue_selectors import RoundRobinSelector
+    def _create_selectors(self) -> None:
+        """预创建所有队列选择器（性能优化）"""
+        from pyrocketmq.producer.queue_selectors import (
+            MessageHashSelector,
+            RandomSelector,
+            RoundRobinSelector,
+        )
 
-            return RoundRobinSelector()
-        elif strategy == RoutingStrategy.RANDOM:
-            from pyrocketmq.producer.queue_selectors import RandomSelector
+        # 创建所有可能用到的选择器
+        self._selectors = {
+            RoutingStrategy.ROUND_ROBIN: RoundRobinSelector(),
+            RoutingStrategy.RANDOM: RandomSelector(),
+            RoutingStrategy.MESSAGE_HASH: MessageHashSelector(),
+        }
 
-            return RandomSelector()
-        elif strategy == RoutingStrategy.MESSAGE_HASH:
-            from pyrocketmq.producer.queue_selectors import MessageHashSelector
-
-            return MessageHashSelector()
-
-        else:
-            # 回退到默认策略
-            from pyrocketmq.producer.queue_selectors import RoundRobinSelector
-
-            return RoundRobinSelector()
+        self._logger.debug(
+            "Pre-created queue selectors",
+            extra={
+                "selectors_count": len(self._selectors),
+                "selector_types": [
+                    type(selector).__name__ for selector in self._selectors.values()
+                ],
+                "timestamp": time.time(),
+            },
+        )
 
     def _select_broker_address(self, broker_data: BrokerData) -> str | None:
         """选择Broker地址"""

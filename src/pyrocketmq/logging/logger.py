@@ -66,29 +66,30 @@ class LoggerFactory:
         # 清除现有的处理器
         root_logger.handlers.clear()
 
+        # 创建JSON格式化器
+        json_formatter = JsonFormatter(
+            include_timestamp=True,
+            include_level=True,
+            include_logger=True,
+            include_module=True,
+            include_function=True,
+            include_line=True,
+            include_extra=True,
+        )
+
         # 添加处理器
         if config.console_output:
             console_handler = cls._create_console_handler(config)
             root_logger.addHandler(console_handler)
+            if config.json_output:
+                console_handler.setFormatter(json_formatter)
 
         if config.file_path:
             file_handler = cls._create_file_handler(config)
             root_logger.addHandler(file_handler)
 
-        if config.json_output:
-            # 创建JSON格式化器
-            json_formatter = JsonFormatter(
-                include_timestamp=True,
-                include_level=True,
-                include_logger=True,
-                include_module=True,
-                include_function=True,
-                include_line=True,
-                include_extra=True,
-            )
-            # 设置JSON格式化器到所有handler
-            for handler in root_logger.handlers:
-                handler.setFormatter(json_formatter)
+            if config.json_output:
+                file_handler.setFormatter(json_formatter)
 
         # 重置已配置的logger集合
         cls._configured_loggers.clear()
