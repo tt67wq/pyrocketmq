@@ -3,6 +3,7 @@ RocketMQ远程命令数据结构
 """
 
 import json
+import warnings
 from dataclasses import dataclass, field
 
 
@@ -51,7 +52,18 @@ class RemotingCommand:
         self.flag |= FlagType.RESPONSE_TYPE
 
     def set_oneway(self) -> None:
-        """设置为单向消息"""
+        """
+        设置为单向消息
+
+        .. deprecated::
+            此方法已被弃用，使用单向消息可能导致服务器端问题。
+            建议使用标准的请求-响应模式。
+        """
+        warnings.warn(
+            "set_oneway() is deprecated and may cause server-side issues. Consider using standard request-response pattern instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.flag |= FlagType.RPC_ONEWAY
 
     def add_ext_field(self, key: str, value: str) -> None:

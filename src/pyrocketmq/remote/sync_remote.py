@@ -253,7 +253,6 @@ class Remote:
         # 生成opaque并设置为单向请求
         opaque = self._generate_opaque()
         command.opaque = opaque
-        command.set_oneway()
 
         try:
             # 序列化并发送命令

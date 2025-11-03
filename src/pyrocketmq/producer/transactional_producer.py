@@ -164,7 +164,7 @@ class TransactionProducer(Producer):
                 send_result,
                 local_state,
                 send_result.message_queue,
-                transaction_id or "",
+                send_result.transaction_id or "",
             )
 
             # 5. 构造事务发送结果
@@ -329,6 +329,12 @@ class TransactionProducer(Producer):
 
             if not routing_result.message_queue:
                 raise QueueNotAvailableError(topic=message.topic)
+
+            # print("*" * 30)
+            # print("message.body:", str(message.body))
+            # print("message.queue:", routing_result.message_queue)
+            # print("message.properties:", message.properties)
+            # print("*" * 30)
 
             # 发送事务消息
             with self._broker_manager.connection(broker_addr) as broker_remote:

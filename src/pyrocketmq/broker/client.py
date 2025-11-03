@@ -2165,6 +2165,9 @@ class BrokerClient:
             # 使用oneway模式发送请求，不等待响应
             start_time = time.time()
             self.remote.oneway(request)
+            # print("------------")
+            # print(str(resp))
+            # print("------------")
             end_tx_rt = time.time() - start_time
 
             self._logger.info(
