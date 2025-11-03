@@ -50,7 +50,6 @@ from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.transaction import (
     HalfMessageSendError,
-    LocalTransactionState,
     SimpleTransactionListener,
     TransactionCheckError,
     TransactionCommitError,
@@ -62,13 +61,16 @@ from pyrocketmq.producer.transaction import (
     TransactionStateError,
     TransactionTimeoutError,
     create_simple_transaction_listener,
-    create_transaction_message,
     create_transaction_send_result,
     create_transaction_send_result_from_base,
 )
 from pyrocketmq.producer.transactional_producer import (
     TransactionProducer,
     create_transactional_producer,
+)
+from pyrocketmq.producer.async_transactional_producer import (
+    AsyncTransactionProducer,
+    create_async_transaction_producer,
 )
 from pyrocketmq.producer.utils import (
     calculate_message_size,
@@ -106,12 +108,12 @@ __all__ = [
     "TransactionListener",
     "SimpleTransactionListener",
     "TransactionSendResult",
-    "LocalTransactionState",
     "TransactionState",
     "create_simple_transaction_listener",
-    "create_transaction_message",
     "create_transaction_send_result",
     "create_transaction_send_result_from_base",
+    "AsyncTransactionProducer",
+    "create_async_transaction_producer",
     # Utils
     "generate_client_id",
     "validate_message",

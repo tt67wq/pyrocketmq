@@ -32,7 +32,7 @@ from pyrocketmq.producer import (
     create_transactional_producer,
 )
 from pyrocketmq.producer.errors import ProducerError
-from pyrocketmq.producer.transaction import SimpleTransactionListener
+from pyrocketmq.producer.transaction import create_simple_transaction_listener
 
 
 def main():
@@ -43,7 +43,7 @@ def main():
     print("=== 事务消息Producer示例 ===")
 
     # 创建事务监听器
-    transaction_listener = SimpleTransactionListener(always_unknow=True)
+    transaction_listener = create_simple_transaction_listener(True)
 
     # 创建事务Producer
     producer = create_transactional_producer(

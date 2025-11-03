@@ -244,19 +244,73 @@ class MessageRouter:
         routing_strategy = strategy or self.default_strategy
         start_time = time.time()
 
+        # Debug: 记录路由请求开始
+        logger.debug(
+            "Starting message routing",
+            extra={
+                "operation": "route_message",
+                "topic": topic,
+                "strategy": routing_strategy.value,
+                "message_size": len(message.body) if message else 0,
+                "message_properties": len(message.properties)
+                if message and message.properties
+                else 0,
+                "timestamp": time.time(),
+            },
+        )
+
         try:
             with self._stats_lock:
                 self._routing_stats["total_routing"] += 1
                 self._routing_stats["strategy_usage"][routing_strategy.value] += 1
 
+            # Debug: 记录即将获取可用队列
+            logger.debug(
+                "Fetching available queues for topic",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "routing_strategy": routing_strategy.value,
+                    "timestamp": time.time(),
+                },
+            )
             # 获取可用队列
-            available_queues = self._get_available_queues(topic)
+            available_queues: list[tuple[MessageQueue, BrokerData]] = (
+                self._get_available_queues(topic)
+            )
+
+            # Debug: 记录可用队列信息
+            logger.debug(
+                "Retrieved available queues",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "available_queues_count": len(available_queues),
+                    "timestamp": time.time(),
+                },
+            )
+
             if not available_queues:
                 error = RouteNotFoundError(
                     f"No available queues found for topic: {topic}"
                 )
+
+                # Debug: 记录队列为空的情况
+                logger.debug(
+                    "No available queues found",
+                    extra={
+                        "operation": "route_message",
+                        "topic": topic,
+                        "error_type": "RouteNotFoundError",
+                        "error_message": str(error),
+                        "routing_strategy": routing_strategy.value,
+                        "timestamp": time.time(),
+                    },
+                )
+
                 with self._stats_lock:
                     self._routing_stats["failed_routing"] += 1
+
                 return RoutingResult(
                     success=False,
                     error=error,
@@ -265,10 +319,49 @@ class MessageRouter:
 
             # 根据策略选择队列
             selector = self._create_selector(routing_strategy)
+
+            # Debug: 记录选择器创建
+            logger.debug(
+                "Created queue selector",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "selector_type": type(selector).__name__,
+                    "routing_strategy": routing_strategy.value,
+                    "timestamp": time.time(),
+                },
+            )
+
             selected_result = selector.select(topic, available_queues, message)
+
+            # Debug: 记录队列选择结果
+            logger.debug(
+                "Selected queue from available options",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "selection_success": selected_result is not None,
+                    "timestamp": time.time(),
+                },
+            )
 
             if not selected_result:
                 error = QueueNotAvailableError(f"No queue selected for topic: {topic}")
+
+                # Debug: 记录队列选择失败
+                logger.debug(
+                    "Queue selection failed",
+                    extra={
+                        "operation": "route_message",
+                        "topic": topic,
+                        "error_type": "QueueNotAvailableError",
+                        "error_message": str(error),
+                        "available_queues_count": len(available_queues),
+                        "routing_strategy": routing_strategy.value,
+                        "timestamp": time.time(),
+                    },
+                )
+
                 with self._stats_lock:
                     self._routing_stats["failed_routing"] += 1
                 return RoutingResult(
@@ -279,12 +372,62 @@ class MessageRouter:
 
             message_queue, broker_data = selected_result
 
+            # Debug: 记录选择的队列和broker信息
+            logger.debug(
+                "Queue and broker selected",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "selected_queue": f"{message_queue.broker_name}:{message_queue.queue_id}",
+                    "selected_broker": broker_data.broker_name,
+                    "broker_addresses": list(broker_data.broker_addresses.keys())
+                    if broker_data.broker_addresses
+                    else [],
+                    "timestamp": time.time(),
+                },
+            )
+
             # 选择Broker地址
             broker_address = self._select_broker_address(broker_data)
+
+            # Debug: 记录broker地址选择结果
+            logger.debug(
+                "Selected broker address",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "broker_name": broker_data.broker_name,
+                    "selected_address": broker_address,
+                    "available_addresses": list(broker_data.broker_addresses.keys())
+                    if broker_data.broker_addresses
+                    else [],
+                    "address_selection_success": broker_address is not None,
+                    "timestamp": time.time(),
+                },
+            )
+
             if not broker_address:
                 error = BrokerNotAvailableError(
                     f"No available address for broker: {broker_data.broker_name}"
                 )
+
+                # Debug: 记录broker地址选择失败
+                logger.debug(
+                    "Broker address selection failed",
+                    extra={
+                        "operation": "route_message",
+                        "topic": topic,
+                        "error_type": "BrokerNotAvailableError",
+                        "error_message": str(error),
+                        "broker_name": broker_data.broker_name,
+                        "available_addresses": list(broker_data.broker_addresses.keys())
+                        if broker_data.broker_addresses
+                        else [],
+                        "routing_strategy": routing_strategy.value,
+                        "timestamp": time.time(),
+                    },
+                )
+
                 with self._stats_lock:
                     self._routing_stats["failed_routing"] += 1
                 return RoutingResult(
@@ -301,12 +444,27 @@ class MessageRouter:
                     self._routing_stats["broker_usage"].get(broker_name, 0) + 1
                 )
 
+                # Debug: 记录统计信息更新
+                successful_routing = self._routing_stats["successful_routing"]
+                broker_usage = self._routing_stats["broker_usage"][broker_name]
+
             routing_time = (time.time() - start_time) * 1000  # ms
 
+            # Debug: 记录成功路由的结构化日志
             logger.debug(
-                f"Message routed successfully for topic {topic}: "
-                f"queue={message_queue.full_name}, broker={broker_data.broker_name}, "
-                f"address={broker_address}, strategy={routing_strategy.value}, time={routing_time:.2f}ms"
+                "Message routed successfully",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "queue_name": message_queue.full_name,
+                    "broker_name": broker_data.broker_name,
+                    "broker_address": broker_address,
+                    "routing_strategy": routing_strategy.value,
+                    "routing_time_ms": round(routing_time, 2),
+                    "successful_routing_count": successful_routing,
+                    "broker_usage_count": broker_usage,
+                    "timestamp": time.time(),
+                },
             )
 
             return RoutingResult(
@@ -321,7 +479,20 @@ class MessageRouter:
             with self._stats_lock:
                 self._routing_stats["failed_routing"] += 1
 
-            logger.error(f"Routing failed for topic {topic}: {e}")
+            # Error: 记录路由失败的结构化日志
+            logger.error(
+                "Routing failed with exception",
+                extra={
+                    "operation": "route_message",
+                    "topic": topic,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "routing_strategy": routing_strategy.value,
+                    "failed_routing_count": self._routing_stats["failed_routing"],
+                    "timestamp": time.time(),
+                },
+            )
+
             return RoutingResult(
                 success=False, error=e, routing_strategy=routing_strategy
             )

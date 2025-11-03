@@ -697,7 +697,7 @@ class AsyncTransactionProducer(AsyncProducer):
 
 
 # 便利函数
-async def create_async_transaction_producer(
+def create_async_transaction_producer(
     producer_group: str,
     namesrv_addr: str,
     transaction_listener: AsyncTransactionListener | None = None,
