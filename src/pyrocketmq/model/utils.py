@@ -55,7 +55,7 @@ def _get_client_ip4() -> bytes:
 
 def _get_pid() -> int:
     """获取进程ID（Go的Pid()的Python实现）"""
-    return os.getpid()
+    return os.getpid() & 0xFFFF
 
 
 def _generate_prefix() -> str:
@@ -92,11 +92,11 @@ def _generate_prefix() -> str:
 
     buf.extend(ip_bytes)
 
-    # 写入进程ID（int32，大端序）
-    buf.extend(struct.pack(">i", _get_pid()))
+    # 写入进程ID（int16，大端序）
+    buf.extend(struct.pack(">h", _get_pid()))
 
     # 写入类加载器ID（int32，大端序）
-    buf.extend(struct.pack(">i", _CLASS_LOAD_ID))
+    buf.extend(struct.pack(">i", _CLASS_LOAD_ID & 0xFFFF))
 
     # 编码为大写的十六进制字符串
     return buf.hex().upper()
@@ -631,8 +631,8 @@ def create_uniq_id() -> str:
         # 写入时间差（int32，大端序）
         buf.extend(struct.pack(">i", time_diff_ms))
 
-        # 写入计数器（int32，大端序）
-        buf.extend(struct.pack(">i", _counter))
+        # 写入计数器（int16，大端序）
+        buf.extend(struct.pack(">h", _counter))
 
         # 编码为十六进制字符串
         hex_str = buf.hex()
@@ -646,6 +646,7 @@ def parse_uniq_id(uniq_id: str) -> tuple[int, int] | None:
     解析唯一ID，提取时间戳和计数器信息
 
     注意：前缀是动态生成的，长度为24字符（IP 4字节 + PID 4字节 + ClassLoadId 4字节 = 12字节 = 24字符hex）
+    数据部分长度为6字节（int32时间差 4字节 + int16计数器 2字节 = 6字节 = 12字符hex）
 
     Args:
         uniq_id: 唯一ID字符串
@@ -660,15 +661,15 @@ def parse_uniq_id(uniq_id: str) -> tuple[int, int] | None:
         # 移除前缀
         hex_part = uniq_id[len(_ID_PREFIX) :]
 
-        # 确保hex字符串长度正确（16进制，8字节=16字符）
-        if len(hex_part) != 16:
+        # 确保hex字符串长度正确（int32时间差4字节 + int16计数器2字节 = 6字节 = 12字符hex）
+        if len(hex_part) != 12:
             return None
 
         # 将十六进制字符串转换为字节
         buf = bytes.fromhex(hex_part)
 
-        # 解包数据（大端序）
-        time_diff_ms, counter = struct.unpack(">ii", buf)
+        # 解包数据（大端序）：int32时间差 + int16计数器
+        time_diff_ms, counter = struct.unpack(">ih", buf)
 
         return time_diff_ms, counter
 
