@@ -5,7 +5,7 @@
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 from pyrocketmq.model.utils import create_uniq_id
 
 from .message_queue import MessageQueue

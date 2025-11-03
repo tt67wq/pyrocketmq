@@ -3,9 +3,11 @@ RocketMQ模型层工具函数
 """
 
 import json
+import socket
 import struct
 import time
 import threading
+import os
 from typing import Any, Final
 
 from .command import RemotingCommand
@@ -23,9 +25,6 @@ from .errors import ValidationError
 # 唯一ID生成相关常量和变量
 # ============================================================================
 
-# ID前缀
-ID_PREFIX: Final[str] = "PYRMQ"
-
 # 起始时间戳（程序启动时记录）
 START_TIMESTAMP: Final[int] = int(time.time())
 
@@ -33,6 +32,78 @@ START_TIMESTAMP: Final[int] = int(time.time())
 _counter: int = 0
 _next_timestamp: int = 0
 _counter_lock: threading.Lock = threading.Lock()
+
+
+# 类加载器ID（Go代码中的classLoadId的Python等价物）
+_CLASS_LOAD_ID: Final[int] = hash(time.time()) & 0xFFFFFFFF
+
+
+def _get_client_ip4() -> bytes:
+    """获取客户端IPv4地址（Go的utils.ClientIP4()的Python实现）"""
+    try:
+        # 尝试连接外部地址获取本地IP
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+    except Exception:
+        # 如果失败，使用本地回环地址
+        ip = "127.0.0.1"
+
+    # 将IP地址转换为4字节
+    return socket.inet_aton(ip)
+
+
+def _get_pid() -> int:
+    """获取进程ID（Go的Pid()的Python实现）"""
+    return os.getpid()
+
+
+def _generate_prefix() -> str:
+    """
+    生成ID前缀，与Go实现完全一致
+
+    Go代码参考：
+    ```go
+    func init() {
+        buf := new(bytes.Buffer)
+
+        ip, err := utils.ClientIP4()
+        if err != nil {
+            ip = utils.FakeIP()
+        }
+        _, _ = buf.Write(ip)
+        _ = binary.Write(buf, binary.BigEndian, Pid())
+        _ = binary.Write(buf, binary.BigEndian, classLoadId)
+        prefix = strings.ToUpper(hex.EncodeToString(buf.Bytes()))
+    }
+    ```
+
+    Returns:
+        str: 大写的十六进制编码前缀
+    """
+    buf = bytearray()
+
+    # 写入IP地址（4字节）
+    try:
+        ip_bytes = _get_client_ip4()
+    except Exception:
+        # 使用Go的FakeIP()等价物 - 使用固定的测试IP
+        ip_bytes = socket.inet_aton("192.168.0.1")
+
+    buf.extend(ip_bytes)
+
+    # 写入进程ID（int32，大端序）
+    buf.extend(struct.pack(">i", _get_pid()))
+
+    # 写入类加载器ID（int32，大端序）
+    buf.extend(struct.pack(">i", _CLASS_LOAD_ID))
+
+    # 编码为大写的十六进制字符串
+    return buf.hex().upper()
+
+
+# 在模块初始化时生成前缀
+_ID_PREFIX: str = _generate_prefix()
 
 
 def validate_command(command: RemotingCommand) -> bool:
@@ -331,7 +402,7 @@ def format_ext_fields_for_display(ext_fields: dict[str, str]) -> str:
     if not ext_fields:
         return "{}"
 
-    lines = []
+    lines: list[str] = []
     for key, value in sorted(ext_fields.items()):
         lines.append(f"  {key}: {value}")
 
@@ -511,44 +582,70 @@ def create_uniq_id() -> str:
     """
     创建唯一ID
 
-    参考Go实现逻辑：
-    1. 检查时间戳是否需要更新
-    2. 增加计数器
-    3. 将时间差和计数器转换为字节数组
+    与Go实现完全对齐：
+    1. 检查当前时间是否超过nextTimestamp，如果是则更新时间戳
+    2. 递增计数器
+    3. 将时间差和计数器写入字节缓冲区（大端序，int32）
     4. 编码为十六进制字符串并添加前缀
 
+    Go代码参考：
+    ```go
+    func CreateUniqID() string {
+        locker.Lock()
+        defer locker.Unlock()
+
+        if time.Now().Unix() > nextTimestamp {
+            updateTimestamp()
+        }
+        counter++
+        buf := new(bytes.Buffer)
+        _ = binary.Write(buf, binary.BigEndian, int32((time.Now().Unix()-startTimestamp)*1000))
+        _ = binary.Write(buf, binary.BigEndian, counter)
+
+        return prefix + hex.EncodeToString(buf.Bytes())
+    }
+    ```
+
     Returns:
-        str: 格式为 "PYRMQ" + 十六进制编码的唯一ID
+        str: 格式为 prefix + 十六进制编码的唯一ID
     """
     global _counter, _next_timestamp
 
     with _counter_lock:
-        current_time = int(time.time())
+        current_unix_time = int(time.time())
 
-        # 如果当前时间超过了记录的时间戳，更新时间戳
-        if current_time > _next_timestamp:
+        # 检查当前时间是否超过nextTimestamp
+        if current_unix_time > _next_timestamp:
             _update_timestamp()
 
-        # 增加计数器
+        # 递增计数器
         _counter += 1
 
-        # 计算时间差（毫秒）
-        time_diff_ms = (current_time - START_TIMESTAMP) * 1000
+        # 计算时间差（毫秒），与Go实现保持一致
+        time_diff_ms = (current_unix_time - START_TIMESTAMP) * 1000
 
-        # 使用struct打包数据（大端序）
-        # int32时间差 + int32计数器 = 8字节
-        buf = struct.pack(">ii", time_diff_ms, _counter)
+        # 创建字节缓冲区并写入数据（大端序，int32）
+        # 与Go的binary.Write(buf, binary.BigEndian, int32(...))保持一致
+        buf = bytearray()
+
+        # 写入时间差（int32，大端序）
+        buf.extend(struct.pack(">i", time_diff_ms))
+
+        # 写入计数器（int32，大端序）
+        buf.extend(struct.pack(">i", _counter))
 
         # 编码为十六进制字符串
         hex_str = buf.hex()
 
-        # 返回带前缀的唯一ID
-        return f"{ID_PREFIX}{hex_str}"
+        # 返回带动态生成前缀的唯一ID
+        return f"{_ID_PREFIX}{hex_str}"
 
 
 def parse_uniq_id(uniq_id: str) -> tuple[int, int] | None:
     """
     解析唯一ID，提取时间戳和计数器信息
+
+    注意：前缀是动态生成的，长度为24字符（IP 4字节 + PID 4字节 + ClassLoadId 4字节 = 12字节 = 24字符hex）
 
     Args:
         uniq_id: 唯一ID字符串
@@ -556,12 +653,12 @@ def parse_uniq_id(uniq_id: str) -> tuple[int, int] | None:
     Returns:
         tuple[int, int] | None: (时间差毫秒, 计数器) 的元组，解析失败返回None
     """
-    if not uniq_id.startswith(ID_PREFIX):
+    if not uniq_id.startswith(_ID_PREFIX):
         return None
 
     try:
         # 移除前缀
-        hex_part = uniq_id[len(ID_PREFIX) :]
+        hex_part = uniq_id[len(_ID_PREFIX) :]
 
         # 确保hex字符串长度正确（16进制，8字节=16字符）
         if len(hex_part) != 16:
