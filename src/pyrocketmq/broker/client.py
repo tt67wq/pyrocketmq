@@ -4,6 +4,7 @@ Broker 客户端实现
 """
 
 import json
+import logging
 import time
 
 
@@ -32,8 +33,6 @@ from .errors import (
     OffsetError,
 )
 
-logger = get_logger(__name__)
-
 
 class BrokerClient:
     """同步 Broker 客户端
@@ -55,11 +54,12 @@ class BrokerClient:
         self.remote = remote
         self.timeout = timeout
         self._client_id = f"client_{int(time.time() * 1000)}"
+        self._logger: logging.Logger = get_logger(__name__)
 
     def connect(self) -> None:
         """建立连接"""
         try:
-            logger.info(
+            self._logger.info(
                 "Connecting to Broker",
                 extra={
                     "client_id": self._client_id,
@@ -70,7 +70,7 @@ class BrokerClient:
                 },
             )
             self.remote.connect()
-            logger.info(
+            self._logger.info(
                 "Connected to Broker successfully",
                 extra={
                     "client_id": self._client_id,
@@ -80,7 +80,7 @@ class BrokerClient:
                 },
             )
         except Exception as e:
-            logger.error(
+            self._logger.error(
                 "Failed to connect to Broker",
                 extra={
                     "client_id": self._client_id,
@@ -95,7 +95,7 @@ class BrokerClient:
     def disconnect(self) -> None:
         """断开连接"""
         try:
-            logger.info(
+            self._logger.info(
                 "Disconnecting from Broker",
                 extra={
                     "client_id": self._client_id,
@@ -104,7 +104,7 @@ class BrokerClient:
                 },
             )
             self.remote.close()
-            logger.info(
+            self._logger.info(
                 "Disconnected from Broker successfully",
                 extra={
                     "client_id": self._client_id,
@@ -114,7 +114,7 @@ class BrokerClient:
                 },
             )
         except Exception as e:
-            logger.error(
+            self._logger.error(
                 "Failed to disconnect from Broker",
                 extra={
                     "client_id": self._client_id,
@@ -167,7 +167,7 @@ class BrokerClient:
         else:
             status = SendStatus.SEND_UNKNOWN_ERROR
             error_msg = response.ext_fields.get("remark", "Unknown error")
-            logger.error(
+            self._logger.error(
                 "Send message failed",
                 extra={
                     "client_id": self._client_id,
@@ -219,7 +219,7 @@ class BrokerClient:
             trace_on=trace_on,
         )
 
-        logger.debug(
+        self._logger.debug(
             "Process send response",
             extra={
                 "client_id": self._client_id,
@@ -262,7 +262,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Sending message",
                 extra={
                     "client_id": self._client_id,
@@ -295,7 +295,7 @@ class BrokerClient:
                 error_msg = f"Send message failed with code {response.code}"
                 if response.language and response.body:
                     error_msg += f": {response.body.decode('utf-8', errors='ignore')}"
-                logger.error(
+                self._logger.error(
                     "Send message failed",
                     extra={
                         "client_id": self._client_id,
@@ -314,7 +314,7 @@ class BrokerClient:
             try:
                 result = self._process_send_response(response, mq, properties)
             except Exception as e:
-                logger.error(
+                self._logger.error(
                     "Failed to parse SendMessageResult",
                     extra={
                         "client_id": self._client_id,
@@ -329,7 +329,7 @@ class BrokerClient:
                 )
                 raise BrokerResponseError(f"Invalid response format: {e}")
 
-            logger.info(
+            self._logger.info(
                 "Successfully sent message",
                 extra={
                     "client_id": self._client_id,
@@ -358,7 +358,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during send_message",
                 extra={
                     "client_id": self._client_id,
@@ -398,7 +398,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Oneway sending message",
                 extra={
                     "client_id": self._client_id,
@@ -426,7 +426,7 @@ class BrokerClient:
             self.remote.oneway(request)
             send_msg_rt = time.time() - start_time
 
-            logger.info(
+            self._logger.info(
                 "Successfully oneway sent message",
                 extra={
                     "client_id": self._client_id,
@@ -444,7 +444,7 @@ class BrokerClient:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during oneway_send_message",
                 extra={
                     "client_id": self._client_id,
@@ -490,7 +490,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Sending batch message",
                 extra={
                     "client_id": self._client_id,
@@ -521,7 +521,7 @@ class BrokerClient:
                 # 创建发送结果
                 result = self._process_send_response(response, mq, properties)
 
-                logger.debug(
+                self._logger.debug(
                     "Batch message sent successfully",
                     extra={
                         "client_id": self._client_id,
@@ -562,7 +562,7 @@ class BrokerClient:
                     "ConnectionRefusedError",
                 ]
             ):
-                logger.error(
+                self._logger.error(
                     "Network error during send_batch_message",
                     extra={
                         "client_id": self._client_id,
@@ -578,7 +578,7 @@ class BrokerClient:
                 )
                 raise BrokerConnectionError(f"Network error: {e}")
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during send_batch_message",
                 extra={
                     "client_id": self._client_id,
@@ -620,7 +620,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Oneway sending batch message",
                 extra={
                     "client_id": self._client_id,
@@ -648,7 +648,7 @@ class BrokerClient:
             self.remote.oneway(request)
             send_msg_rt = time.time() - start_time
 
-            logger.info(
+            self._logger.info(
                 "Successfully oneway sent batch message",
                 extra={
                     "client_id": self._client_id,
@@ -666,7 +666,7 @@ class BrokerClient:
             if isinstance(e, (BrokerConnectionError, BrokerTimeoutError)):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during oneway_batch_send_message",
                 extra={
                     "client_id": self._client_id,
@@ -715,7 +715,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Pulling message",
                 extra={
                     "client_id": self._client_id,
@@ -744,7 +744,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             pull_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Pull response received",
                 extra={
                     "client_id": self._client_id,
@@ -764,7 +764,7 @@ class BrokerClient:
                 if response.body:
                     result = PullMessageResult.from_bytes(response.body)
                     result.pull_rt = pull_rt
-                    logger.info(
+                    self._logger.info(
                         "Successfully pulled messages",
                         extra={
                             "client_id": self._client_id,
@@ -782,7 +782,7 @@ class BrokerClient:
                     return result
                 else:
                     # 没有消息但响应成功
-                    logger.info(
+                    self._logger.info(
                         "No messages found",
                         extra={
                             "client_id": self._client_id,
@@ -805,7 +805,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.PULL_NOT_FOUND:
                 # 没有找到消息
-                logger.info(
+                self._logger.info(
                     "No messages found",
                     extra={
                         "client_id": self._client_id,
@@ -829,7 +829,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.PULL_OFFSET_MOVED:
                 # 偏移量已移动
-                logger.warning(
+                self._logger.warning(
                     "Pull offset moved",
                     extra={
                         "client_id": self._client_id,
@@ -852,7 +852,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.PULL_RETRY_IMMEDIATELY:
                 # 需要立即重试
-                logger.warning(
+                self._logger.warning(
                     "Pull retry immediately",
                     extra={
                         "client_id": self._client_id,
@@ -876,7 +876,7 @@ class BrokerClient:
             else:
                 # 其他错误响应
                 error_msg = response.remark or f"Unknown pull error: {response.code}"
-                logger.error(
+                self._logger.error(
                     "Pull message failed",
                     extra={
                         "client_id": self._client_id,
@@ -908,7 +908,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during pull_message",
                 extra={
                     "client_id": self._client_id,
@@ -953,7 +953,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Querying consumer offset",
                 extra={
                     "client_id": self._client_id,
@@ -977,7 +977,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             query_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Query offset response received",
                 extra={
                     "client_id": self._client_id,
@@ -998,7 +998,7 @@ class BrokerClient:
                     try:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
-                        logger.info(
+                        self._logger.info(
                             "Successfully queried consumer offset",
                             extra={
                                 "client_id": self._client_id,
@@ -1014,7 +1014,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
+                        self._logger.error(
                             "Failed to parse offset from ext_fields",
                             extra={
                                 "client_id": self._client_id,
@@ -1034,7 +1034,7 @@ class BrokerClient:
                         )
                 else:
                     # 响应成功但没有offset字段，可能表示偏移量为0或未设置
-                    logger.info(
+                    self._logger.info(
                         "No offset field found, returning 0",
                         extra={
                             "client_id": self._client_id,
@@ -1052,7 +1052,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.QUERY_NOT_FOUND:
                 # 没有找到偏移量，通常返回-1或0
-                logger.info(
+                self._logger.info(
                     "Consumer offset not found",
                     extra={
                         "client_id": self._client_id,
@@ -1067,15 +1067,14 @@ class BrokerClient:
                     },
                 )
                 raise OffsetError(
-                    f"Consumer offset not found: consumerGroup={consumer_group}, "
-                    f"topic={topic}, queueId={queue_id}",
+                    f"Consumer offset not found: consumerGroup={consumer_group}, topic={topic}, queueId={queue_id}",
                     topic=topic,
                     queue_id=queue_id,
                 )
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(
+                self._logger.error(
                     "Topic not exist",
                     extra={
                         "client_id": self._client_id,
@@ -1097,7 +1096,7 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误，可能包括消费者组不存在、系统错误、权限错误等
                 error_msg = response.remark or "General error"
-                logger.error(
+                self._logger.error(
                     "Query consumer offset error",
                     extra={
                         "client_id": self._client_id,
@@ -1120,7 +1119,7 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(
+                self._logger.error(
                     "Service not available",
                     extra={
                         "client_id": self._client_id,
@@ -1145,7 +1144,7 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown query offset error: {response.code}"
                 )
-                logger.error(
+                self._logger.error(
                     "Query consumer offset failed",
                     extra={
                         "client_id": self._client_id,
@@ -1177,7 +1176,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during query_consumer_offset",
                 extra={
                     "client_id": self._client_id,
@@ -1219,7 +1218,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Updating consumer offset (oneway)",
                 extra={
                     "client_id": self._client_id,
@@ -1245,7 +1244,7 @@ class BrokerClient:
             self.remote.oneway(request)
             update_rt = time.time() - start_time
 
-            logger.info(
+            self._logger.info(
                 "Successfully sent consumer offset update (oneway)",
                 extra={
                     "client_id": self._client_id,
@@ -1264,7 +1263,7 @@ class BrokerClient:
             if isinstance(e, BrokerConnectionError):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during update_consumer_offset",
                 extra={
                     "client_id": self._client_id,
@@ -1310,7 +1309,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Searching offset by timestamp",
                 extra={
                     "client_id": self._client_id,
@@ -1334,7 +1333,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             search_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Search offset response received",
                 extra={
                     "client_id": self._client_id,
@@ -1355,7 +1354,7 @@ class BrokerClient:
                     try:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
-                        logger.info(
+                        self._logger.info(
                             "Successfully searched offset by timestamp",
                             extra={
                                 "client_id": self._client_id,
@@ -1371,7 +1370,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
+                        self._logger.error(
                             "Failed to parse offset from ext_fields",
                             extra={
                                 "client_id": self._client_id,
@@ -1391,7 +1390,7 @@ class BrokerClient:
                         )
                 else:
                     # 响应成功但没有offset字段
-                    logger.error(
+                    self._logger.error(
                         "No offset field found in response",
                         extra={
                             "client_id": self._client_id,
@@ -1404,15 +1403,14 @@ class BrokerClient:
                         },
                     )
                     raise OffsetError(
-                        f"No offset field found in response: topic={topic}, "
-                        f"queueId={queue_id}, timestamp={timestamp}",
+                        f"No offset field found in response: topic={topic}, queueId={queue_id}, timestamp={timestamp}",
                         topic=topic,
                         queue_id=queue_id,
                     )
 
             elif response.code == ResponseCode.QUERY_NOT_FOUND:
                 # 没有找到对应的偏移量
-                logger.info(
+                self._logger.info(
                     "No offset found for timestamp",
                     extra={
                         "client_id": self._client_id,
@@ -1429,7 +1427,7 @@ class BrokerClient:
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(
+                self._logger.error(
                     "Topic not exist",
                     extra={
                         "client_id": self._client_id,
@@ -1451,7 +1449,7 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "General error"
-                logger.error(
+                self._logger.error(
                     "Search offset by timestamp error",
                     extra={
                         "client_id": self._client_id,
@@ -1473,7 +1471,7 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(
+                self._logger.error(
                     "Service not available",
                     extra={
                         "client_id": self._client_id,
@@ -1496,7 +1494,7 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown search offset error: {response.code}"
                 )
-                logger.error(
+                self._logger.error(
                     "Search offset by timestamp failed",
                     extra={
                         "client_id": self._client_id,
@@ -1527,7 +1525,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during search_offset_by_timestamp",
                 extra={
                     "client_id": self._client_id,
@@ -1566,7 +1564,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Getting max offset",
                 extra={
                     "client_id": self._client_id,
@@ -1588,7 +1586,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             query_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Get max offset response received",
                 extra={
                     "client_id": self._client_id,
@@ -1608,7 +1606,7 @@ class BrokerClient:
                     try:
                         offset_str = response.ext_fields["offset"]
                         offset = int(offset_str)
-                        logger.info(
+                        self._logger.info(
                             "Successfully got max offset",
                             extra={
                                 "client_id": self._client_id,
@@ -1623,7 +1621,7 @@ class BrokerClient:
                         )
                         return offset
                     except (ValueError, TypeError) as e:
-                        logger.error(
+                        self._logger.error(
                             "Failed to parse offset from ext_fields",
                             extra={
                                 "client_id": self._client_id,
@@ -1642,7 +1640,7 @@ class BrokerClient:
                         )
                 else:
                     # 响应成功但没有offset字段
-                    logger.error(
+                    self._logger.error(
                         "No offset field found in response",
                         extra={
                             "client_id": self._client_id,
@@ -1654,15 +1652,14 @@ class BrokerClient:
                         },
                     )
                     raise OffsetError(
-                        f"No offset field found in response: topic={topic}, "
-                        f"queueId={queue_id}",
+                        f"No offset field found in response: topic={topic}, queue={queue_id}",
                         topic=topic,
                         queue_id=queue_id,
                     )
 
             elif response.code == ResponseCode.TOPIC_NOT_EXIST:
                 # 主题不存在
-                logger.error(
+                self._logger.error(
                     "Topic not exist",
                     extra={
                         "client_id": self._client_id,
@@ -1683,7 +1680,7 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "General error"
-                logger.error(
+                self._logger.error(
                     "Get max offset error",
                     extra={
                         "client_id": self._client_id,
@@ -1704,7 +1701,7 @@ class BrokerClient:
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
                 error_msg = response.remark or "Service not available"
-                logger.error(
+                self._logger.error(
                     "Service not available",
                     extra={
                         "client_id": self._client_id,
@@ -1726,7 +1723,7 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown get max offset error: {response.code}"
                 )
-                logger.error(
+                self._logger.error(
                     "Get max offset failed",
                     extra={
                         "client_id": self._client_id,
@@ -1756,7 +1753,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during get_max_offset",
                 extra={
                     "client_id": self._client_id,
@@ -1789,7 +1786,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Sending heartbeat",
                 extra={
                     "client_id": self._client_id,
@@ -1809,7 +1806,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             heartbeat_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Heartbeat response received",
                 extra={
                     "client_id": self._client_id,
@@ -1824,7 +1821,7 @@ class BrokerClient:
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 心跳成功
-                logger.debug(
+                self._logger.debug(
                     "Successfully sent heartbeat",
                     extra={
                         "client_id": self._client_id,
@@ -1839,7 +1836,7 @@ class BrokerClient:
                 )
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
-                logger.warning(
+                self._logger.warning(
                     "Service not available during heartbeat",
                     extra={
                         "client_id": self._client_id,
@@ -1858,7 +1855,7 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "Heartbeat error"
-                logger.error(
+                self._logger.error(
                     "Heartbeat failed",
                     extra={
                         "client_id": self._client_id,
@@ -1879,7 +1876,7 @@ class BrokerClient:
                 error_msg = (
                     response.remark or f"Unknown heartbeat error: {response.code}"
                 )
-                logger.error(
+                self._logger.error(
                     "Heartbeat failed",
                     extra={
                         "client_id": self._client_id,
@@ -1907,7 +1904,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during send_heartbeat",
                 extra={
                     "client_id": self._client_id,
@@ -1944,7 +1941,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Sending consumer send msg back",
                 extra={
                     "client_id": self._client_id,
@@ -1972,7 +1969,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             send_back_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Consumer send msg back response received",
                 extra={
                     "client_id": self._client_id,
@@ -1989,7 +1986,7 @@ class BrokerClient:
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 发送回退成功
-                logger.info(
+                self._logger.info(
                     "Successfully sent consumer send msg back",
                     extra={
                         "client_id": self._client_id,
@@ -2005,7 +2002,7 @@ class BrokerClient:
                 )
             elif response.code == ResponseCode.SERVICE_NOT_AVAILABLE:
                 # 服务不可用
-                logger.warning(
+                self._logger.warning(
                     "Service not available during consumer send msg back",
                     extra={
                         "client_id": self._client_id,
@@ -2026,7 +2023,7 @@ class BrokerClient:
             elif response.code == ResponseCode.ERROR:
                 # 通用错误
                 error_msg = response.remark or "Consumer send msg back error"
-                logger.error(
+                self._logger.error(
                     "Consumer send msg back failed",
                     extra={
                         "client_id": self._client_id,
@@ -2050,7 +2047,7 @@ class BrokerClient:
                     response.remark
                     or f"Unknown consumer send msg back error: {response.code}"
                 )
-                logger.error(
+                self._logger.error(
                     "Consumer send msg back failed",
                     extra={
                         "client_id": self._client_id,
@@ -2080,7 +2077,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during consumer_send_msg_back",
                 extra={
                     "client_id": self._client_id,
@@ -2137,7 +2134,7 @@ class BrokerClient:
                 else "unknown"
             )
 
-            logger.debug(
+            self._logger.debug(
                 "Sending end transaction",
                 extra={
                     "client_id": self._client_id,
@@ -2170,7 +2167,7 @@ class BrokerClient:
             self.remote.oneway(request)
             end_tx_rt = time.time() - start_time
 
-            logger.info(
+            self._logger.info(
                 "Successfully sent end transaction",
                 extra={
                     "client_id": self._client_id,
@@ -2193,7 +2190,7 @@ class BrokerClient:
             if isinstance(e, BrokerConnectionError):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during end_transaction",
                 extra={
                     "client_id": self._client_id,
@@ -2229,7 +2226,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Getting consumer list for group",
                 extra={
                     "client_id": self._client_id,
@@ -2249,7 +2246,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             get_consumers_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Get consumer list response received",
                 extra={
                     "client_id": self._client_id,
@@ -2279,7 +2276,7 @@ class BrokerClient:
                             # 如果直接返回列表
                             consumer_list = consumer_data
                         else:
-                            logger.warning(
+                            self._logger.warning(
                                 "Unexpected consumer data format",
                                 extra={
                                     "client_id": self._client_id,
@@ -2291,7 +2288,7 @@ class BrokerClient:
                             )
                             consumer_list = []
 
-                        logger.info(
+                        self._logger.info(
                             "Successfully got consumer list for group",
                             extra={
                                 "client_id": self._client_id,
@@ -2306,7 +2303,7 @@ class BrokerClient:
                         return consumer_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
+                        self._logger.error(
                             "Failed to parse consumer list response",
                             extra={
                                 "client_id": self._client_id,
@@ -2318,7 +2315,7 @@ class BrokerClient:
                             },
                         )
                         # 如果解析失败，返回空列表而不是抛出异常
-                        logger.warning(
+                        self._logger.warning(
                             "Returning empty consumer list due to parsing failure",
                             extra={
                                 "client_id": self._client_id,
@@ -2330,7 +2327,7 @@ class BrokerClient:
                         )
                         return []
                 else:
-                    logger.info(
+                    self._logger.info(
                         "No consumer data returned for group",
                         extra={
                             "client_id": self._client_id,
@@ -2344,7 +2341,7 @@ class BrokerClient:
                     return []
             else:
                 error_msg = f"Failed to get consumer list for group '{consumer_group}': {response.code}-{response.remark}"
-                logger.error(
+                self._logger.error(
                     "Failed to get consumer list for group",
                     extra={
                         "client_id": self._client_id,
@@ -2370,7 +2367,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during get_consumers_by_group",
                 extra={
                     "client_id": self._client_id,
@@ -2407,7 +2404,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Locking batch message queues",
                 extra={
                     "client_id": self._client_id,
@@ -2431,7 +2428,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             lock_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Lock batch MQ response received",
                 extra={
                     "client_id": self._client_id,
@@ -2462,7 +2459,7 @@ class BrokerClient:
                             # 如果直接返回列表
                             locked_mqs = lock_result
                         else:
-                            logger.warning(
+                            self._logger.warning(
                                 "Unexpected lock result format",
                                 extra={
                                     "client_id": self._client_id,
@@ -2484,7 +2481,7 @@ class BrokerClient:
                             if isinstance(mq_dict, dict)
                         ]
 
-                        logger.info(
+                        self._logger.info(
                             "Successfully locked message queues",
                             extra={
                                 "client_id": self._client_id,
@@ -2500,7 +2497,7 @@ class BrokerClient:
                         return locked_queue_list
 
                     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        logger.error(
+                        self._logger.error(
                             "Failed to parse lock batch response",
                             extra={
                                 "client_id": self._client_id,
@@ -2517,7 +2514,7 @@ class BrokerClient:
                             response_code=response.code,
                         )
                 else:
-                    logger.info(
+                    self._logger.info(
                         "No locked queues returned",
                         extra={
                             "client_id": self._client_id,
@@ -2532,7 +2529,7 @@ class BrokerClient:
                     return []
             else:
                 error_msg = f"Failed to lock batch message queues: {response.code}-{response.remark}"
-                logger.error(
+                self._logger.error(
                     "Failed to lock batch message queues",
                     extra={
                         "client_id": self._client_id,
@@ -2559,7 +2556,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during lock_batch_mq",
                 extra={
                     "client_id": self._client_id,
@@ -2592,7 +2589,7 @@ class BrokerClient:
             raise BrokerConnectionError("Not connected to Broker")
 
         try:
-            logger.debug(
+            self._logger.debug(
                 "Unlocking batch message queues",
                 extra={
                     "client_id": self._client_id,
@@ -2616,7 +2613,7 @@ class BrokerClient:
             response = self.remote.rpc(request, timeout=self.timeout)
             unlock_rt = time.time() - start_time
 
-            logger.debug(
+            self._logger.debug(
                 "Unlock batch MQ response received",
                 extra={
                     "client_id": self._client_id,
@@ -2632,7 +2629,7 @@ class BrokerClient:
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 解锁成功
-                logger.info(
+                self._logger.info(
                     "Successfully unlocked message queues",
                     extra={
                         "client_id": self._client_id,
@@ -2647,7 +2644,7 @@ class BrokerClient:
                 )
             else:
                 error_msg = f"Failed to unlock batch message queues: {response.code}-{response.remark}"
-                logger.error(
+                self._logger.error(
                     "Failed to unlock batch message queues",
                     extra={
                         "client_id": self._client_id,
@@ -2674,7 +2671,7 @@ class BrokerClient:
             ):
                 raise
 
-            logger.error(
+            self._logger.error(
                 "Unexpected error during unlock_batch_mq",
                 extra={
                     "client_id": self._client_id,

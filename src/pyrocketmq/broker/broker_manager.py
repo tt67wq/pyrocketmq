@@ -27,7 +27,7 @@ class BrokerConnectionPool:
     remote_config: RemoteConfig
     max_connections: int
     connection_timeout: float
-    _logger: Any
+    _logger: logging.Logger
     _connections: list[Remote]
     _available_connections: queue.Queue[Remote]
     _lock: threading.Lock
@@ -62,11 +62,11 @@ class BrokerConnectionPool:
         self.max_connections = max_connections
         self.connection_timeout = connection_timeout
 
-        self._logger: logging.Logger = get_logger(f"broker.pool.sync.{broker_name}")
+        self._logger = get_logger(f"broker.pool.sync.{broker_name}")
 
         # 连接池状态 - 使用线程安全的数据结构
-        self._connections: list[Remote] = []
-        self._available_connections: queue.Queue[Remote] = queue.Queue()
+        self._connections = []
+        self._available_connections = queue.Queue()
         self._lock = threading.Lock()
         self._closed = False
 
@@ -258,7 +258,7 @@ class BrokerConnectionPool:
         # 清空队列
         while not self._available_connections.empty():
             try:
-                self._available_connections.get_nowait()
+                _ = self._available_connections.get_nowait()
             except queue.Empty:
                 break
 

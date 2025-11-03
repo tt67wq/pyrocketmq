@@ -41,7 +41,7 @@ from pyrocketmq.producer.transaction import (
 async def main():
     """异步主函数"""
     # 设置日志
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG"))
+    pyrocketmq.logging.setup_logging(LoggingConfig(level="DEBUG", json_output=True))
 
     # 创建信号处理器用于优雅关闭
     shutdown_event = asyncio.Event()

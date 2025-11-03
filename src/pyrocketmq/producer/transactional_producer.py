@@ -445,7 +445,7 @@ class TransactionProducer(Producer):
                     local_state,
                     result.msg_id,
                     transaction_id,
-                    True,
+                    False,
                 )
                 if local_state == LocalTransactionState.COMMIT_MESSAGE_STATE:
                     self._logger.debug(
