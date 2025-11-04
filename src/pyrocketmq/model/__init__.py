@@ -4,7 +4,16 @@ pyrocketmq模型层
 提供RocketMQ消息数据结构的Python实现。
 """
 
-from .client_data import ConsumerData, ProducerData
+from .client_data import (
+    ConsumerData,
+    ProducerData,
+    ExpressionType,
+    MessageSelector,
+    is_tag_type,
+    create_tag_selector,
+    create_sql_selector,
+    SUBSCRIBE_ALL,
+)
 from .command import RemotingCommand
 from .enums import (
     TRANSACTION_COMMIT_TYPE,
@@ -107,10 +116,18 @@ __all__ = [
     "SendMessageResult",
     "PullMessageResult",
     "OffsetResult",
+    # 订阅相关数据结构
+    "ExpressionType",
+    "MessageSelector",
+    "SUBSCRIBE_ALL",
     # 消息创建函数
     "create_message",
     "create_transaction_message",
     "create_delay_message",
+    # 订阅相关便利函数
+    "is_tag_type",
+    "create_tag_selector",
+    "create_sql_selector",
     # MessageID函数
     "create_message_id",
     "create_message_id_from_bytes",

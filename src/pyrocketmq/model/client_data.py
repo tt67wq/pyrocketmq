@@ -5,11 +5,301 @@
 
 import ast
 import json
+import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from .errors import DeserializationError
 from .message_queue import MessageQueue
+
+
+class ExpressionType(Enum):
+    """表达式类型枚举
+
+    定义RocketMQ支持的消息过滤表达式类型，与Go语言实现保持一致。
+
+    表达式类型说明:
+    - TAG: 基于标签的简单过滤，性能高，使用广泛
+    - SQL92: 基于SQL92语法的复杂过滤，功能强大但性能相对较低(已废弃)
+    """
+
+    TAG = "TAG"  # 标签过滤表达式
+    SQL92 = "SQL92"  # SQL92过滤表达式(已废弃)
+
+
+@dataclass
+class MessageSelector:
+    """
+    消息选择器
+
+    定义消息订阅时的过滤条件，支持基于标签和SQL92表达式的消息过滤。
+    与Go语言的MessageSelector结构完全对应。
+
+    属性说明:
+    - type: 表达式类型(TAG或SQL92)
+    - expression: 过滤表达式内容
+
+    使用示例:
+        >>> # 使用TAG过滤
+        >>> selector = MessageSelector(
+        ...     type=ExpressionType.TAG,
+        ...     expression="tag1 || tag2"
+        ... )
+        >>>
+        >>> # 使用SQL92过滤(已废弃)
+        >>> selector = MessageSelector(
+        ...     type=ExpressionType.SQL92,
+        ...     expression="color = 'red' AND price > 100"
+        ... )
+    """
+
+    type: ExpressionType  # 表达式类型
+    expression: str  # 过滤表达式
+
+    def __post_init__(self) -> None:
+        """后处理，验证选择器参数"""
+        if not self.expression:
+            self.expression = "*"
+
+        # 如果表达式为空或"*"，默认为TAG类型
+        if self.expression == "*" or self.expression == "":
+            self.type = ExpressionType.TAG
+
+    @classmethod
+    def by_tag(cls, tag_expression: str) -> "MessageSelector":
+        """
+        创建基于标签的消息选择器
+
+        Args:
+            tag_expression: 标签表达式，支持多个标签用"||"分隔
+
+        Returns:
+            MessageSelector实例
+
+        Examples:
+            >>> # 订阅单个标签
+            >>> selector = MessageSelector.by_tag("order")
+            >>>
+            >>> # 订阅多个标签
+            >>> selector = MessageSelector.by_tag("order || payment || refund")
+            >>>
+            >>> # 订阅所有消息
+            >>> selector = MessageSelector.by_tag("*")
+        """
+        return cls(type=ExpressionType.TAG, expression=tag_expression or "*")
+
+    @classmethod
+    def by_sql(cls, sql_expression: str) -> "MessageSelector":
+        """
+        创建基于SQL92的消息选择器(已废弃)
+
+        注意: SQL92表达式在RocketMQ中已被废弃，建议使用TAG过滤
+
+        Args:
+            sql_expression: SQL92过滤表达式
+
+        Returns:
+            MessageSelector实例
+
+        Examples:
+            >>> # 创建SQL选择器(不推荐)
+            >>> selector = MessageSelector.by_sql("color = 'red' AND price > 100")
+            >>> print(f"警告: SQL92表达式已废弃: {selector.expression}")
+        """
+        return cls(type=ExpressionType.SQL92, expression=sql_expression)
+
+    def is_tag_type(self) -> bool:
+        """
+        判断是否为TAG类型表达式
+
+        Returns:
+            是否为TAG类型
+
+        Examples:
+            >>> selector = MessageSelector.by_tag("order")
+            >>> selector.is_tag_type()
+            True
+        """
+        return self.type == ExpressionType.TAG
+
+    def is_sql_type(self) -> bool:
+        """
+        判断是否为SQL92类型表达式
+
+        Returns:
+            是否为SQL92类型
+
+        Examples:
+            >>> selector = MessageSelector.by_sql("color = 'red'")
+            >>> selector.is_sql_type()
+            True
+        """
+        return self.type == ExpressionType.SQL92
+
+    def is_subscribe_all(self) -> bool:
+        """
+        判断是否订阅所有消息
+
+        Returns:
+            是否订阅所有消息(表达式为"*")
+
+        Examples:
+            >>> selector = MessageSelector.by_tag("*")
+            >>> selector.is_subscribe_all()
+            True
+        """
+        return self.expression == "*" or self.expression == ""
+
+    def validate(self) -> bool:
+        """
+        验证选择器的有效性
+
+        Returns:
+            选择器是否有效
+
+        Examples:
+            >>> selector = MessageSelector.by_tag("valid_tag")
+            >>> selector.validate()
+            True
+            >>>
+            >>> invalid_selector = MessageSelector(
+            ...     type=ExpressionType.SQL92,
+            ...     expression=""
+            ... )
+            >>> invalid_selector.validate()
+            False
+        """
+        # TAG类型总是有效
+        if self.type == ExpressionType.TAG:
+            return True
+
+        # SQL92类型需要检查表达式
+        if self.type == ExpressionType.SQL92:
+            return bool(self.expression.strip())
+
+        return False
+
+    def to_dict(self) -> dict[str, Any]:
+        """
+        转换为字典格式
+
+        Returns:
+            选择器的字典表示
+        """
+        return {"type": self.type.value, "expression": self.expression}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "MessageSelector":
+        """
+        从字典创建MessageSelector实例
+
+        Args:
+            data: 包含type和expression的字典
+
+        Returns:
+            MessageSelector实例
+
+        Examples:
+            >>> data = {"type": "TAG", "expression": "order || payment"}
+            >>> selector = MessageSelector.from_dict(data)
+            >>> print(selector.expression)
+            'order || payment'
+        """
+        expression_type = ExpressionType(data.get("type", "TAG"))
+        expression: str = data.get("expression", "*")
+
+        return cls(type=expression_type, expression=expression)
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        if self.is_subscribe_all():
+            return "MessageSelector[subscribe_all]"
+        elif self.is_tag_type():
+            return f"MessageSelector[TAG: {self.expression}]"
+        else:
+            return f"MessageSelector[SQL92: {self.expression}]"
+
+    def __repr__(self) -> str:
+        """详细字符串表示"""
+        return (
+            f"MessageSelector(type={self.type.value}, expression='{self.expression}')"
+        )
+
+
+def is_tag_type(expression: str) -> bool:
+    """
+    判断表达式是否为TAG类型
+
+    这个函数与Go语言的IsTagType函数保持一致，用于判断表达式类型。
+
+    Args:
+        expression: 过滤表达式
+
+    Returns:
+        是否为TAG类型表达式
+
+    Examples:
+        >>> is_tag_type("")
+        True
+        >>> is_tag_type("TAG")
+        True
+        >>> is_tag_type("order || payment")
+        True
+        >>> is_tag_type("color = 'red'")
+        False
+    """
+    if (
+        not expression
+        or expression.strip() == ""
+        or expression.strip().upper() == "TAG"
+    ):
+        return True
+    return False
+
+
+def create_tag_selector(tag_expression: str = "*") -> MessageSelector:
+    """
+    创建TAG选择器的便利函数
+
+    Args:
+        tag_expression: 标签表达式，默认为"*"表示订阅所有
+
+    Returns:
+        MessageSelector实例
+
+    Examples:
+        >>> # 订阅所有消息
+        >>> selector = create_tag_selector()
+        >>>
+        >>> # 订阅特定标签
+        >>> selector = create_tag_selector("order")
+        >>>
+        >>> # 订阅多个标签
+        >>> selector = create_tag_selector("order || payment")
+    """
+    return MessageSelector.by_tag(tag_expression)
+
+
+def create_sql_selector(sql_expression: str) -> MessageSelector:
+    """
+    创建SQL92选择器的便利函数(已废弃)
+
+    Args:
+        sql_expression: SQL92表达式
+
+    Returns:
+        MessageSelector实例
+
+    Examples:
+        >>> # 不推荐使用，仅保持兼容性
+        >>> selector = create_sql_selector("color = 'red'")
+    """
+    return MessageSelector.by_sql(sql_expression)
+
+
+# 预定义的常用选择器
+SUBSCRIBE_ALL = MessageSelector.by_tag("*")  # 订阅所有消息的预设选择器
 
 
 @dataclass
@@ -24,7 +314,6 @@ class SubscriptionData:
     sub_version: int = 0
     expression_type: str = "TAG"
     tags_set: list[str] = field(default_factory=list)
-    code_set: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         """转换为字典格式"""
@@ -34,7 +323,6 @@ class SubscriptionData:
             "subVersion": self.sub_version,
             "expressionType": self.expression_type,
             "tagsSet": self.tags_set,
-            "codeSet": self.code_set,
         }
 
     @classmethod
@@ -46,8 +334,58 @@ class SubscriptionData:
             sub_version=data.get("subVersion", 0),
             expression_type=data.get("expressionType", "TAG"),
             tags_set=data.get("tagsSet", []),
-            code_set=data.get("codeSet", []),
         )
+
+    @classmethod
+    def from_selector(cls, topic: str, selector: MessageSelector) -> "SubscriptionData":
+        """
+        从MessageSelector创建SubscriptionData实例
+
+        这个方法与Go语言的buildSubscriptionData函数保持一致的实现逻辑。
+
+        Args:
+            topic: 主题名称
+            selector: 消息选择器
+
+        Returns:
+            SubscriptionData实例
+
+        Examples:
+            >>> selector = MessageSelector.by_tag("order || payment")
+            >>> sub_data = SubscriptionData.from_selector("order_topic", selector)
+            >>> print(sub_data.expression_type)
+            'TAG'
+            >>> print(sub_data.tags_set)
+            ['order', 'payment']
+        """
+        # 基础字段设置
+        sub_data = cls(
+            topic=topic,
+            sub_string=selector.expression,
+            expression_type=selector.type.value,
+            sub_version=int(time.time() * 1000000000),  # 纳秒级时间戳
+        )
+
+        # 如果不是TAG类型，直接返回
+        if selector.type != ExpressionType.TAG:
+            return sub_data
+
+        # TAG类型需要特殊处理
+        if not selector.expression or selector.expression == "*":
+            # 订阅所有消息
+            sub_data.expression_type = ExpressionType.TAG.value
+            sub_data.sub_string = "*"
+        else:
+            # 解析标签并创建tags_set
+            tags = selector.expression.split("||")
+            sub_data.tags_set = []
+
+            for tag in tags:
+                trim_tag = tag.strip()
+                if trim_tag and trim_tag not in sub_data.tags_set:
+                    sub_data.tags_set.append(trim_tag)
+
+        return sub_data
 
     def __str__(self) -> str:
         """字符串表示"""
