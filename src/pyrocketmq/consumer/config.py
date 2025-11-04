@@ -89,6 +89,21 @@ class ConsumerConfig:
     pull_threshold_of_queue: int = 1000  # 单个队列消息数阈值
     pull_threshold_size_of_queue: int = 100  # 单个队列消息大小阈值(MB)
 
+    # === OffsetStore偏移量存储配置 ===
+    # 持久化间隔配置
+    persist_interval: int = 5000  # 毫秒，定期持久化间隔
+    persist_batch_size: int = 10  # 批量提交大小
+
+    # 本地存储路径(广播模式使用)
+    offset_store_path: str = "~/.rocketmq/offsets"
+
+    # 内存缓存配置
+    max_cache_size: int = 10000  # 最大缓存条目数
+
+    # 故障恢复配置
+    enable_auto_recovery: bool = True  # 启用自动恢复
+    max_retry_times: int = 3  # 最大重试次数
+
     # === 高级配置 ===
     enable_auto_commit: bool = True  # 是否自动提交偏移量
     auto_commit_interval: int = 5000  # 自动提交间隔(毫秒)
@@ -119,6 +134,22 @@ class ConsumerConfig:
             raise ValueError("max_reconsume_times 不能为负数")
         if self.consume_timeout <= 0:
             raise ValueError("consume_timeout 必须大于0")
+
+        # 验证OffsetStore配置
+        if self.persist_interval <= 0:
+            raise ValueError("persist_interval 必须大于0")
+        if self.persist_batch_size <= 0:
+            raise ValueError("persist_batch_size 必须大于0")
+        if self.max_cache_size <= 0:
+            raise ValueError("max_cache_size 必须大于0")
+        if self.max_retry_times < 0:
+            raise ValueError("max_retry_times 不能为负数")
+        if self.auto_commit_interval <= 0:
+            raise ValueError("auto_commit_interval 必须大于0")
+
+        # 验证路径配置
+        if not self.offset_store_path:
+            raise ValueError("offset_store_path 不能为空")
 
         # 生成客户端ID
         import time
@@ -159,6 +190,24 @@ class ConsumerConfig:
             allocate_strategy = allocate_strategy.upper()
             if allocate_strategy in [s.value for s in AllocateQueueStrategy]:
                 self.allocate_queue_strategy = AllocateQueueStrategy(allocate_strategy)
+
+        # OffsetStore配置环境变量
+        if os.getenv("ROCKETMQ_PERSIST_INTERVAL"):
+            self.persist_interval = int(os.getenv("ROCKETMQ_PERSIST_INTERVAL", 5000))
+        if os.getenv("ROCKETMQ_PERSIST_BATCH_SIZE"):
+            self.persist_batch_size = int(os.getenv("ROCKETMQ_PERSIST_BATCH_SIZE", 10))
+        if os.getenv("ROCKETMQ_OFFSET_STORE_PATH"):
+            self.offset_store_path = os.getenv(
+                "ROCKETMQ_OFFSET_STORE_PATH", "~/.rocketmq/offsets"
+            )
+        if os.getenv("ROCKETMQ_MAX_CACHE_SIZE"):
+            self.max_cache_size = int(os.getenv("ROCKETMQ_MAX_CACHE_SIZE", 10000))
+        if os.getenv("ROCKETMQ_ENABLE_AUTO_RECOVERY"):
+            self.enable_auto_recovery = (
+                os.getenv("ROCKETMQ_ENABLE_AUTO_RECOVERY", "true").lower() == "true"
+            )
+        if os.getenv("ROCKETMQ_MAX_RETRY_TIMES"):
+            self.max_retry_times = int(os.getenv("ROCKETMQ_MAX_RETRY_TIMES", 3))
 
     @property
     def client_id(self) -> str:
@@ -202,6 +251,14 @@ class ConsumerConfig:
             "pull_threshold_size_for_topic": self.pull_threshold_size_for_topic,
             "pull_threshold_of_queue": self.pull_threshold_of_queue,
             "pull_threshold_size_of_queue": self.pull_threshold_size_of_queue,
+            # OffsetStore配置
+            "persist_interval": self.persist_interval,
+            "persist_batch_size": self.persist_batch_size,
+            "offset_store_path": self.offset_store_path,
+            "max_cache_size": self.max_cache_size,
+            "enable_auto_recovery": self.enable_auto_recovery,
+            "max_retry_times": self.max_retry_times,
+            # 高级配置
             "enable_auto_commit": self.enable_auto_commit,
             "auto_commit_interval": self.auto_commit_interval,
             "enable_message_trace": self.enable_message_trace,
@@ -297,6 +354,13 @@ def get_config(profile: str = "default") -> ConsumerConfig:
             consume_timeout=30,
             enable_auto_commit=True,
             enable_message_trace=True,
+            # OffsetStore开发配置
+            persist_interval=1000,  # 更频繁的持久化
+            persist_batch_size=5,
+            offset_store_path="~/.rocketmq/dev/offsets",
+            max_cache_size=1000,
+            enable_auto_recovery=True,
+            max_retry_times=5,
         )
     elif profile == "production":
         return ConsumerConfig(
@@ -309,6 +373,15 @@ def get_config(profile: str = "default") -> ConsumerConfig:
             max_reconsume_times=16,
             enable_auto_commit=True,
             enable_message_trace=False,
+            # OffsetStore生产配置
+            persist_interval=5000,
+            persist_batch_size=20,
+            offset_store_path=os.getenv(
+                "ROCKETMQ_OFFSET_STORE_PATH", "/var/lib/rocketmq/offsets"
+            ),
+            max_cache_size=20000,
+            enable_auto_recovery=True,
+            max_retry_times=3,
         )
     else:  # default
         return ConsumerConfig(
@@ -336,7 +409,10 @@ def create_custom_config(**kwargs) -> ConsumerConfig:
         ...     namesrv_addr="broker1:9876;broker2:9876",
         ...     consume_thread_max=128,
         ...     pull_batch_size=64,
-        ...     pull_interval=0
+        ...     pull_interval=0,
+        ...     persist_interval=1000,  # 频繁持久化
+        ...     persist_batch_size=50,
+        ...     max_cache_size=50000
         ... )
         >>>
         >>> # 资源节约配置
@@ -346,7 +422,19 @@ def create_custom_config(**kwargs) -> ConsumerConfig:
         ...     consume_thread_min=1,
         ...     consume_thread_max=2,
         ...     pull_batch_size=8,
-        ...     pull_interval=1000
+        ...     pull_interval=1000,
+        ...     persist_interval=10000,  # 较低频持久化
+        ...     persist_batch_size=5,
+        ...     max_cache_size=500
+        ... )
+        >>>
+        >>> # 广播消费配置
+        >>> broadcast_config = create_custom_config(
+        ...     consumer_group="broadcast_consumer",
+        ...     namesrv_addr="localhost:9876",
+        ...     message_model=MessageModel.BROADCASTING,
+        ...     offset_store_path="/tmp/broadcast_offsets",
+        ...     persist_interval=2000
         ... )
     """
 
