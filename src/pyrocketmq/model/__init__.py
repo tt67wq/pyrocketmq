@@ -124,6 +124,9 @@ __all__ = [
     # 订阅相关数据结构
     "ExpressionType",
     "MessageSelector",
+    "SubscriptionData",
+    "SubscriptionEntry",
+    "SubscriptionConflict",
     "SUBSCRIBE_ALL",
     # 消息创建函数
     "create_message",
