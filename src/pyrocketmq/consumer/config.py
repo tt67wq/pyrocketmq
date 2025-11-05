@@ -323,73 +323,7 @@ def create_consumer_config(
     )
 
 
-def get_config(profile: str = "default") -> ConsumerConfig:
-    """
-    获取预定义配置
-
-    Args:
-        profile: 配置档案名称
-
-    Returns:
-        ConsumerConfig实例
-
-    Examples:
-        >>> # 获取默认配置
-        >>> config = get_config()
-        >>>
-        >>> # 获取开发环境配置
-        >>> config = get_config("development")
-        >>>
-        >>> # 获取生产环境配置
-        >>> config = get_config("production")
-    """
-
-    if profile == "development":
-        return ConsumerConfig(
-            consumer_group="dev_consumer_group",
-            namesrv_addr="localhost:9876",
-            consume_thread_min=5,
-            consume_thread_max=20,
-            pull_batch_size=16,
-            consume_timeout=30,
-            enable_auto_commit=True,
-            enable_message_trace=True,
-            # OffsetStore开发配置
-            persist_interval=1000,  # 更频繁的持久化
-            persist_batch_size=5,
-            offset_store_path="~/.rocketmq/dev/offsets",
-            max_cache_size=1000,
-            enable_auto_recovery=True,
-            max_retry_times=5,
-        )
-    elif profile == "production":
-        return ConsumerConfig(
-            consumer_group=os.getenv("ROCKETMQ_CONSUMER_GROUP", "prod_consumer_group"),
-            namesrv_addr=os.getenv("ROCKETMQ_NAMESRV_ADDR", ""),
-            consume_thread_min=20,
-            consume_thread_max=64,
-            pull_batch_size=32,
-            consume_timeout=15,
-            max_reconsume_times=16,
-            enable_auto_commit=True,
-            enable_message_trace=False,
-            # OffsetStore生产配置
-            persist_interval=5000,
-            persist_batch_size=20,
-            offset_store_path=os.getenv(
-                "ROCKETMQ_OFFSET_STORE_PATH", "/var/lib/rocketmq/offsets"
-            ),
-            max_cache_size=20000,
-            enable_auto_recovery=True,
-            max_retry_times=3,
-        )
-    else:  # default
-        return ConsumerConfig(
-            consumer_group="default_consumer_group", namesrv_addr="localhost:9876"
-        )
-
-
-def create_custom_config(**kwargs) -> ConsumerConfig:
+def create_config(**kwargs) -> ConsumerConfig:
     """
     创建自定义配置
 

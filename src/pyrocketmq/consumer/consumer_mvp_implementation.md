@@ -303,11 +303,47 @@ class ConsumerConfig:
 
 #### 2. 通用工具类 (共享)
 ```python
-class MessageSelector:
-    """消息选择器 - 两种Consumer共享"""
+class MessageSelector: ✅ **已实现**
+    """消息选择器 - 两种Consumer共享 (client_data.py:32-227)"""
 
 class SubscriptionManager:
     """订阅关系管理 - 两种Consumer共享"""
+
+    **核心功能**:
+    - 管理Topic订阅关系和消息选择器
+    - 支持订阅数据的序列化和反序列化
+    - 提供订阅状态查询和更新接口
+    - 支持订阅冲突检测和验证
+    - 线程安全的订阅操作
+
+    **实现位置**: `src/pyrocketmq/consumer/subscription_manager.py` (待实现)
+
+    **核心设计**:
+    ```python
+    @dataclass
+    class SubscriptionEntry:
+        topic: str
+        selector: MessageSelector
+        subscription_data: SubscriptionData
+        created_at: datetime
+        updated_at: datetime
+
+    class SubscriptionManager:
+        def __init__(self):
+            self._subscriptions: Dict[str, SubscriptionEntry] = {}
+            self._lock = RLock()
+
+        def subscribe(self, topic: str, selector: MessageSelector) -> bool
+        def unsubscribe(self, topic: str) -> bool
+        def get_subscription(self, topic: str) -> Optional[SubscriptionEntry]
+        def get_all_subscriptions(self) -> List[SubscriptionEntry]
+        def update_selector(self, topic: str, selector: MessageSelector) -> bool
+        def clear_all(self) -> None
+        def is_subscribed(self, topic: str) -> bool
+        def validate_subscription(self, topic: str, selector: MessageSelector) -> bool
+        def to_subscription_data_list(self) -> List[SubscriptionData]
+        def from_subscription_data_list(self, subscription_data_list: List[SubscriptionData]) -> None
+    ```
 
 class OffsetStore:
     """偏移量存储 - 基类，两种Consumer继承实现"""
@@ -619,32 +655,19 @@ class ConsumeFromWhereManager:
 
 ## 订阅关系与消息过滤
 
-### MessageSelector设计详解
+### MessageSelector设计详解 ✅ **已实现**
 
-与Go语言RocketMQ客户端保持完全兼容的消息选择器实现：
+MessageSelector已经在 `src/pyrocketmq/model/client_data.py` 中完整实现，支持与Go语言RocketMQ客户端完全兼容的消息选择器功能：
 
-```python
-# Go语言原结构
-type MessageSelector struct {
-    Type       ExpressionType
-    Expression string
-}
+**实现位置**: `src/pyrocketmq/model/client_data.py:32-227`
 
-type ExpressionType string
+**核心功能**:
+- 支持TAG和SQL92两种表达式类型（TAG推荐，SQL92已废弃）
+- 提供便利工厂方法：`by_tag()`, `by_sql()`
+- 完整的验证和序列化支持
+- 类型安全的枚举定义
 
-const (
-    SQL92 = ExpressionType("SQL92") // deprecated
-    TAG   = ExpressionType("TAG")
-)
-
-# Python对应实现
-@dataclass
-class MessageSelector:
-    type: ExpressionType
-    expression: str
-```
-
-### 使用示例
+**使用示例**:
 
 #### TAG类型订阅(推荐)
 ```python
@@ -666,17 +689,714 @@ selector = MessageSelector.by_sql("color = 'red' AND price > 100")
 consumer.subscribe("product_topic", selector)
 ```
 
-#### 便利函数支持
+#### 便利函数支持 ✅ **已实现**
 ```python
 # 向后兼容的字符串接口
 consumer.subscribe("order_topic", "*")  # 自动转换为TAG选择器
 consumer.subscribe("order_topic", "tag1 || tag2")  # 自动转换为TAG选择器
 
-# 判断表达式类型函数(与Go语言IsTagType对应)
+# 全局便利函数 (client_data.py:230-298)
 def is_tag_type(expression: str) -> bool:
     """判断表达式是否为TAG类型"""
     return not expression or expression.upper() == "TAG"
+
+def create_tag_selector(expression: str) -> MessageSelector:
+    """创建TAG类型选择器"""
+    return MessageSelector.by_tag(expression)
+
+def create_sql_selector(expression: str) -> MessageSelector:
+    """创建SQL类型选择器"""
+    return MessageSelector.by_sql(expression)
 ```
+
+## SubscriptionManager 订阅关系管理方案设计
+
+### 1. SubscriptionManager概述
+
+SubscriptionManager是RocketMQ Consumer的核心组件，负责管理Topic订阅关系、消息选择器和订阅数据。它提供了完整的订阅生命周期管理，确保Consumer能够正确订阅和处理感兴趣的消息。
+
+### 2. 设计目标
+
+- **订阅关系管理**: 维护Topic与消息选择器的映射关系
+- **数据一致性**: 确保订阅数据的准确性和一致性
+- **线程安全**: 支持多线程环境下的安全订阅操作
+- **动态更新**: 支持运行时订阅关系的动态变更
+- **状态监控**: 提供订阅状态查询和监控能力
+- **序列化支持**: 支持订阅数据的序列化和反序列化
+
+### 3. 核心数据结构
+
+#### 3.1 SubscriptionEntry 订阅条目
+```python
+@dataclass
+class SubscriptionEntry:
+    """订阅条目数据结构"""
+    topic: str                                    # 订阅的Topic
+    selector: MessageSelector                     # 消息选择器
+    subscription_data: SubscriptionData          # 订阅数据
+    created_at: datetime                          # 创建时间
+    updated_at: datetime                          # 更新时间
+    is_active: bool = True                        # 是否活跃
+
+    def update_timestamp(self) -> None:
+        """更新时间戳"""
+        self.updated_at = datetime.now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            'topic': self.topic,
+            'selector': self.selector.to_dict(),
+            'subscription_data': self.subscription_data.to_dict(),
+            'created_at': self.created_at.isoformat(),
+            'updated_at': self.updated_at.isoformat(),
+            'is_active': self.is_active
+        }
+```
+
+#### 3.2 SubscriptionConflict 订阅冲突
+```python
+@dataclass
+class SubscriptionConflict:
+    """订阅冲突信息"""
+    topic: str
+    existing_selector: MessageSelector
+    new_selector: MessageSelector
+    conflict_type: str
+    timestamp: datetime
+
+    def __str__(self) -> str:
+        return f"SubscriptionConflict: {self.topic}, existing={self.existing_selector}, new={self.new_selector}, type={self.conflict_type}"
+```
+
+### 4. SubscriptionManager核心实现
+
+#### 4.1 主类设计
+```python
+class SubscriptionManager:
+    """订阅关系管理器"""
+
+    def __init__(self, max_subscriptions: int = 1000):
+        """
+        初始化订阅管理器
+
+        Args:
+            max_subscriptions: 最大订阅数量限制
+        """
+        self._subscriptions: Dict[str, SubscriptionEntry] = {}
+        self._lock = RLock()                          # 可重入锁，保证线程安全
+        self._max_subscriptions = max_subscriptions
+        self._conflict_history: List[SubscriptionConflict] = []
+        self._metrics = SubscriptionMetrics()
+
+    # ==================== 核心订阅操作 ====================
+
+    def subscribe(self, topic: str, selector: MessageSelector) -> bool:
+        """
+        订阅Topic
+
+        Args:
+            topic: Topic名称
+            selector: 消息选择器
+
+        Returns:
+            bool: 订阅是否成功
+
+        Raises:
+            SubscriptionError: 订阅失败时抛出
+            SubscriptionLimitExceededError: 超过订阅限制时抛出
+        """
+        with self._lock:
+            # 验证参数
+            if not self._validate_topic(topic):
+                raise InvalidTopicError(f"Invalid topic: {topic}")
+
+            if not self._validate_selector(selector):
+                raise InvalidSelectorError(f"Invalid selector: {selector}")
+
+            # 检查订阅数量限制
+            if len(self._subscriptions) >= self._max_subscriptions:
+                raise SubscriptionLimitExceededError(
+                    f"Subscription limit exceeded: {self._max_subscriptions}"
+                )
+
+            # 检查是否存在冲突
+            conflict = self._check_subscription_conflict(topic, selector)
+            if conflict:
+                self._conflict_history.append(conflict)
+                self._metrics.record_conflict(conflict.conflict_type)
+                raise SubscriptionConflictError(f"Subscription conflict for topic {topic}: {conflict}")
+
+            # 创建或更新订阅
+            now = datetime.now()
+            subscription_data = SubscriptionData.from_selector(topic, selector)
+
+            if topic in self._subscriptions:
+                # 更新现有订阅
+                existing = self._subscriptions[topic]
+                existing.selector = selector
+                existing.subscription_data = subscription_data
+                existing.updated_at = now
+                existing.is_active = True
+                self._metrics.record_subscription_updated(topic)
+            else:
+                # 创建新订阅
+                entry = SubscriptionEntry(
+                    topic=topic,
+                    selector=selector,
+                    subscription_data=subscription_data,
+                    created_at=now,
+                    updated_at=now
+                )
+                self._subscriptions[topic] = entry
+                self._metrics.record_subscription_added(topic)
+
+            return True
+
+    def unsubscribe(self, topic: str) -> bool:
+        """
+        取消订阅Topic
+
+        Args:
+            topic: Topic名称
+
+        Returns:
+            bool: 取消订阅是否成功
+        """
+        with self._lock:
+            if topic in self._subscriptions:
+                del self._subscriptions[topic]
+                self._metrics.record_subscription_removed(topic)
+                return True
+            return False
+
+    def update_selector(self, topic: str, new_selector: MessageSelector) -> bool:
+        """
+        更新消息选择器
+
+        Args:
+            topic: Topic名称
+            new_selector: 新的消息选择器
+
+        Returns:
+            bool: 更新是否成功
+        """
+        with self._lock:
+            if topic not in self._subscriptions:
+                raise TopicNotSubscribedError(f"Topic not subscribed: {topic}")
+
+            # 检查冲突
+            conflict = self._check_subscription_conflict(topic, new_selector)
+            if conflict:
+                self._conflict_history.append(conflict)
+                raise SubscriptionConflictError(f"Selector update conflict for topic {topic}: {conflict}")
+
+            # 更新选择器
+            entry = self._subscriptions[topic]
+            entry.selector = new_selector
+            entry.subscription_data = SubscriptionData.from_selector(topic, new_selector)
+            entry.update_timestamp()
+
+            self._metrics.record_selector_updated(topic)
+            return True
+
+    # ==================== 查询操作 ====================
+
+    def get_subscription(self, topic: str) -> Optional[SubscriptionEntry]:
+        """
+        获取Topic订阅信息
+
+        Args:
+            topic: Topic名称
+
+        Returns:
+            Optional[SubscriptionEntry]: 订阅条目，如果不存在则返回None
+        """
+        with self._lock:
+            return self._subscriptions.get(topic)
+
+    def get_all_subscriptions(self) -> List[SubscriptionEntry]:
+        """
+        获取所有订阅信息
+
+        Returns:
+            List[SubscriptionEntry]: 所有订阅条目的列表
+        """
+        with self._lock:
+            return list(self._subscriptions.values())
+
+    def get_active_subscriptions(self) -> List[SubscriptionEntry]:
+        """
+        获取所有活跃订阅
+
+        Returns:
+            List[SubscriptionEntry]: 活跃订阅条目的列表
+        """
+        with self._lock:
+            return [entry for entry in self._subscriptions.values() if entry.is_active]
+
+    def is_subscribed(self, topic: str) -> bool:
+        """
+        检查是否已订阅Topic
+
+        Args:
+            topic: Topic名称
+
+        Returns:
+            bool: 是否已订阅
+        """
+        with self._lock:
+            return topic in self._subscriptions
+
+    def get_subscription_count(self) -> int:
+        """
+        获取订阅数量
+
+        Returns:
+            int: 当前订阅数量
+        """
+        with self._lock:
+            return len(self._subscriptions)
+
+    # ==================== 数据转换操作 ====================
+
+    def to_subscription_data_list(self) -> List[SubscriptionData]:
+        """
+        转换为SubscriptionData列表
+
+        Returns:
+            List[SubscriptionData]: 订阅数据列表
+        """
+        with self._lock:
+            return [entry.subscription_data for entry in self._subscriptions.values()]
+
+    def from_subscription_data_list(self, subscription_data_list: List[SubscriptionData]) -> None:
+        """
+        从SubscriptionData列表恢复订阅关系
+
+        Args:
+            subscription_data_list: 订阅数据列表
+        """
+        with self._lock:
+            self.clear_all()
+
+            for sub_data in subscription_data_list:
+                selector = MessageSelector.from_dict({
+                    'type': sub_data.expression_type,
+                    'expression': sub_data.sub_string
+                })
+
+                entry = SubscriptionEntry(
+                    topic=sub_data.topic,
+                    selector=selector,
+                    subscription_data=sub_data,
+                    created_at=datetime.now(),
+                    updated_at=datetime.now()
+                )
+
+                self._subscriptions[sub_data.topic] = entry
+
+    def export_subscriptions(self) -> Dict[str, Any]:
+        """
+        导出订阅关系
+
+        Returns:
+            Dict[str, Any]: 导出的订阅数据
+        """
+        with self._lock:
+            return {
+                'subscriptions': [entry.to_dict() for entry in self._subscriptions.values()],
+                'conflict_history': [conflict.__dict__ for conflict in self._conflict_history],
+                'export_time': datetime.now().isoformat(),
+                'metrics': self._metrics.to_dict()
+            }
+
+    def import_subscriptions(self, data: Dict[str, Any]) -> None:
+        """
+        导入订阅关系
+
+        Args:
+            data: 导入的订阅数据
+        """
+        with self._lock:
+            self.clear_all()
+
+            for sub_data in data.get('subscriptions', []):
+                selector = MessageSelector.from_dict(sub_data['selector'])
+                subscription_data = SubscriptionData.from_dict(sub_data['subscription_data'])
+
+                entry = SubscriptionEntry(
+                    topic=sub_data['topic'],
+                    selector=selector,
+                    subscription_data=subscription_data,
+                    created_at=datetime.fromisoformat(sub_data['created_at']),
+                    updated_at=datetime.fromisoformat(sub_data['updated_at']),
+                    is_active=sub_data.get('is_active', True)
+                )
+
+                self._subscriptions[entry.topic] = entry
+
+            # 导入冲突历史
+            for conflict_data in data.get('conflict_history', []):
+                conflict = SubscriptionConflict(
+                    topic=conflict_data['topic'],
+                    existing_selector=MessageSelector.from_dict(conflict_data['existing_selector']),
+                    new_selector=MessageSelector.from_dict(conflict_data['new_selector']),
+                    conflict_type=conflict_data['conflict_type'],
+                    timestamp=datetime.fromisoformat(conflict_data['timestamp'])
+                )
+                self._conflict_history.append(conflict)
+
+    # ==================== 管理操作 ====================
+
+    def clear_all(self) -> None:
+        """清除所有订阅关系"""
+        with self._lock:
+            self._subscriptions.clear()
+            self._metrics.record_all_cleared()
+
+    def deactivate_subscription(self, topic: str) -> bool:
+        """
+        停用订阅（不删除，只是标记为非活跃）
+
+        Args:
+            topic: Topic名称
+
+        Returns:
+            bool: 操作是否成功
+        """
+        with self._lock:
+            if topic in self._subscriptions:
+                self._subscriptions[topic].is_active = False
+                self._metrics.record_subscription_deactivated(topic)
+                return True
+            return False
+
+    def activate_subscription(self, topic: str) -> bool:
+        """
+        激活订阅
+
+        Args:
+            topic: Topic名称
+
+        Returns:
+            bool: 操作是否成功
+        """
+        with self._lock:
+            if topic in self._subscriptions:
+                self._subscriptions[topic].is_active = True
+                self._metrics.record_subscription_activated(topic)
+                return True
+            return False
+
+    def cleanup_inactive_subscriptions(self, inactive_threshold: timedelta = timedelta(hours=24)) -> int:
+        """
+        清理长时间非活跃的订阅
+
+        Args:
+            inactive_threshold: 非活跃时间阈值
+
+        Returns:
+            int: 清理的订阅数量
+        """
+        with self._lock:
+            cutoff_time = datetime.now() - inactive_threshold
+            to_remove = []
+
+            for topic, entry in self._subscriptions.items():
+                if not entry.is_active and entry.updated_at < cutoff_time:
+                    to_remove.append(topic)
+
+            for topic in to_remove:
+                del self._subscriptions[topic]
+
+            if to_remove:
+                self._metrics.record_subscriptions_cleaned(len(to_remove))
+
+            return len(to_remove)
+
+    # ==================== 验证和冲突检测 ====================
+
+    def validate_subscription(self, topic: str, selector: MessageSelector) -> bool:
+        """
+        验证订阅是否有效
+
+        Args:
+            topic: Topic名称
+            selector: 消息选择器
+
+        Returns:
+            bool: 验证是否通过
+        """
+        return self._validate_topic(topic) and self._validate_selector(selector)
+
+    def get_conflict_history(self, limit: int = 100) -> List[SubscriptionConflict]:
+        """
+        获取冲突历史
+
+        Args:
+            limit: 返回的冲突数量限制
+
+        Returns:
+            List[SubscriptionConflict]: 冲突历史列表
+        """
+        with self._lock:
+            return self._conflict_history[-limit:]
+
+    def clear_conflict_history(self) -> None:
+        """清除冲突历史"""
+        with self._lock:
+            self._conflict_history.clear()
+
+    # ==================== 私有方法 ====================
+
+    def _validate_topic(self, topic: str) -> bool:
+        """验证Topic名称"""
+        if not topic or not isinstance(topic, str):
+            return False
+
+        # Topic名称验证规则
+        return (len(topic) > 0 and
+                len(topic) <= 127 and
+                topic not in ('', 'DEFAULT_TOPIC') and
+                not topic.startswith('SYS_'))
+
+    def _validate_selector(self, selector: MessageSelector) -> bool:
+        """验证消息选择器"""
+        if not isinstance(selector, MessageSelector):
+            return False
+
+        try:
+            selector.validate()
+            return True
+        except Exception:
+            return False
+
+    def _check_subscription_conflict(self, topic: str, new_selector: MessageSelector) -> Optional[SubscriptionConflict]:
+        """检查订阅冲突"""
+        if topic not in self._subscriptions:
+            return None
+
+        existing = self._subscriptions[topic]
+
+        # 检查选择器类型冲突
+        if existing.selector.type != new_selector.type:
+            return SubscriptionConflict(
+                topic=topic,
+                existing_selector=existing.selector,
+                new_selector=new_selector,
+                conflict_type="SELECTOR_TYPE_MISMATCH",
+                timestamp=datetime.now()
+            )
+
+        # 检查表达式冲突（仅对相同类型进行）
+        if (existing.selector.type == new_selector.type and
+            existing.selector.expression != new_selector.expression):
+            return SubscriptionConflict(
+                topic=topic,
+                existing_selector=existing.selector,
+                new_selector=new_selector,
+                conflict_type="EXPRESSION_MISMATCH",
+                timestamp=datetime.now()
+            )
+
+        return None
+
+    @property
+    def metrics(self) -> 'SubscriptionMetrics':
+        """获取订阅指标"""
+        return self._metrics
+```
+
+### 5. 监控和指标
+
+#### 5.1 SubscriptionMetrics 订阅指标
+```python
+@dataclass
+class SubscriptionMetrics:
+    """订阅管理指标"""
+
+    # 计数器
+    total_subscriptions: int = 0
+    active_subscriptions: int = 0
+    added_subscriptions: int = 0
+    removed_subscriptions: int = 0
+    updated_subscriptions: int = 0
+    conflicts: int = 0
+    deactivated_subscriptions: int = 0
+    activated_subscriptions: int = 0
+    cleaned_subscriptions: int = 0
+
+    # 统计信息
+    conflict_types: Dict[str, int] = field(default_factory=dict)
+    topic_subscription_counts: Dict[str, int] = field(default_factory=dict)
+    selector_type_counts: Dict[str, int] = field(default_factory=dict)
+
+    def record_subscription_added(self, topic: str) -> None:
+        """记录订阅添加"""
+        self.added_subscriptions += 1
+        self._update_topic_count(topic)
+
+    def record_subscription_removed(self, topic: str) -> None:
+        """记录订阅移除"""
+        self.removed_subscriptions += 1
+        self._update_topic_count(topic, -1)
+
+    def record_subscription_updated(self, topic: str) -> None:
+        """记录订阅更新"""
+        self.updated_subscriptions += 1
+
+    def record_conflict(self, conflict_type: str) -> None:
+        """记录冲突"""
+        self.conflicts += 1
+        self.conflict_types[conflict_type] = self.conflict_types.get(conflict_type, 0) + 1
+
+    def record_selector_updated(self, topic: str) -> None:
+        """记录选择器更新"""
+        self.updated_subscriptions += 1
+
+    def record_subscription_deactivated(self, topic: str) -> None:
+        """记录订阅停用"""
+        self.deactivated_subscriptions += 1
+
+    def record_subscription_activated(self, topic: str) -> None:
+        """记录订阅激活"""
+        self.activated_subscriptions += 1
+
+    def record_subscriptions_cleaned(self, count: int) -> None:
+        """记录订阅清理"""
+        self.cleaned_subscriptions += count
+
+    def record_all_cleared(self) -> None:
+        """记录全部清除"""
+        self.topic_subscription_counts.clear()
+        self.selector_type_counts.clear()
+
+    def _update_topic_count(self, topic: str, delta: int = 1) -> None:
+        """更新Topic订阅计数"""
+        self.topic_subscription_counts[topic] = self.topic_subscription_counts.get(topic, 0) + delta
+        if self.topic_subscription_counts[topic] <= 0:
+            del self.topic_subscription_counts[topic]
+
+    def update_current_stats(self, subscriptions: List[SubscriptionEntry]) -> None:
+        """更新当前统计信息"""
+        self.total_subscriptions = len(subscriptions)
+        self.active_subscriptions = len([s for s in subscriptions if s.is_active])
+
+        # 统计选择器类型
+        self.selector_type_counts.clear()
+        for entry in subscriptions:
+            selector_type = entry.selector.type.value
+            self.selector_type_counts[selector_type] = self.selector_type_counts.get(selector_type, 0) + 1
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            'total_subscriptions': self.total_subscriptions,
+            'active_subscriptions': self.active_subscriptions,
+            'added_subscriptions': self.added_subscriptions,
+            'removed_subscriptions': self.removed_subscriptions,
+            'updated_subscriptions': self.updated_subscriptions,
+            'conflicts': self.conflicts,
+            'deactivated_subscriptions': self.deactivated_subscriptions,
+            'activated_subscriptions': self.activated_subscriptions,
+            'cleaned_subscriptions': self.cleaned_subscriptions,
+            'conflict_types': self.conflict_types.copy(),
+            'topic_subscription_counts': self.topic_subscription_counts.copy(),
+            'selector_type_counts': self.selector_type_counts.copy()
+        }
+```
+
+### 6. 异常定义
+
+```python
+class SubscriptionError(Exception):
+    """订阅相关异常基类"""
+    pass
+
+class InvalidTopicError(SubscriptionError):
+    """无效Topic异常"""
+    pass
+
+class InvalidSelectorError(SubscriptionError):
+    """无效选择器异常"""
+    pass
+
+class TopicNotSubscribedError(SubscriptionError):
+    """Topic未订阅异常"""
+    pass
+
+class SubscriptionConflictError(SubscriptionError):
+    """订阅冲突异常"""
+    pass
+
+class SubscriptionLimitExceededError(SubscriptionError):
+    """订阅数量超限异常"""
+    pass
+```
+
+### 7. 使用示例
+
+```python
+# 创建订阅管理器
+subscription_manager = SubscriptionManager(max_subscriptions=500)
+
+# 订阅Topic
+try:
+    selector = MessageSelector.by_tag("order || payment")
+    subscription_manager.subscribe("order_topic", selector)
+    print("订阅成功")
+except SubscriptionError as e:
+    print(f"订阅失败: {e}")
+
+# 查询订阅
+if subscription_manager.is_subscribed("order_topic"):
+    entry = subscription_manager.get_subscription("order_topic")
+    print(f"Topic: {entry.topic}, Selector: {entry.selector}")
+
+# 更新选择器
+new_selector = MessageSelector.by_tag("order || payment || refund")
+subscription_manager.update_selector("order_topic", new_selector)
+
+# 获取所有订阅
+all_subs = subscription_manager.get_all_subscriptions()
+print(f"当前订阅数量: {len(all_subs)}")
+
+# 导出订阅关系
+exported_data = subscription_manager.export_subscriptions()
+
+# 获取指标
+metrics = subscription_manager.metrics
+print(f"总订阅数: {metrics.total_subscriptions}")
+print(f"活跃订阅数: {metrics.active_subscriptions}")
+print(f"冲突数: {metrics.conflicts}")
+```
+
+### 8. SubscriptionManager设计要点总结
+
+1. **线程安全**: 使用RLock确保多线程环境下的安全操作
+2. **冲突检测**: 自动检测并记录订阅冲突，防止数据不一致
+3. **指标监控**: 提供详细的订阅指标和统计信息
+4. **数据持久化**: 支持订阅关系的导出和导入
+5. **生命周期管理**: 支持订阅的激活、停用和清理
+6. **异常处理**: 完整的异常体系，便于错误处理和调试
+7. **性能优化**: 合理的数据结构和缓存策略
+8. **扩展性**: 模块化设计，便于功能扩展
+
+### 9. 测试策略
+
+- **单元测试**: 测试所有核心方法的正确性
+- **并发测试**: 验证多线程环境下的线程安全性
+- **冲突测试**: 验证冲突检测和处理逻辑
+- **性能测试**: 测试大量订阅场景下的性能表现
+- **持久化测试**: 验证数据导出导入的正确性
+
+### 10. 文档要求
+
+- 完整的API文档和使用示例
+- 配置参数说明和最佳实践
+- 异常处理指南和故障排查
+- 性能调优建议和监控指标
 
 ## OffsetStore 偏移量存储方案设计
 

@@ -74,6 +74,19 @@ from .listener import (
 
 from .consumer import Consumer, create_consumer
 
+# SubscriptionManager导入
+from .subscription_manager import SubscriptionManager
+from pyrocketmq.model import SubscriptionEntry, SubscriptionConflict
+from .subscription_exceptions import (
+    SubscriptionError,
+    InvalidTopicError,
+    InvalidSelectorError,
+    TopicNotSubscribedError,
+    SubscriptionConflictError,
+    SubscriptionLimitExceededError,
+    SubscriptionDataError,
+)
+
 # 异常类导入
 from .errors import (
     # 基础异常
@@ -128,6 +141,11 @@ __all__ = [
     # 核心Consumer
     "Consumer",
     "create_consumer",
+    # SubscriptionManager
+    "SubscriptionManager",
+    "SubscriptionEntry",
+    "SubscriptionConflict",
+    # "SubscriptionMetrics",  # MVP版本暂不实现
     # 异常类
     "ConsumerError",
     "ConsumerStartError",
@@ -145,6 +163,13 @@ __all__ = [
     "TimeoutError",
     "ConfigError",
     "ValidationError",
+    "SubscriptionError",
+    "InvalidTopicError",
+    "InvalidSelectorError",
+    "TopicNotSubscribedError",
+    "SubscriptionConflictError",
+    "SubscriptionLimitExceededError",
+    "SubscriptionDataError",
     "is_retriable_error",
     "is_fatal_error",
 ]
