@@ -887,7 +887,7 @@ class ConsumerRunningInfo:
             mq_keys = list(self.mq_table.keys())
             mq_keys.sort(key=self._message_queue_sort_key)
 
-            mq_table_items = []
+            mq_table_items: list[str] = []
             for mq in mq_keys:
                 mq_key = mq.to_dict()
                 mq_value = self.mq_table[mq].to_dict()

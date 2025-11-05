@@ -22,6 +22,7 @@ model/
 ├── heart_beat.py            # 心跳数据结构
 ├── client_data.py           # 客户端数据结构
 ├── nameserver_models.py     # NameServer相关模型
+├── subscription.py          # 订阅相关数据结构 (新增)
 ├── utils.py                 # 工具函数
 └── errors.py                # 模块异常定义
 ```
@@ -126,6 +127,83 @@ class HeartbeatData:
     client_id: str                      # 客户端ID
     producer_data_set: List[ProducerData]  # 生产者数据集合
     consumer_data_set: List[ConsumerData]  # 消费者数据集合
+```
+
+### 6. SubscriptionEntry - 订阅条目 (新增)
+存储单个Topic的完整订阅信息，主要用于SubscriptionManager中的订阅管理。
+
+```python
+@dataclass
+class SubscriptionEntry:
+    topic: str                              # 订阅的Topic
+    selector: MessageSelector               # 消息选择器
+    subscription_data: SubscriptionData    # 订阅数据
+    created_at: datetime                    # 创建时间
+    updated_at: datetime                    # 更新时间
+    is_active: bool = True                  # 是否活跃
+```
+
+**核心功能**:
+- `update_timestamp()`: 更新时间戳为当前时间
+- `to_dict()` / `from_dict()`: 序列化和反序列化支持
+- 状态管理: 支持活跃/非活跃状态切换
+
+**使用示例**:
+```python
+from pyrocketmq.model import SubscriptionEntry, create_tag_selector
+
+# 创建订阅条目
+selector = create_tag_selector("order || payment")
+subscription_data = SubscriptionData.from_selector("order_topic", selector)
+entry = SubscriptionEntry(
+    topic="order_topic",
+    selector=selector,
+    subscription_data=subscription_data,
+    created_at=datetime.now(),
+    updated_at=datetime.now()
+)
+
+# 序列化
+entry_dict = entry.to_dict()
+
+# 反序列化
+restored_entry = SubscriptionEntry.from_dict(entry_dict)
+```
+
+### 7. SubscriptionConflict - 订阅冲突 (新增)
+记录订阅冲突的详细信息，用于问题追踪和分析。
+
+```python
+@dataclass
+class SubscriptionConflict:
+    topic: str                              # 冲突的Topic
+    existing_selector: MessageSelector      # 现有选择器
+    new_selector: MessageSelector           # 新选择器
+    conflict_type: str                     # 冲突类型
+    timestamp: datetime                    # 冲突发生时间
+    description: str | None = None         # 冲突描述
+```
+
+**冲突类型**:
+- `SELECTOR_TYPE_MISMATCH`: 选择器类型不匹配
+- `EXPRESSION_MISMATCH`: 表达式不匹配
+
+**使用示例**:
+```python
+from pyrocketmq.model import SubscriptionConflict, create_tag_selector, create_sql_selector
+
+# 创建冲突记录
+conflict = SubscriptionConflict(
+    topic="order_topic",
+    existing_selector=create_tag_selector("order"),
+    new_selector=create_sql_selector("color='red'"),
+    conflict_type="SELECTOR_TYPE_MISMATCH",
+    timestamp=datetime.now(),
+    description="Tag selector cannot be changed to SQL selector"
+)
+
+# 序列化
+conflict_dict = conflict.to_dict()
 ```
 
 ## 序列化机制
@@ -408,4 +486,105 @@ request = RemotingRequestFactory.create_send_message_request(
 )
 ```
 
-该Model模块为pyrocketmq提供了完整、类型安全、高性能的数据模型基础，确保与RocketMQ服务器的完美兼容。
+### 订阅管理相关操作
+```python
+from pyrocketmq.model import SubscriptionEntry, SubscriptionConflict, create_tag_selector
+from datetime import datetime
+
+# 创建订阅条目
+selector = create_tag_selector("order || payment")
+entry = SubscriptionEntry(
+    topic="order_topic",
+    selector=selector,
+    subscription_data=SubscriptionData.from_selector("order_topic", selector),
+    created_at=datetime.now(),
+    updated_at=datetime.now()
+)
+
+# 更新时间戳
+entry.update_timestamp()
+
+# 序列化和反序列化
+entry_dict = entry.to_dict()
+restored_entry = SubscriptionEntry.from_dict(entry_dict)
+
+# 创建冲突记录
+conflict = SubscriptionConflict(
+    topic="order_topic",
+    existing_selector=create_tag_selector("order"),
+    new_selector=create_tag_selector("payment"),
+    conflict_type="EXPRESSION_MISMATCH",
+    timestamp=datetime.now()
+)
+```
+
+## 依赖项列表
+
+### 内部依赖
+- Python 3.10+ (支持现代类型标注语法)
+- `dataclasses` - 数据类支持
+- `datetime` - 时间处理
+- `typing` - 类型标注支持
+
+### 外部依赖
+- 无外部依赖，保持轻量级设计
+
+## 版本变更记录
+
+### v1.2.0 (2025-01-05) - 订阅管理增强
+**新增功能**:
+- ✅ 新增 `subscription.py` 模块，提供订阅相关数据结构
+- ✅ 实现 `SubscriptionEntry` 订阅条目数据结构
+- ✅ 实现 `SubscriptionConflict` 订阅冲突数据结构
+- ✅ 更新类型标注风格，符合 Python 3.10+ 标准
+
+**技术改进**:
+- 🔧 将所有 `Optional[x]` 替换为 `x | None`
+- 🔧 将所有 `List[x]` 替换为 `list[x]`
+- 🔧 将所有 `Dict[x, y]` 替换为 `dict[x, y]`
+- 🔧 添加完整的类型标注，包括类成员和方法参数
+
+**使用示例**:
+```python
+# 新的订阅管理功能
+from pyrocketmq.model import SubscriptionEntry, create_tag_selector
+
+selector = create_tag_selector("order || payment")
+entry = SubscriptionEntry(
+    topic="order_topic",
+    selector=selector,
+    subscription_data=SubscriptionData.from_selector("order_topic", selector),
+    created_at=datetime.now(),
+    updated_at=datetime.now()
+)
+```
+
+### v1.1.0 (2024-12-XX) - 核心协议支持
+**新增功能**:
+- ✅ 实现完整的 RocketMQ TCP 协议支持
+- ✅ 添加所有核心数据结构定义
+- ✅ 实现二进制序列化机制
+- ✅ 支持消息、队列、心跳等核心模型
+
+**技术特性**:
+- 🔧 严格的类型安全保障
+- 🔧 高性能二进制序列化
+- 🔧 完整的错误处理体系
+- 🔧 与 Go 语言实现的完全兼容
+
+### v1.0.0 (2024-11-XX) - 初始版本
+**基础功能**:
+- ✅ 基础数据结构定义
+- ✅ 核心枚举类型
+- ✅ 基本的序列化支持
+- ✅ 初始的工具函数集合
+
+## 总结
+
+该Model模块为pyrocketmq提供了完整、类型安全、高性能的数据模型基础，确保与RocketMQ服务器的完美兼容。通过新增的订阅管理相关数据结构，进一步增强了Consumer端的订阅管理能力，为构建完整的消息队列客户端提供了坚实的数据基础。
+
+---
+
+**文档版本**: v1.2.0
+**最后更新**: 2025-01-05
+**维护团队**: pyrocketmq开发团队

@@ -9,6 +9,7 @@ from .client_data import (
     ProducerData,
     ExpressionType,
     MessageSelector,
+    SubscriptionData,
     is_tag_type,
     create_tag_selector,
     create_sql_selector,
@@ -47,6 +48,10 @@ from .factory import (
     RemotingRequestFactory,
 )
 from .heart_beat import HeartbeatData
+from .subscription import (
+    SubscriptionEntry,
+    SubscriptionConflict,
+)
 from .message import (
     Message,
     MessageProperty,
