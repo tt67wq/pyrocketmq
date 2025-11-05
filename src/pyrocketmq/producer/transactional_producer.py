@@ -649,9 +649,7 @@ class TransactionProducer(Producer):
         self._max_check_times = max_times
         self._logger.info("设置最大回查次数", extra={"max_times": max_times})
 
-    def _get_broker_addr_by_name(
-        self, broker_name: str, topic: str | None = None
-    ) -> str | None:
+    def _get_broker_addr_by_name(self, broker_name: str, topic: str) -> str | None:
         """根据broker名称查询broker地址
 
         通过查询NameServer获取指定broker名称的地址信息。
@@ -674,18 +672,6 @@ class TransactionProducer(Producer):
         if not self._nameserver_connections:
             raise ProducerError("NameServer连接不可用，无法查询broker地址")
 
-        # 准备要查询的topic列表
-        topics_to_check: list[str] = []
-        if topic:
-            topics_to_check.append(topic)
-        else:
-            # 如果没有提供topic，从本地缓存中获取已知topic
-            topics_to_check.extend(self._topic_mapping.get_all_topics())
-
-            # 如果本地缓存为空，尝试一些常见的topic
-            if not topics_to_check:
-                topics_to_check.extend(["TBW102", "SELF_TEST_TOPIC"])
-
         for addr, remote in self._nameserver_connections.items():
             try:
                 # 使用NameServer客户端查询路由信息
@@ -693,26 +679,13 @@ class TransactionProducer(Producer):
                     remote, self._config.send_msg_timeout / 1000.0
                 )
 
-                for check_topic in topics_to_check:
-                    try:
-                        # 查询Topic路由信息
-                        topic_route_data: TopicRouteData = (
-                            client.query_topic_route_info(check_topic)
-                        )
+                # 查询Topic路由信息
+                topic_route_data: TopicRouteData = client.query_topic_route_info(topic)
 
-                        # 在路由数据中查找目标broker
-                        for broker_data in topic_route_data.broker_data_list:
-                            if broker_data.broker_name == broker_name:
-                                return self._message_router.select_broker_address(
-                                    broker_data
-                                )
-
-                    except Exception as e:
-                        self._logger.debug(
-                            "查询topic失败",
-                            extra={"topic": check_topic, "error": str(e)},
-                        )
-                        continue
+                # 在路由数据中查找目标broker
+                for broker_data in topic_route_data.broker_data_list:
+                    if broker_data.broker_name == broker_name:
+                        return self._message_router.select_broker_address(broker_data)
 
             except Exception as e:
                 self._logger.warning(
