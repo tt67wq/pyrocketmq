@@ -9,42 +9,9 @@ MVP版本专注于核心配置，后续版本会逐步扩展更多配置选项�
 
 import os
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any
 
-
-class MessageModel(Enum):
-    """消息消费模式"""
-
-    CLUSTERING = "CLUSTERING"  # 集群消费模式(默认)
-    BROADCASTING = "BROADCASTING"  # 广播消费模式
-
-
-class ConsumeFromWhere(Enum):
-    """消费起始位置策略
-
-    定义Consumer首次启动或新分配队列时从哪个位置开始消费消息。
-    这个配置决定了消息消费的起始点，对消息处理的完整性很重要。
-    """
-
-    LAST_OFFSET = "CONSUME_FROM_LAST_OFFSET"  # 从最后偏移量开始消费(默认)
-    FIRST_OFFSET = "CONSUME_FROM_FIRST_OFFSET"  # 从第一个偏移量开始消费
-    TIMESTAMP = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
-    MIN_OFFSET = "CONSUME_FROM_MIN_OFFSET"  # 从最小偏移量开始消费
-    MAX_OFFSET = "CONSUME_FROM_MAX_OFFSET"  # 从最大偏移量开始消费
-
-
-class AllocateQueueStrategy(Enum):
-    """队列负载均衡策略
-
-    定义在多消费者场景下如何分配Topic下的队列给不同的Consumer实例。
-    不同的策略适用于不同的业务场景和部署架构。
-    """
-
-    AVERAGE = "AVG"  # 平均分配策略(默认，MVP实现)
-    HASH = "HASH"  # 哈希分配策略(后续版本)
-    CONFIGURATION = "CONFIGURATION"  # 配置指定策略(后续版本)
-    MACHINE_ROOM = "MACHINE_ROOM"  # 机房优先策略(后续版本)
+from src.pyrocketmq.model import AllocateQueueStrategy, ConsumeFromWhere, MessageModel
 
 
 @dataclass
@@ -67,12 +34,10 @@ class ConsumerConfig:
     namesrv_addr: str  # NameServer地址(必需)
 
     # === 消费行为配置 ===
-    message_model: MessageModel = MessageModel.CLUSTERING  # 消费模式
-    consume_from_where: ConsumeFromWhere = ConsumeFromWhere.LAST_OFFSET  # 消费起始位置
+    message_model: str = MessageModel.CLUSTERING  # 消费模式
+    consume_from_where: str = ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET  # 消费起始位置
     consume_timestamp: int = 0  # 时间戳消费的起始时间(毫秒)
-    allocate_queue_strategy: AllocateQueueStrategy = (
-        AllocateQueueStrategy.AVERAGE
-    )  # 队列分配策略
+    allocate_queue_strategy: str = AllocateQueueStrategy.AVERAGE  # 队列分配策略
     max_reconsume_times: int = 16  # 最大重试次数
 
     # === 性能配置 ===
@@ -176,20 +141,27 @@ class ConsumerConfig:
         model = os.getenv("ROCKETMQ_MESSAGE_MODEL")
         if model:
             model = model.upper()
-            if model in [m.value for m in MessageModel]:
-                self.message_model = MessageModel(model)
+            if model in [MessageModel.BROADCASTING, MessageModel.CLUSTERING]:
+                self.message_model = model
 
         where = os.getenv("ROCKETMQ_CONSUME_FROM_WHERE")
         if where:
             where = where.upper()
-            if where in [w.value for w in ConsumeFromWhere]:
-                self.consume_from_where = ConsumeFromWhere(where)
+            if where in [
+                ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET,
+                ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET,
+                ConsumeFromWhere.CONSUME_FROM_TIMESTAMP,
+            ]:
+                self.consume_from_where = where
 
         allocate_strategy = os.getenv("ROCKETMQ_ALLOCATE_STRATEGY")
         if allocate_strategy:
             allocate_strategy = allocate_strategy.upper()
-            if allocate_strategy in [s.value for s in AllocateQueueStrategy]:
-                self.allocate_queue_strategy = AllocateQueueStrategy(allocate_strategy)
+            if allocate_strategy in [
+                AllocateQueueStrategy.AVERAGE,
+                AllocateQueueStrategy.HASH,
+            ]:
+                self.allocate_queue_strategy = allocate_strategy
 
         # OffsetStore配置环境变量
         if os.getenv("ROCKETMQ_PERSIST_INTERVAL"):
@@ -236,10 +208,10 @@ class ConsumerConfig:
         return {
             "consumer_group": self.consumer_group,
             "namesrv_addr": self.namesrv_addr,
-            "message_model": self.message_model.value,
-            "consume_from_where": self.consume_from_where.value,
+            "message_model": self.message_model,
+            "consume_from_where": self.consume_from_where,
             "consume_timestamp": self.consume_timestamp,
-            "allocate_queue_strategy": self.allocate_queue_strategy.value,
+            "allocate_queue_strategy": self.allocate_queue_strategy,
             "max_reconsume_times": self.max_reconsume_times,
             "consume_thread_min": self.consume_thread_min,
             "consume_thread_max": self.consume_thread_max,
@@ -272,8 +244,8 @@ class ConsumerConfig:
             f"ConsumerConfig["
             f"group={self.consumer_group}, "
             f"namesrv={self.namesrv_addr}, "
-            f"model={self.message_model.value}, "
-            f"strategy={self.allocate_queue_strategy.value}, "
+            f"model={self.message_model}, "
+            f"strategy={self.allocate_queue_strategy}, "
             f"threads=({self.consume_thread_min}-{self.consume_thread_max}), "
             f"batch_size={self.pull_batch_size}"
             f"]"

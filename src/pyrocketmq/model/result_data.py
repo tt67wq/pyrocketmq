@@ -22,25 +22,6 @@ class ConsumeType:
     PULL: str = "PULL"  # 拉式消费
 
 
-# 消息模式枚举
-class MessageModel:
-    """消息模式"""
-
-    BROADCASTING: str = "BROADCASTING"  # 广播模式
-    CLUSTERING: str = "CLUSTERING"  # 集群模式
-
-
-# 消费起始位置枚举
-class ConsumeFromWhere:
-    """消费起始位置"""
-
-    CONSUME_FROM_LAST_OFFSET: str = "CONSUME_FROM_LAST_OFFSET"  # 从最后偏移量开始消费
-    CONSUME_FROM_FIRST_OFFSET: str = (
-        "CONSUME_FROM_FIRST_OFFSET"  # 从第一个偏移量开始消费
-    )
-    CONSUME_FROM_TIMESTAMP: str = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
-
-
 # 发送状态枚举
 class SendStatus:
     """发送状态枚举"""

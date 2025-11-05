@@ -3,11 +3,11 @@ RocketMQ模型层工具函数
 """
 
 import json
+import os
 import socket
 import struct
-import time
 import threading
-import os
+import time
 from typing import Any, Final
 
 from .command import RemotingCommand
@@ -19,7 +19,6 @@ from .enums import (
     ResponseCode,
 )
 from .errors import ValidationError
-
 
 # ============================================================================
 # 唯一ID生成相关常量和变量
@@ -55,7 +54,7 @@ def _get_client_ip4() -> bytes:
 
 def _get_pid() -> int:
     """获取进程ID（Go的Pid()的Python实现）"""
-    return os.getpid() & 0xFFFF
+    return os.getpid() % 32768  # 确保在 int16 范围内
 
 
 def _generate_prefix() -> str:

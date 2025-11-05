@@ -5,17 +5,22 @@ pyrocketmq模型层
 """
 
 from .client_data import (
+    SUBSCRIBE_ALL,
     ConsumerData,
-    ProducerData,
     ExpressionType,
     MessageSelector,
+    ProducerData,
     SubscriptionData,
-    is_tag_type,
-    create_tag_selector,
     create_sql_selector,
-    SUBSCRIBE_ALL,
+    create_tag_selector,
+    is_tag_type,
 )
 from .command import RemotingCommand
+from .consumer import (
+    AllocateQueueStrategy,
+    ConsumeFromWhere,
+    MessageModel,
+)
 from .enums import (
     TRANSACTION_COMMIT_TYPE,
     TRANSACTION_NOT_TYPE,
@@ -48,10 +53,6 @@ from .factory import (
     RemotingRequestFactory,
 )
 from .heart_beat import HeartbeatData
-from .subscription import (
-    SubscriptionEntry,
-    SubscriptionConflict,
-)
 from .message import (
     Message,
     MessageProperty,
@@ -72,15 +73,17 @@ from .message_id import (
 )
 from .message_queue import MessageQueue
 from .result_data import (
-    ConsumeFromWhere,
     ConsumeType,
-    MessageModel,
     OffsetResult,
     PullMessageResult,
     SendMessageResult,
     SendStatus,
 )
 from .serializer import RemotingCommandSerializer
+from .subscription import (
+    SubscriptionConflict,
+    SubscriptionEntry,
+)
 from .utils import (
     command_to_dict,
     commands_to_json,
@@ -153,6 +156,7 @@ __all__ = [
     "SendStatus",
     "ConsumeType",
     "MessageModel",
+    "AllocateQueueStrategy",
     "ConsumeFromWhere",
     # 事务常量
     "TRANSACTION_NOT_TYPE",
