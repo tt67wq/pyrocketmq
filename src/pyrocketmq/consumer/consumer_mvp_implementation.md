@@ -26,46 +26,26 @@
 - **可扩展性**: 预留扩展点，便于后续功能增强
 - **错误处理**: 完善的异常处理和恢复机制
 
-## 功能拆分
+## 功能规划
 
-### 功能模块组成
+### MVP核心功能 (第1-2周)
 1. **ConsumerConfig** - Consumer配置管理
 2. **MessageListener** - 消息处理回调接口
-3. **MessageSelector** - 消息选择器数据结构(与Go语言兼容)
-4. **SubscriptionInfo** - 订阅关系数据结构
+3. **ConcurrentConsumer** - 并发消费Consumer (同步版本)
+4. **SubscriptionManager** - 订阅关系管理
+5. **OffsetStore** - 偏移量存储 (集群模式)
 
-### 核心组件实现
-1. **ConcurrentConsumer** - 并发消费Consumer (同步版本)
-   - 生命周期管理(start/shutdown)
-   - 订阅管理(subscribe/unsubscribe)
-   - 基本的消息拉取循环
-   - 多线程消息处理
-2. **MessageProcessor** - 消息处理器
-   - 消息反序列化
-   - 回调调用
-   - 消费结果处理
-
-### 路由和队列管理
-1. **RebalanceImpl** - 重平衡实现
-   - 队列分配策略(支持AVG/HASH/CONFIGURATION/MACHINE_ROOM)
-   - 消费者发现和注册
-   - 队列重新分配触发机制
-2. **AllocateQueueStrategy** - 负载均衡策略实现
-   - **AverageAllocateStrategy**: 平均分配策略(MVP默认)
-   - **HashAllocateStrategy**: 基于Consumer ID的哈希分配
-   - **ConfigAllocateStrategy**: 基于配置文件的分配
-   - **MachineRoomAllocateStrategy**: 机房优先分配策略
-3. **PullTask** - 拉取任务
-   - 定时拉取和流量控制
-   - 偏移量管理和持久化
-   - 批量处理和大小限制
-
-### 高级功能 (后续扩展)
+### 扩展功能 (第3-4周)
 1. **OrderlyConsumer** - 顺序消费 (独立实现)
-2. **AsyncConcurrentConsumer** - 异步并发Consumer
-3. **AsyncOrderlyConsumer** - 异步顺序Consumer
-4. **TransactionConsumer** - 事务消费
-5. **BroadcastConsumer** - 广播消费
+2. **负载均衡策略** - 完整的队列分配算法
+3. **重平衡机制** - 动态队列分配
+4. **本地偏移量存储** - 广播模式支持
+
+### 高级功能 (后续版本)
+1. **AsyncConcurrentConsumer** - 异步并发Consumer
+2. **AsyncOrderlyConsumer** - 异步顺序Consumer
+3. **事务消费** - TransactionConsumer
+4. **监控和指标** - 完善的统计功能
 
 ## Consumer实现架构设计：并发 vs 顺序
 
@@ -301,53 +281,16 @@ class ConsumerConfig:
     orderly_suspend_current_queue_time_millis: int = 1000
 ```
 
-#### 2. 通用工具类 (共享)
-```python
-class MessageSelector: ✅ **已实现**
-    """消息选择器 - 两种Consumer共享 (client_data.py:32-227)"""
+#### 2. 共享组件
 
-class SubscriptionManager:
-    """订阅关系管理 - 两种Consumer共享"""
+#### MessageSelector ✅ **已实现**
+消息选择器已在 `src/pyrocketmq/model/client_data.py` 中完整实现，支持与Go语言RocketMQ客户端完全兼容的功能。
 
-    **核心功能**:
-    - 管理Topic订阅关系和消息选择器
-    - 支持订阅数据的序列化和反序列化
-    - 提供订阅状态查询和更新接口
-    - 支持订阅冲突检测和验证
-    - 线程安全的订阅操作
+#### SubscriptionManager
+订阅关系管理组件，负责管理Topic订阅关系和消息选择器。详见下方 SubscriptionManager 详细设计章节。
 
-    **实现位置**: `src/pyrocketmq/consumer/subscription_manager.py` (待实现)
-
-    **核心设计**:
-    ```python
-    @dataclass
-    class SubscriptionEntry:
-        topic: str
-        selector: MessageSelector
-        subscription_data: SubscriptionData
-        created_at: datetime
-        updated_at: datetime
-
-    class SubscriptionManager:
-        def __init__(self):
-            self._subscriptions: Dict[str, SubscriptionEntry] = {}
-            self._lock = RLock()
-
-        def subscribe(self, topic: str, selector: MessageSelector) -> bool
-        def unsubscribe(self, topic: str) -> bool
-        def get_subscription(self, topic: str) -> Optional[SubscriptionEntry]
-        def get_all_subscriptions(self) -> List[SubscriptionEntry]
-        def update_selector(self, topic: str, selector: MessageSelector) -> bool
-        def clear_all(self) -> None
-        def is_subscribed(self, topic: str) -> bool
-        def validate_subscription(self, topic: str, selector: MessageSelector) -> bool
-        def to_subscription_data_list(self) -> List[SubscriptionData]
-        def from_subscription_data_list(self, subscription_data_list: List[SubscriptionData]) -> None
-    ```
-
-class OffsetStore:
-    """偏移量存储 - 基类，两种Consumer继承实现"""
-```
+#### OffsetStore
+偏移量存储组件，提供集群模式和广播模式的偏移量管理。详见下方 OffsetStore 详细设计章节。
 
 
 
@@ -399,7 +342,7 @@ orderly_config = ConsumerConfig(
 )
 ```
 
-### 优势分析
+### 设计优势
 
 #### 1. 代码清晰性
 - 每个Consumer专注于自己的核心逻辑
@@ -421,116 +364,134 @@ orderly_config = ConsumerConfig(
 - 符合RocketMQ的官方设计
 - 便于后续功能升级
 
-## 实现内容
+## 实施计划
 
-### 核心组件
-1. **ConsumerConfig** - Consumer配置管理
-2. **MessageListener** - 消息处理回调接口
-3. **BaseConsumer** - Consumer基类，定义通用接口
-4. **ConcurrentConsumer** - 并发消费Consumer (同步版本)
-5. **OrderlyConsumer** - 顺序消费Consumer (独立实现)
+### 第1周：基础架构
+- BaseConsumer抽象基类
+- ConsumerConfig配置管理
+- MessageListener接口设计
+- 基础异常体系
 
-### 关键模块
-1. **RebalanceImpl** - 重平衡实现
-2. **AllocateQueueStrategy** - 负载均衡策略实现
-3. **PullTask** - 拉取任务
-4. **OffsetStore** - 偏移量存储
-5. **MessageSelector** - 消息选择器
+### 第2周：并发消费核心
+- ConcurrentConsumer实现
+- SubscriptionManager订阅管理
+- 基础消息拉取逻辑
+- 偏移量存储接口
 
-### 支持功能
-- 多种负载均衡策略
-- 队列重平衡机制
-- 偏移量管理和持久化
-- 消息过滤和选择
-- 错误处理和恢复
-- 性能监控和统计
+### 第3周：负载均衡与重平衡
+- AllocateQueueStrategy实现
+- RebalanceImpl重平衡机制
+- OffsetStore远程存储
+- 集群模式支持
+
+### 第4周：顺序消费与优化
+- OrderlyConsumer实现
+- 本地偏移量存储
+- 广播模式支持
+- 性能优化与测试
 
 ## 核心组件设计
 
-### 1. ConsumerConfig
+### 1. ConsumerConfig - 配置管理
+
 ```python
 from enum import Enum
+from dataclasses import dataclass
+from typing import Optional
 
 class ConsumeFromWhere(Enum):
     """消费起始位置策略"""
-    LAST_OFFSET = "CONSUME_FROM_LAST_OFFSET"     # 从最后偏移量开始消费
-    FIRST_OFFSET = "CONSUME_FROM_FIRST_OFFSET"   # 从第一个偏移量开始消费
-    TIMESTAMP = "CONSUME_FROM_TIMESTAMP"         # 从指定时间戳开始消费
-    MIN_OFFSET = "CONSUME_FROM_MIN_OFFSET"       # 从最小偏移量开始消费
-    MAX_OFFSET = "CONSUME_FROM_MAX_OFFSET"       # 从最大偏移量开始消费
+    LAST_OFFSET = "CONSUME_FROM_LAST_OFFSET"
+    FIRST_OFFSET = "CONSUME_FROM_FIRST_OFFSET"
+    TIMESTAMP = "CONSUME_FROM_TIMESTAMP"
+    MIN_OFFSET = "CONSUME_FROM_MIN_OFFSET"
+    MAX_OFFSET = "CONSUME_FROM_MAX_OFFSET"
 
 class AllocateQueueStrategy(Enum):
     """队列负载均衡策略"""
-    AVERAGE = "AVG"                              # 平均分配策略
-    HASH = "HASH"                                # 哈希分配策略
-    CONFIGURATION = "CONFIGURATION"              # 配置指定策略
-    MACHINE_ROOM = "MACHINE_ROOM"                # 机房优先策略
+    AVERAGE = "AVG"
+    HASH = "HASH"
+    CONFIGURATION = "CONFIGURATION"
+    MACHINE_ROOM = "MACHINE_ROOM"
 
 @dataclass
 class ConsumerConfig:
+    """Consumer配置管理"""
+    # 基础配置
     consumer_group: str
     namesrv_addr: str
-    consume_thread_min: int = 20
-    consume_thread_max: int = 64
-    pull_batch_size: int = 32
-    consume_timeout: int = 15
-    max_reconsume_times: int = 16
     message_model: MessageModel = MessageModel.CLUSTERING
 
-    # 消费起始位置和负载均衡配置
-    consume_from_where: ConsumeFromWhere = ConsumeFromWhere.LAST_OFFSET  # 消费起始位置
-    consume_timestamp: int = 0  # 当consume_from_where=TIMESTAMP时使用
-    allocate_queue_strategy: AllocateQueueStrategy = AllocateQueueStrategy.AVERAGE  # 负载均衡策略
+    # 线程配置
+    consume_thread_min: int = 20
+    consume_thread_max: int = 64
 
-    # 拉取控制配置
-    pull_interval: int = 0     # 拉取间隔(毫秒)，0表示持续拉取
-    pull_threshold_for_all: int = 50000  # 所有队列消息数阈值
-    pull_threshold_for_topic: int = 10000  # 单个topic消息数阈值
-    pull_threshold_size_for_topic: int = 100  # 单个topic消息大小阈值(MB)
-    pull_threshold_of_queue: int = 1000  # 单个队列消息数阈值
-    pull_threshold_size_of_queue: int = 100  # 单个队列消息大小阈值(MB)
+    # 拉取配置
+    pull_batch_size: int = 32
+    pull_interval: int = 0  # 0表示持续拉取
+    consume_timeout: int = 15
+    max_reconsume_times: int = 16
 
-    # OffsetStore偏移量存储配置
-    # 持久化间隔配置
-    persist_interval: int = 5000  # 毫秒，定期持久化间隔
-    persist_batch_size: int = 10  # 批量提交大小
+    # 消费起始位置
+    consume_from_where: ConsumeFromWhere = ConsumeFromWhere.LAST_OFFSET
+    consume_timestamp: int = 0
 
-    # 本地存储路径(广播模式使用)
+    # 负载均衡
+    allocate_queue_strategy: AllocateQueueStrategy = AllocateQueueStrategy.AVERAGE
+
+    # OffsetStore配置
+    persist_interval: int = 5000  # 毫秒
+    persist_batch_size: int = 10
     offset_store_path: str = "~/.rocketmq/offsets"
-
-    # 内存缓存配置
-    max_cache_size: int = 10000  # 最大缓存条目数
-
-    # 故障恢复配置
-    enable_auto_recovery: bool = True  # 启用自动恢复
-    max_retry_times: int = 3  # 最大重试次数
+    max_cache_size: int = 10000
+    enable_auto_recovery: bool = True
+    max_retry_times: int = 3
 ```
 
-### 2. MessageListener
+### 2. MessageListener - 消息处理接口
+
 ```python
-class MessageListener:
-    def consume_message(self, messages: List[MessageExt]) -> ConsumeResult:
-        pass
+from enum import Enum
+from typing import List
+from pyrocketmq.model.message import MessageExt
 
 class ConsumeResult(Enum):
+    """消费结果"""
     SUCCESS = "CONSUME_SUCCESS"
     RECONSUME_LATER = "RECONSUME_LATER"
+    COMMIT = "COMMIT"
+    ROLLBACK = "ROLLBACK"
+
+class MessageListener(ABC):
+    """消息监听器接口"""
+
+    @abstractmethod
+    def consume_message(self, messages: List[MessageExt]) -> ConsumeResult:
+        """消费消息"""
+        pass
+
+class MessageListenerConcurrently(MessageListener):
+    """并发消息监听器"""
+    pass
+
+class MessageListenerOrderly(MessageListener):
+    """顺序消息监听器"""
+    pass
 ```
 
-### 3. MessageSelector数据结构
-已在model中实现
+### 3. BaseConsumer - 抽象基类
 
-### 4. 基础抽象类 (MVP)
 ```python
 from abc import ABC, abstractmethod
 
 class BaseConsumer(ABC):
-    """Consumer基类，定义通用接口 (同步版本)"""
+    """Consumer基类，定义通用接口"""
 
     def __init__(self, config: ConsumerConfig):
         self.config = config
         self.subscription_manager = SubscriptionManager()
         self.running = False
+        self.message_listener: Optional[MessageListener] = None
 
     @abstractmethod
     def start(self) -> None:
@@ -547,24 +508,15 @@ class BaseConsumer(ABC):
         """订阅Topic"""
         pass
 
-    @abstractmethod
     def register_message_listener(self, listener: MessageListener) -> None:
         """注册消息监听器"""
-        pass
-
-class ConcurrentConsumer(BaseConsumer):
-    """并发消费Consumer - MVP核心实现 (同步版本)"""
-    # 详细实现见上方架构设计部分
-
-class OrderlyConsumer(BaseConsumer):
-    """顺序消费Consumer - 独立实现 (同步版本)"""
-    # 详细实现见上方架构设计部分
+        self.message_listener = listener
 ```
 
 ## 依赖关系
 
 ### 复用现有组件
-- **Model层**: Message, MessageExt, MessageQueue等数据结构
+- **Model层**: Message, MessageExt, MessageQueue, MessageSelector
 - **Transport层**: TCP连接和状态管理
 - **Remote层**: 远程通信和连接池
 - **NameServer**: 路由查询和Broker发现
@@ -576,6 +528,7 @@ class OrderlyConsumer(BaseConsumer):
 - **queue**: 消息队列和任务调度
 - **time**: 定时任务和超时控制
 - **collections**: 消费状态统计
+- **asyncio**: 异步操作支持
 
 ## 负载均衡策略详细设计
 
@@ -709,52 +662,31 @@ def create_sql_selector(expression: str) -> MessageSelector:
     return MessageSelector.by_sql(expression)
 ```
 
-## SubscriptionManager 订阅关系管理方案设计
+## SubscriptionManager 订阅关系管理
 
-### 1. SubscriptionManager概述
+### 概述
 
-SubscriptionManager是RocketMQ Consumer的核心组件，负责管理Topic订阅关系、消息选择器和订阅数据。它提供了完整的订阅生命周期管理，确保Consumer能够正确订阅和处理感兴趣的消息。
+SubscriptionManager是RocketMQ Consumer的核心组件，负责管理Topic订阅关系、消息选择器和订阅数据，提供完整的订阅生命周期管理。
 
-### 2. 设计目标
+### 核心数据结构
 
-- **订阅关系管理**: 维护Topic与消息选择器的映射关系
-- **数据一致性**: 确保订阅数据的准确性和一致性
-- **线程安全**: 支持多线程环境下的安全订阅操作
-- **动态更新**: 支持运行时订阅关系的动态变更
-- **状态监控**: 提供订阅状态查询和监控能力
-- **序列化支持**: 支持订阅数据的序列化和反序列化
-
-### 3. 核心数据结构
-
-#### 3.1 SubscriptionEntry 订阅条目
+#### SubscriptionEntry - 订阅条目
 ```python
 @dataclass
 class SubscriptionEntry:
     """订阅条目数据结构"""
-    topic: str                                    # 订阅的Topic
-    selector: MessageSelector                     # 消息选择器
-    subscription_data: SubscriptionData          # 订阅数据
-    created_at: datetime                          # 创建时间
-    updated_at: datetime                          # 更新时间
-    is_active: bool = True                        # 是否活跃
+    topic: str
+    selector: MessageSelector
+    subscription_data: SubscriptionData
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool = True
 
     def update_timestamp(self) -> None:
-        """更新时间戳"""
         self.updated_at = datetime.now()
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            'topic': self.topic,
-            'selector': self.selector.to_dict(),
-            'subscription_data': self.subscription_data.to_dict(),
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat(),
-            'is_active': self.is_active
-        }
 ```
 
-#### 3.2 SubscriptionConflict 订阅冲突
+#### SubscriptionConflict - 订阅冲突
 ```python
 @dataclass
 class SubscriptionConflict:
@@ -764,14 +696,9 @@ class SubscriptionConflict:
     new_selector: MessageSelector
     conflict_type: str
     timestamp: datetime
-
-    def __str__(self) -> str:
-        return f"SubscriptionConflict: {self.topic}, existing={self.existing_selector}, new={self.new_selector}, type={self.conflict_type}"
 ```
 
-### 4. SubscriptionManager核心实现
-
-#### 4.1 主类设计
+### SubscriptionManager 核心实现
 ```python
 class SubscriptionManager:
     """订阅关系管理器"""
@@ -1398,338 +1325,118 @@ print(f"冲突数: {metrics.conflicts}")
 - 异常处理指南和故障排查
 - 性能调优建议和监控指标
 
-## OffsetStore 偏移量存储方案设计
+## OffsetStore 偏移量存储
 
-### 1. OffsetStore概述
+### 概述
 
-OffsetStore是RocketMQ Consumer的核心组件，负责管理和持久化消息消费偏移量。它确保Consumer能够记录每个队列的消费进度，并在重启后恢复消费位置。
+OffsetStore负责管理和持久化消息消费偏移量，确保Consumer能够记录每个队列的消费进度，并在重启后恢复消费位置。
 
-### 2. 设计目标
+### 存储策略
 
-- **数据持久化**: 确保偏移量数据不丢失
-- **高性能**: 支持高并发场景下的频繁读写
-- **容错性**: 支持Broker故障时的数据恢复
-- **兼容性**: 与RocketMQ协议完全兼容
-- **灵活性**: 支持不同消息模式的存储策略
-
-### 3. 存储策略
-
-#### 3.1 集群模式(Clustering) - 远程存储
-```python
-class RemoteOffsetStore:
-    """集群模式下的远程偏移量存储
-
-    偏移量存储在Broker服务器上，支持多Consumer实例协同消费。
-    这是RocketMQ的标准实现方式。
-    """
-
-    def __init__(self, consumer_group: str, broker_manager: BrokerManager):
-        self.consumer_group = consumer_group
-        self.broker_manager = broker_manager
-        self.local_cache = {}  # 本地缓存，减少网络请求
-
-    async def load(self) -> None:
-        """从Broker加载偏移量到本地缓存"""
-
-    async def update_offset(self, queue: MessageQueue, offset: int) -> None:
-        """更新偏移量到本地缓存"""
-
-    async def persist(self, queue: MessageQueue) -> None:
-        """将本地缓存的偏移量持久化到Broker"""
-
-    async def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
-        """读取偏移量，支持多种读取策略"""
-
-    async def persist_all(self) -> None:
-        """持久化所有本地缓存的偏移量"""
-```
-
-#### 3.2 广播模式(Broadcasting) - 本地存储
-```python
-class LocalOffsetStore:
-    """广播模式下的本地偏移量存储
-
-    偏移量存储在本地文件中，每个Consumer实例独立消费所有消息。
-    """
-
-    def __init__(self, consumer_group: str, store_path: str):
-        self.consumer_group = consumer_group
-        self.store_path = store_path
-        self.offset_table = {}
-        self.file_path = os.path.join(store_path, f"{consumer_group}.offset")
-
-    async def load(self) -> None:
-        """从本地文件加载偏移量"""
-
-    async def update_offset(self, queue: MessageQueue, offset: int) -> None:
-        """更新内存中的偏移量"""
-
-    async def persist(self, queue: MessageQueue) -> None:
-        """持久化偏移量到本地文件"""
-
-    async def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
-        """从内存读取偏移量"""
-
-    async def persist_all(self) -> None:
-        """持久化所有偏移量到本地文件"""
-```
-
-### 4. 偏移量读取策略
-
+#### ReadOffsetType - 读取策略
 ```python
 from enum import Enum
 
 class ReadOffsetType(Enum):
     """偏移量读取类型"""
-    MEMORY_FIRST_THEN_STORE = "MEMORY_FIRST_THEN_STORE"  # 优先从内存读取，失败则从存储读取
+    MEMORY_FIRST_THEN_STORE = "MEMORY_FIRST_THEN_STORE"  # 优先从内存读取
     READ_FROM_MEMORY = "READ_FROM_MEMORY"                 # 仅从内存读取
     READ_FROM_STORE = "READ_FROM_STORE"                   # 仅从存储读取
 ```
 
-### 5. 核心接口设计
-
+#### OffsetEntry - 偏移量条目
 ```python
-from abc import ABC, abstractmethod
-from typing import Dict, Optional
-from dataclasses import dataclass
-
 @dataclass
 class OffsetEntry:
     """偏移量条目"""
     queue: MessageQueue
     offset: int
     last_update_timestamp: int
+```
+
+#### OffsetStore - 抽象基类
+```python
+from abc import ABC, abstractmethod
 
 class OffsetStore(ABC):
     """偏移量存储抽象基类"""
 
     @abstractmethod
-    async def load(self) -> None:
+    def load(self) -> None:
         """加载偏移量数据"""
         pass
 
     @abstractmethod
-    async def update_offset(self, queue: MessageQueue, offset: int) -> None:
+    def update_offset(self, queue: MessageQueue, offset: int) -> None:
         """更新偏移量"""
         pass
 
     @abstractmethod
-    async def persist(self, queue: MessageQueue) -> None:
+    def persist(self, queue: MessageQueue) -> None:
         """持久化单个队列的偏移量"""
         pass
 
     @abstractmethod
-    async def persist_all(self) -> None:
+    def persist_all(self) -> None:
         """持久化所有偏移量"""
         pass
 
     @abstractmethod
-    async def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
+    def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
         """读取偏移量"""
         pass
-
-    @abstractmethod
-    async def remove_offset(self, queue: MessageQueue) -> None:
-        """移除队列的偏移量"""
-        pass
-
-    @abstractmethod
-    def clone_offset_table(self, topic: str) -> Dict[MessageQueue, int]:
-        """克隆指定Topic的偏移量表"""
-        pass
 ```
 
-### 6. 实现细节
+### 实现模式
 
-#### 6.1 RemoteOffsetStore实现要点
-```python
-class RemoteOffsetStore(OffsetStore):
-    """远程偏移量存储实现"""
+#### RemoteOffsetStore - 集群模式
+- 偏移量存储在Broker服务器上
+- 支持多Consumer实例协同消费
+- 使用本地缓存减少网络请求
+- 批量提交提升性能
 
-    def __init__(self, consumer_group: str, broker_manager: BrokerManager):
-        self.consumer_group = consumer_group
-        self.broker_manager = broker_manager
-        self.offset_table: Dict[MessageQueue, int] = {}
-        self.lock = asyncio.RLock()
+#### LocalOffsetStore - 广播模式
+- 偏移量存储在本地文件中
+- 每个Consumer实例独立消费所有消息
+- 文件格式：topic@brokerId:queueId=offset
+- 线程安全的文件读写操作
 
-    async def update_offset(self, queue: MessageQueue, offset: int) -> None:
-        """更新偏移量到本地缓存"""
-        async with self.lock:
-            self.offset_table[queue] = offset
+### 配置管理
 
-    async def persist(self, queue: MessageQueue) -> None:
-        """持久化单个队列的偏移量到Broker"""
-        async with self.lock:
-            if queue in self.offset_table:
-                offset = self.offset_table[queue]
-                # 构建更新偏移量请求
-                request = self._build_update_request(queue, offset)
-
-                # 发送到对应的Broker
-                broker_client = self.broker_manager.get_client(queue.broker_name)
-                await broker_client.update_consumer_offset(
-                    self.consumer_group, queue, offset
-                )
-
-    async def persist_all(self) -> None:
-        """批量持久化所有偏移量"""
-        # 按Broker分组，批量提交
-        broker_offsets = self._group_by_broker()
-
-        tasks = []
-        for broker_name, offsets in broker_offsets.items():
-            task = self._persist_to_broker(broker_name, offsets)
-            tasks.append(task)
-
-        await asyncio.gather(*tasks)
-```
-
-#### 6.2 LocalOffsetStore实现要点
-```python
-class LocalOffsetStore(OffsetStore):
-    """本地偏移量存储实现"""
-
-    def __init__(self, consumer_group: str, store_path: str):
-        self.consumer_group = consumer_group
-        self.store_path = store_path
-        self.offset_table: Dict[MessageQueue, int] = {}
-        self.file_path = os.path.join(store_path, f"{consumer_group}.offset")
-        self.lock = threading.RLock()
-
-    async def load(self) -> None:
-        """从本地文件加载偏移量"""
-        with self.lock:
-            if not os.path.exists(self.file_path):
-                return
-
-            try:
-                with open(self.file_path, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-
-                        # 解析格式: topic@brokerId:queueId=offset
-                        try:
-                            queue_key, offset_str = line.split('=')
-                            offset = int(offset_str)
-                            queue = self._parse_queue_key(queue_key)
-                            self.offset_table[queue] = offset
-                        except (ValueError, IndexError):
-                            continue
-
-            except IOError as e:
-                logger.warning(f"Failed to load offset file: {e}")
-
-    async def persist_all(self) -> None:
-        """持久化所有偏移量到本地文件"""
-        with self.lock:
-            try:
-                # 确保目录存在
-                os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-
-                with open(self.file_path, 'w') as f:
-                    for queue, offset in self.offset_table.items():
-                        queue_key = self._format_queue_key(queue)
-                        f.write(f"{queue_key}={offset}\n")
-
-            except IOError as e:
-                logger.error(f"Failed to persist offset file: {e}")
-```
-
-### 7. 配置管理
-
-OffsetStore相关配置已整合到ConsumerConfig中，包含以下配置项：
-
+OffsetStore相关配置已整合到ConsumerConfig中：
 - **persist_interval**: 定期持久化间隔(毫秒)
 - **persist_batch_size**: 批量提交大小
-- **offset_store_path**: 本地存储路径(广播模式使用)
+- **offset_store_path**: 本地存储路径
 - **max_cache_size**: 最大缓存条目数
 - **enable_auto_recovery**: 启用自动恢复
 - **max_retry_times**: 最大重试次数
 
-### 8. 容错和恢复机制
+### 性能优化
 
-```python
-class OffsetStoreErrorHandler:
-    """偏移量存储错误处理器"""
-
-    async def handle_persist_failure(self, queue: MessageQueue,
-                                   offset: int, error: Exception) -> None:
-        """处理持久化失败"""
-        if isinstance(error, BrokerNotAvailableError):
-            # Broker不可用，加入重试队列
-            await self._add_to_retry_queue(queue, offset)
-        elif isinstance(error, NetworkTimeoutError):
-            # 网络超时，延长重试间隔
-            await self._schedule_retry_with_backoff(queue, offset)
-        else:
-            # 其他错误，记录日志并跳过
-            logger.error(f"Failed to persist offset for {queue}: {error}")
-
-    async def handle_load_failure(self, error: Exception) -> None:
-        """处理加载失败"""
-        if isinstance(error, FileNotFoundError):
-            # 文件不存在，使用默认偏移量
-            logger.info("Offset file not found, using default offset")
-        else:
-            logger.error(f"Failed to load offsets: {error}")
-```
-
-### 10. 性能优化
-
-#### 10.1 批量操作优化
-- **批量提交**: 将多个偏移量更新合并为一次请求
-- **异步写入**: 使用异步IO避免阻塞消费线程
-- **本地缓存**: 减少网络请求频率
-
-#### 10.2 内存管理优化
-- **LRU缓存**: 限制内存中缓存的数据量
-- **延迟写入**: 非关键路径的写入操作延迟执行
-- **压缩存储**: 对本地文件使用压缩格式
-
-#### 10.3 网络优化
-- **连接复用**: 复用Broker连接减少握手开销
-- **请求合并**: 合并同一Broker的多个请求
-- **超时控制**: 合理设置网络超时时间
-
-### 11. 监控和指标
-
-```python
-@dataclass
-class OffsetStoreMetrics:
-    """偏移量存储指标"""
-    persist_success_count: int = 0      # 成功持久化次数
-    persist_failure_count: int = 0      # 失败持久化次数
-    load_success_count: int = 0         # 成功加载次数
-    load_failure_count: int = 0         # 失败加载次数
-    cache_hit_count: int = 0            # 缓存命中次数
-    cache_miss_count: int = 0           # 缓存未命中次数
-    avg_persist_latency: float = 0.0    # 平均持久化延迟
-```
-
-### OffsetStore设计要点总结
-
-1. **双模式支持**: 集群模式使用远程存储，广播模式使用本地存储
-2. **高性能设计**: 本地缓存 + 批量持久化 + 异步IO
-3. **容错机制**: 完善的错误处理和自动恢复
-4. **配置灵活**: 支持多种性能调优选项
-5. **监控完善**: 提供详细的性能指标和统计
-6. **测试充分**: 覆盖各种场景的测试策略
-
-### 测试策略
-- 每个里程碑完成后进行全面测试
-- 使用现有的Producer进行端到端验证
-- 重点关注边界条件和异常场景
-
-### 文档要求
-- 每个模块都需要完整的API文档
-- 提供详细的使用示例和最佳实践
-- 维护更新日志和版本说明
+1. **批量操作**: 多个偏移量更新合并为一次请求
+2. **异步写入**: 使用异步IO避免阻塞消费线程
+3. **本地缓存**: 减少网络请求频率
+4. **连接复用**: 复用Broker连接减少握手开销
 
 ---
 
+## 总结
+
+本文档详细规划了pyrocketmq Consumer MVP的实施方案，采用模块化设计，分离并发和顺序消费实现，确保代码清晰性和可维护性。
+
+### 关键特性
+
+- **MVP优先**: 专注核心功能，逐步迭代
+- **分离设计**: 并发和顺序消费独立实现
+- **复用架构**: 充分利用现有基础设施
+- **完善配置**: 灵活的配置管理和性能调优
+
+### 实施计划
+
+4周分阶段实施，从基础架构到完整功能，确保每个阶段都有可验证的交付物。
+
+---
+
+**文档版本**: MVP 1.0
 **创建时间**: 2025-01-04
-**版本**: MVP 1.0
-**负责人**: pyrocketmq团队
 **预计完成时间**: 4周
