@@ -1,11 +1,10 @@
+import logging
 import queue
 import threading
 import time
-import logging
-from contextlib import contextmanager
 from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
-
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
 from pyrocketmq.logging import get_logger
@@ -517,12 +516,12 @@ class BrokerManager:
         self._logger = get_logger("broker.manager.sync")
 
         # Broker连接信息映射
-        self._brokers: dict[str, BrokerConnectionInfo] = {}
-        self._broker_pools: dict[str, BrokerConnectionPool] = {}
+        self._brokers = {}
+        self._broker_pools = {}
         self._lock = threading.Lock()
 
         # 后台线程
-        self._health_check_thread: threading.Thread | None = None
+        self._health_check_thread = None
         self._shutdown_event = threading.Event()
 
         self._logger.info(

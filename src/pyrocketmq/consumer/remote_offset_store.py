@@ -9,6 +9,8 @@ RemoteOffsetStore - 集群模式偏移量存储
 - 支持多Consumer实例协同消费
 - 使用本地缓存减少网络请求
 - 批量提交提升性能
+- Broker地址缓存优化，避免频繁查询NameServer
+- 完整的指标监控和日志记录
 """
 
 import threading
@@ -37,7 +39,24 @@ logger = get_logger(__name__)
 
 
 class RemoteOffsetStore(OffsetStore):
-    """集群模式下的远程偏移量存储"""
+    """集群模式下的远程偏移量存储
+
+    实现RocketMQ标准的集群消费模式下的偏移量管理，偏移量存储在Broker服务器上，
+    支持多Consumer实例协同消费同一队列集合。
+
+    主要特性：
+    - 远程存储：偏移量存储在Broker服务器，支持多实例协同消费
+    - 本地缓存：使用remote_offset_cache缓存偏移量，减少网络请求
+    - 批量提交：支持批量提交偏移量，提升性能
+    - 定期持久化：后台线程定期持久化缓存的偏移量
+    - Broker地址缓存：缓存Broker地址信息，避免频繁查询NameServer
+    - 指标监控：提供完整的操作指标和性能监控
+
+    线程安全：
+    - 使用RLock保护所有共享状态
+    - 支持多线程并发访问
+    - 原子性的偏移量更新操作
+    """
 
     def __init__(
         self,
@@ -51,10 +70,19 @@ class RemoteOffsetStore(OffsetStore):
         初始化远程偏移量存储
 
         Args:
+            namesrv_addr: NameServer地址，格式："host1:port1;host2:port2"
             consumer_group: 消费者组名称
-            broker_manager: Broker管理器
-            persist_interval: 持久化间隔（毫秒）
-            persist_batch_size: 批量提交大小
+            broker_manager: Broker管理器，用于与Broker通信
+            persist_interval: 持久化间隔（毫秒），默认5秒
+            persist_batch_size: 批量提交大小，默认10个偏移量
+
+        初始化组件：
+        - remote_offset_cache: 偏移量本地缓存，减少网络请求
+        - _lock: 线程安全锁，保护所有共享状态
+        - _nameserver_connections: NameServer连接池，用于路由查询
+        - _broker_addr_cache: Broker地址缓存，避免频繁查询NameServer
+        - metrics: 指标收集器，监控性能和操作统计
+        - _persist_thread: 后台持久化线程，定期同步偏移量到Broker
         """
         super().__init__(consumer_group)
         self.broker_manager: BrokerManager = broker_manager
@@ -460,7 +488,14 @@ class RemoteOffsetStore(OffsetStore):
     def _get_broker_addr_by_name(self, broker_name: str) -> str | None:
         """根据broker名称查询broker地址
 
-        通过查询NameServer获取指定broker名称的地址信息。
+        优先从本地缓存查询，缓存未命中或过期时查询NameServer获取最新地址信息。
+        使用缓存机制可以显著减少对NameServer的查询频率，提升性能。
+
+        缓存策略：
+        - 缓存结构：broker_name -> (address, timestamp)
+        - 缓存TTL：5分钟，过期自动清理
+        - 线程安全：使用self._lock保护缓存操作
+        - 缓存更新：查询成功后自动更新缓存
 
         Args:
             broker_name: 要查询的broker名称
@@ -470,6 +505,12 @@ class RemoteOffsetStore(OffsetStore):
 
         Raises:
             NameServerError: 当NameServer连接不可用或查询失败时抛出
+
+        查询流程：
+        1. 检查本地缓存，命中且未过期则直接返回
+        2. 缓存未命中或过期，遍历NameServer连接查询
+        3. 查询成功后更新本地缓存并返回地址
+        4. 所有NameServer都查询失败则返回None
         """
         logger.debug("查询broker地址", extra={"broker_name": broker_name})
 
