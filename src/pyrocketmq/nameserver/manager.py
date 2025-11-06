@@ -26,10 +26,10 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.nameserver.client import SyncNameServerClient
 from pyrocketmq.nameserver.errors import NameServerError
 from pyrocketmq.nameserver.models import BrokerData, TopicRouteData
+from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.factory import create_sync_remote
 from pyrocketmq.remote.sync_remote import Remote
-from src.pyrocketmq.remote.config import RemoteConfig
-from src.pyrocketmq.transport.config import TransportConfig
+from pyrocketmq.transport.config import TransportConfig
 
 
 @dataclass

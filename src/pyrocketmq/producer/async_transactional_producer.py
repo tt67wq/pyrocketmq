@@ -6,8 +6,6 @@
 """
 
 import logging
-import threading
-import time
 from typing import Any, override
 
 from pyrocketmq.broker.async_client import AsyncBrokerClient
@@ -26,8 +24,6 @@ from pyrocketmq.model.enums import RequestCode
 from pyrocketmq.model.headers import CheckTransactionStateRequestHeader
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.message_ext import MessageExt
-from pyrocketmq.nameserver.client import AsyncNameServerClient
-from pyrocketmq.nameserver.models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
@@ -104,13 +100,6 @@ class AsyncTransactionProducer(AsyncProducer):
         self._max_check_times: int = 15  # 最大回查次数
 
         self._failed_registrations: set[str] = set()
-
-        # broker地址缓存，避免频繁查询NameServer
-        self._broker_addr_cache: dict[
-            str, tuple[str, float]
-        ] = {}  # broker_name -> (address, timestamp)
-        self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
-        self._cache_lock: threading.RLock = threading.RLock()
 
     @override
     async def start(self) -> None:
@@ -640,68 +629,7 @@ class AsyncTransactionProducer(AsyncProducer):
             "查询broker地址", extra={"broker_name": broker_name, "topic": topic}
         )
 
-        # 先检查缓存
-        with self._cache_lock:
-            if broker_name in self._broker_addr_cache:
-                address, timestamp = self._broker_addr_cache[broker_name]
-                # 检查缓存是否过期
-                if time.time() - timestamp < self._broker_cache_ttl:
-                    self._logger.debug(
-                        "使用缓存的broker地址",
-                        extra={"broker_name": broker_name, "address": address},
-                    )
-                    return address
-                else:
-                    # 缓存过期，删除
-                    del self._broker_addr_cache[broker_name]
-                    self._logger.debug(
-                        "broker地址缓存过期", extra={"broker_name": broker_name}
-                    )
-
-        if not self._nameserver_connections:
-            raise ProducerError("NameServer客户端不可用，无法查询broker地址")
-
-        for addr, remote in self._nameserver_connections.items():
-            try:
-                client: AsyncNameServerClient = AsyncNameServerClient(
-                    remote, self._config.send_msg_timeout / 1000.0
-                )
-
-                # 查询Topic路由信息
-                topic_route_data: TopicRouteData = await client.query_topic_route_info(
-                    topic
-                )
-
-                # 在路由数据中查找目标broker
-                for broker_data in topic_route_data.broker_data_list:
-                    if broker_data.broker_name == broker_name:
-                        address = self._message_router.select_broker_address(
-                            broker_data
-                        )
-
-                        if not address:
-                            continue
-
-                        # 更新缓存
-                        with self._cache_lock:
-                            self._broker_addr_cache[broker_name] = (
-                                address,
-                                time.time(),
-                            )
-                            self._logger.debug(
-                                "缓存broker地址",
-                                extra={"broker_name": broker_name, "address": address},
-                            )
-
-                        return address
-
-            except Exception as e:
-                self._logger.warning(
-                    "从NameServer查询失败", extra={"error": str(e), "addr": addr}
-                )
-
-        self._logger.warning("未找到broker地址信息", extra={"broker_name": broker_name})
-        return None
+        return await self._nameserver_manager.get_broker_address(broker_name, topic)
 
     def get_stats(self) -> dict[str, Any]:
         """获取异步事务Producer统计信息"""

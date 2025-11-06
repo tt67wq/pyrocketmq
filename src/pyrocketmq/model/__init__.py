@@ -72,6 +72,11 @@ from .message_id import (
     unmarshal_msg_id,
 )
 from .message_queue import MessageQueue
+from .nameserver_models import (
+    BrokerData,
+    QueueData,
+    TopicRouteData,
+)
 from .result_data import (
     ConsumeType,
     OffsetResult,
@@ -131,6 +136,10 @@ __all__ = [
     "SubscriptionEntry",
     "SubscriptionConflict",
     "SUBSCRIBE_ALL",
+    # Topic路由相关数据结构
+    "TopicRouteData",
+    "BrokerData",
+    "QueueData",
     # 消息创建函数
     "create_message",
     "create_transaction_message",

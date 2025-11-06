@@ -24,18 +24,26 @@ MVP版本功能:
 import asyncio
 import time
 
-
 # Local imports - broker
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.broker.async_client import AsyncBrokerClient
 
+# Local imports - utilities
+from pyrocketmq.logging import get_logger
+
 # Local imports - model
-from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
+from pyrocketmq.model import (
+    HeartbeatData,
+    ProducerData,
+    SendMessageResult,
+    TopicRouteData,
+)
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
-
-# Local imports - nameserver
-from pyrocketmq.nameserver.client import AsyncNameServerClient
+from pyrocketmq.nameserver import (
+    AsyncNameServerManager,
+    create_async_nameserver_manager,
+)
 
 # Local imports - producer
 from pyrocketmq.producer.config import ProducerConfig
@@ -53,12 +61,8 @@ from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
-from pyrocketmq.remote.async_remote import AsyncRemote
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
-
-# Local imports - utilities
-from pyrocketmq.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -123,9 +127,8 @@ class AsyncProducer:
         self._total_failed: int = 0
 
         # NameServer连接管理（仅用于路由查询）
-        self._nameserver_connections: dict[str, AsyncRemote] = {}
-        self._nameserver_addrs: dict[str, str] = self._parse_nameserver_addrs(
-            self._config.namesrv_addr
+        self._nameserver_manager: AsyncNameServerManager = (
+            create_async_nameserver_manager(self._config.namesrv_addr)
         )
 
         # Broker管理器（使用异步连接池管理）
@@ -147,10 +150,7 @@ class AsyncProducer:
 
         logger.info(
             "AsyncProducer initialized",
-            extra={
-                "producer_group": self._config.producer_group,
-                "nameserver_addrs": list(self._nameserver_addrs.keys()),
-            },
+            extra={"producer_group": self._config.producer_group},
         )
 
     async def start(self) -> None:
@@ -698,40 +698,7 @@ class AsyncProducer:
     async def _init_nameserver_connections(self) -> None:
         """异步初始化NameServer连接"""
         logger.info("Initializing async NameServer connections...")
-
-        for addr in self._nameserver_addrs:
-            try:
-                host: str
-                port: str
-                host, port = addr.split(":")
-                transport_config = TransportConfig(host=host, port=int(port))
-                remote_config = RemoteConfig().with_rpc_timeout(
-                    self._config.send_msg_timeout
-                )
-                remote = AsyncRemote(transport_config, remote_config)
-
-                await remote.connect()
-                self._nameserver_connections[addr] = remote
-                logger.info(
-                    "Connected to NameServer",
-                    extra={
-                        "nameserver_address": addr,
-                    },
-                )
-
-            except Exception as e:
-                logger.error(
-                    "Failed to connect to NameServer",
-                    extra={
-                        "nameserver_address": addr,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                    exc_info=True,
-                )
-
-        if not self._nameserver_connections:
-            raise ProducerStartError("No NameServer connections available")
+        await self._nameserver_manager.start()
 
     def _start_background_tasks(self) -> None:
         """启动后台任务"""
@@ -1044,53 +1011,7 @@ class AsyncProducer:
         """异步关闭所有NameServer连接"""
         logger.info("Closing async NameServer connections...")
 
-        if not self._nameserver_connections:
-            logger.debug("No NameServer connections to close")
-            return
-
-        closed_count: int = 0
-        failed_count: int = 0
-
-        # 关闭所有连接
-        for addr, remote in list(self._nameserver_connections.items()):
-            try:
-                if hasattr(remote, "close"):
-                    await remote.close()
-                    closed_count += 1
-                    logger.debug(
-                        "Closed NameServer connection",
-                        extra={
-                            "nameserver_address": addr,
-                        },
-                    )
-                else:
-                    logger.warning(
-                        f"AsyncRemote object for {addr} does not have close() method"
-                    )
-                    failed_count += 1
-            except Exception as e:
-                logger.error(
-                    "Failed to close NameServer connection",
-                    extra={
-                        "nameserver_address": addr,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                    exc_info=True,
-                )
-                failed_count += 1
-
-        # 清空连接字典
-        self._nameserver_connections.clear()
-
-        logger.info(
-            "NameServer connections closed",
-            extra={
-                "closed_count": closed_count,
-                "failed_count": failed_count,
-                "total_connections": closed_count + failed_count,
-            },
-        )
+        await self._nameserver_manager.stop()
 
     def get_stats(self) -> dict[str, str | int | bool | None]:
         """获取Producer统计信息
@@ -1133,67 +1054,50 @@ class AsyncProducer:
             },
         )
 
-        for addr, remote in self._nameserver_connections.items():
-            try:
-                # 使用异步NameServer客户端查询路由信息
-                client = AsyncNameServerClient(
-                    remote, self._config.send_msg_timeout / 1000.0
-                )
+        topic_route_data: (
+            TopicRouteData | None
+        ) = await self._nameserver_manager.get_topic_route(topic)
+        if not topic_route_data:
+            logger.error(
+                "Failed to get topic route info",
+                extra={
+                    "topic": topic,
+                },
+            )
+            return False
 
-                # 查询Topic路由信息
-                topic_route_data = await client.query_topic_route_info(topic)
-
-                # 维护broker连接
-                for broker_data in topic_route_data.broker_data_list:
-                    for idx, broker_addr in broker_data.broker_addresses.items():
-                        logger.info(
-                            "Adding broker",
-                            extra={
-                                "broker_id": idx,
-                                "broker_address": broker_addr,
-                                "broker_name": broker_data.broker_name,
-                            },
-                        )
-                        await self._broker_manager.add_broker(
-                            broker_addr,
-                            broker_data.broker_name,
-                        )
-
-                # 更新本地缓存
-                success: bool = self._topic_mapping.update_route_info(
-                    topic, topic_route_data
-                )
-
-                if success:
-                    logger.info(
-                        "Route info updated for topic",
-                        extra={
-                            "topic": topic,
-                            "nameserver_address": addr,
-                            "brokers_count": len(topic_route_data.broker_data_list),
-                        },
-                    )
-                    return True
-                else:
-                    logger.warning(
-                        "Failed to update route cache for topic",
-                        extra={
-                            "topic": topic,
-                            "nameserver_address": addr,
-                        },
-                    )
-
-            except Exception as e:
-                logger.error(
-                    "Failed to get async route info from NameServer",
+        # 维护broker连接
+        for broker_data in topic_route_data.broker_data_list:
+            for idx, broker_addr in broker_data.broker_addresses.items():
+                logger.info(
+                    "Adding broker",
                     extra={
-                        "nameserver_address": addr,
-                        "topic": topic,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
+                        "broker_id": idx,
+                        "broker_address": broker_addr,
+                        "broker_name": broker_data.broker_name,
                     },
-                    exc_info=True,
                 )
+                await self._broker_manager.add_broker(
+                    broker_addr,
+                    broker_data.broker_name,
+                )
+        # 更新本地缓存
+        success: bool = self._topic_mapping.update_route_info(topic, topic_route_data)
+
+        if success:
+            logger.info(
+                "Route info updated for topic",
+                extra={
+                    "topic": topic,
+                    "brokers_count": len(topic_route_data.broker_data_list),
+                },
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to update route cache for topic",
+                extra={"topic": topic},
+            )
 
         # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_mapping.force_refresh(topic)

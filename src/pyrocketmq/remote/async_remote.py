@@ -3,10 +3,10 @@
 """
 
 import asyncio
-import time
 import logging
-from typing import Any, Callable
+import time
 from collections.abc import Awaitable
+from typing import Any, Callable
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import RemotingCommand, RemotingCommandSerializer
@@ -388,7 +388,9 @@ class AsyncRemote:
                     event.set()
 
         if expired_opaques:
-            self._logger.warning(f"清理了 {len(expired_opaques)} 个过期的等待者")
+            self._logger.warning(
+                "清理过期的等待者", extra={"count": len(expired_opaques)}
+            )
 
     def _start_recv_task(self) -> None:
         """启动消息接收任务"""
@@ -474,14 +476,14 @@ class AsyncRemote:
 
         # 查找对应的等待者并设置响应
         if await self._set_waiter_response(opaque, response):
-            self._logger.debug(f"响应已匹配到等待者: opaque={opaque}")
+            self._logger.debug("响应已匹配到等待者", extra={"opaque": opaque})
         else:
-            self._logger.warning(f"未找到对应的等待者: opaque={opaque}")
+            self._logger.warning("未找到对应的等待者", extra={"opaque": opaque})
 
     async def _handle_request_message(self, request: RemotingCommand) -> None:
         """处理请求消息（服务器主动通知）"""
         self._logger.debug(
-            f"收到服务器请求: code={request.code}, opaque={request.opaque}"
+            "收到服务器请求", extra={"code": request.code, "opaque": request.opaque}
         )
 
         # 查找对应的处理器
@@ -491,7 +493,7 @@ class AsyncRemote:
 
         if processor_func is None:
             self._logger.warning(
-                f"收到服务器请求，但没有对应的处理器: code={request.code}"
+                "收到服务器请求，但没有对应的处理器", extra={"code": request.code}
             )
             return
 
@@ -511,7 +513,8 @@ class AsyncRemote:
 
         except Exception as e:
             self._logger.error(
-                f"处理服务器请求时发生错误: code={request.code}, error={e}"
+                "处理服务器请求时发生错误",
+                extra={"code": request.code, "error": str(e)},
             )
 
     async def _send_processor_response(
@@ -529,12 +532,13 @@ class AsyncRemote:
             await self.transport.output(data)
 
             self._logger.debug(
-                f"发送处理器响应: opaque={response.opaque}, code={response.code}"
+                "发送处理器响应",
+                extra={"opaque": response.opaque, "code": response.code},
             )
 
         except Exception as e:
             self._logger.error(
-                f"发送处理器响应失败: opaque={response.opaque}, error={e}"
+                "发送处理器响应失败", extra={"opaque": response.opaque, "error": str(e)}
             )
 
     async def __aenter__(self) -> "AsyncRemote":

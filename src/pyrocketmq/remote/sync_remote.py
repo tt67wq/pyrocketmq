@@ -134,11 +134,11 @@ class Remote:
         """
         with self._processors_lock:
             if code in self._processors:
-                self._logger.debug(f"请求处理器已存在，跳过注册: code={code}")
+                self._logger.debug("请求处理器已存在，跳过注册", extra={"code": code})
                 return False
 
             self._processors[code] = processor
-            self._logger.debug(f"惰性注册请求处理器: code={code}")
+            self._logger.debug("惰性注册请求处理器", extra={"code": code})
             return True
 
     def unregister_request_processor(self, code: int) -> bool:
@@ -153,7 +153,7 @@ class Remote:
         with self._processors_lock:
             if code in self._processors:
                 del self._processors[code]
-                self._logger.debug(f"取消注册请求处理器: code={code}")
+                self._logger.debug("取消注册请求处理器", extra={"code": code})
                 return True
             return False
 
@@ -217,7 +217,9 @@ class Remote:
             if response is None:
                 raise ProtocolError(f"未收到有效响应: opaque={opaque}")
 
-            self._logger.debug(f"收到RPC响应: opaque={opaque}, code={response.code}")
+            self._logger.debug(
+                "收到RPC响应", extra={"opaque": opaque, "code": response.code}
+            )
             return response
 
         except SerializationError:
@@ -259,13 +261,17 @@ class Remote:
             data = self._serializer.serialize(command)
             self.transport.output(data)
 
-            self._logger.debug(f"发送单向消息: opaque={opaque}, code={command.code}")
+            self._logger.debug(
+                "发送单向消息", extra={"opaque": opaque, "code": command.code}
+            )
         except SerializationError:
             raise
         except (ConnectionError, TransportError):
             raise
         except Exception as e:
-            self._logger.error(f"单向消息发送失败: opaque={opaque}, error={e}")
+            self._logger.error(
+                "单向消息发送失败", extra={"opaque": opaque, "error": str(e)}
+            )
             raise RemoteError(f"单向消息发送失败: {e}") from e
 
     def _generate_opaque(self) -> int:
@@ -349,7 +355,7 @@ class Remote:
             try:
                 self._cleanup_expired_waiters()
             except Exception as e:
-                self._logger.error(f"清理等待者时发生错误: {e}")
+                self._logger.error("清理等待者时发生错误", extra={"error": str(e)})
 
     def _cleanup_expired_waiters(self) -> None:
         """清理过期的等待者"""
@@ -368,7 +374,9 @@ class Remote:
                     event.set()
 
         if expired_opaques:
-            self._logger.warning(f"清理了 {len(expired_opaques)} 个过期的等待者")
+            self._logger.warning(
+                "清理过期的等待者", extra={"count": len(expired_opaques)}
+            )
 
     def __enter__(self) -> "Remote":
         """上下文管理器入口"""
@@ -413,7 +421,7 @@ class Remote:
             try:
                 if not self.transport.is_connected:
                     # 连接断开，等待重连
-                    self._logger.debug("连接断开，等待重连...")
+                    self._logger.debug("连接断开，等待重连")
                     time.sleep(1.0)
                     continue
 
@@ -428,10 +436,11 @@ class Remote:
                 try:
                     response = self._serializer.deserialize(data)
                     self._logger.debug(
-                        f"接收到响应: opaque={response.opaque}, code={response.code}"
+                        "接收到响应",
+                        extra={"opaque": response.opaque, "code": response.code},
                     )
                 except Exception as e:
-                    self._logger.error(f"反序列化响应失败: {e}")
+                    self._logger.error("反序列化响应失败", extra={"error": str(e)})
                     continue
 
                 # 处理响应
@@ -442,11 +451,11 @@ class Remote:
                 continue
             except ConnectionError:
                 # 连接错误，等待重连
-                self._logger.warning("连接错误，等待重连...")
+                self._logger.warning("连接错误，等待重连")
                 time.sleep(1.0)
                 continue
             except Exception as e:
-                self._logger.error(f"接收消息时发生错误: {e}")
+                self._logger.error("接收消息时发生错误", extra={"error": str(e)})
                 time.sleep(1.0)
 
     def _handle_response(self, command: RemotingCommand) -> None:
@@ -467,14 +476,14 @@ class Remote:
 
         # 查找对应的等待者并设置响应
         if self._set_waiter_response(opaque, response):
-            self._logger.debug(f"响应已匹配到等待者: opaque={opaque}")
+            self._logger.debug("响应已匹配到等待者", extra={"opaque": opaque})
         else:
-            self._logger.warning(f"未找到对应的等待者: opaque={opaque}")
+            self._logger.warning("未找到对应的等待者", extra={"opaque": opaque})
 
     def _handle_request_message(self, request: RemotingCommand) -> None:
         """处理请求消息（服务器主动通知）"""
         self._logger.debug(
-            f"收到服务器请求: code={request.code}, opaque={request.opaque}"
+            "收到服务器请求", extra={"code": request.code, "opaque": request.opaque}
         )
 
         # 查找对应的处理器
@@ -484,7 +493,7 @@ class Remote:
 
         if processor_func is None:
             self._logger.warning(
-                f"收到服务器请求，但没有对应的处理器: code={request.code}"
+                "收到服务器请求，但没有对应的处理器", extra={"code": request.code}
             )
             return
 
@@ -504,7 +513,8 @@ class Remote:
 
         except Exception as e:
             self._logger.error(
-                f"处理服务器请求时发生错误: code={request.code}, error={e}"
+                "处理服务器请求时发生错误",
+                extra={"code": request.code, "error": str(e)},
             )
 
     def _send_processor_response(
@@ -522,10 +532,11 @@ class Remote:
             self.transport.output(data)
 
             self._logger.debug(
-                f"发送处理器响应: opaque={response.opaque}, code={response.code}"
+                "发送处理器响应",
+                extra={"opaque": response.opaque, "code": response.code},
             )
 
         except Exception as e:
             self._logger.error(
-                f"发送处理器响应失败: opaque={response.opaque}, error={e}"
+                "发送处理器响应失败", extra={"opaque": response.opaque, "error": str(e)}
             )

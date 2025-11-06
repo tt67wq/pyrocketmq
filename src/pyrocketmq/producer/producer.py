@@ -24,18 +24,18 @@ MVP版本功能:
 import threading
 import time
 
-
 # Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
 from pyrocketmq.broker.client import BrokerClient
+
+# Local imports - utilities
+from pyrocketmq.logging import get_logger
 
 # Local imports - model
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
-
-# Local imports - nameserver
-from pyrocketmq.nameserver.client import SyncNameServerClient
+from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 
 # Local imports - producer
 from pyrocketmq.producer.config import ProducerConfig
@@ -43,8 +43,8 @@ from pyrocketmq.producer.errors import (
     BrokerNotAvailableError,
     MessageSendError,
     ProducerError,
-    ProducerStartError,
     ProducerShutdownError,
+    ProducerStartError,
     ProducerStateError,
     QueueNotAvailableError,
     RouteNotFoundError,
@@ -55,11 +55,7 @@ from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
 from pyrocketmq.remote.config import RemoteConfig
-from pyrocketmq.remote.sync_remote import Remote
 from pyrocketmq.transport.config import TransportConfig
-
-# Local imports - utilities
-from pyrocketmq.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -123,9 +119,8 @@ class Producer:
         self._total_sent: int = 0
         self._total_failed: int = 0
 
-        # NameServer连接管理（仅用于路由查询）
-        self._nameserver_connections: dict[str, Remote] = {}
-        self._nameserver_addrs: dict[str, str] = self._parse_nameserver_addrs(
+        # NameServer连接管理）
+        self._nameserver_manager: NameServerManager = create_nameserver_manager(
             self._config.namesrv_addr
         )
 
@@ -654,38 +649,7 @@ class Producer:
     def _init_nameserver_connections(self) -> None:
         """初始化NameServer连接"""
         logger.info("Initializing NameServer connections...")
-
-        for addr in self._nameserver_addrs:
-            try:
-                host, port = addr.split(":")
-                transport_config = TransportConfig(host=host, port=int(port))
-                remote_config = RemoteConfig().with_rpc_timeout(
-                    self._config.send_msg_timeout
-                )
-                remote = Remote(transport_config, remote_config)
-
-                remote.connect()
-                self._nameserver_connections[addr] = remote
-                logger.info(
-                    "Connected to NameServer",
-                    extra={
-                        "nameserver_address": addr,
-                    },
-                )
-
-            except Exception as e:
-                logger.error(
-                    "Failed to connect to NameServer",
-                    extra={
-                        "nameserver_address": addr,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                    exc_info=True,
-                )
-
-        if not self._nameserver_connections:
-            raise ProducerStartError("No NameServer connections available")
+        self._nameserver_manager.start()
 
     def _start_background_tasks(self) -> None:
         """启动后台任务"""
@@ -985,57 +949,7 @@ class Producer:
     def _close_nameserver_connections(self) -> None:
         """关闭所有NameServer连接"""
         logger.info("Closing NameServer connections...")
-
-        if not self._nameserver_connections:
-            logger.debug("No NameServer connections to close")
-            return
-
-        closed_count = 0
-        failed_count = 0
-
-        # 关闭所有连接
-        for addr, remote in list(self._nameserver_connections.items()):
-            try:
-                if hasattr(remote, "close"):
-                    remote.close()
-                    closed_count += 1
-                    logger.debug(
-                        "Closed NameServer connection",
-                        extra={
-                            "nameserver_address": addr,
-                        },
-                    )
-                else:
-                    logger.warning(
-                        "Remote object does not have close() method",
-                        extra={
-                            "nameserver_address": addr,
-                        },
-                    )
-                    failed_count += 1
-            except Exception as e:
-                logger.error(
-                    "Failed to close NameServer connection",
-                    extra={
-                        "nameserver_address": addr,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                    },
-                    exc_info=True,
-                )
-                failed_count += 1
-
-        # 清空连接字典
-        self._nameserver_connections.clear()
-
-        logger.info(
-            "NameServer connections closed",
-            extra={
-                "closed_count": closed_count,
-                "failed_count": failed_count,
-                "total_connections": closed_count + failed_count,
-            },
-        )
+        self._nameserver_manager.stop()
 
     def get_stats(self) -> dict[str, str | int | bool | None]:
         """获取Producer统计信息
@@ -1077,66 +991,48 @@ class Producer:
                 "topic": topic,
             },
         )
+        topic_route_data = self._nameserver_manager.get_topic_route(topic)
+        if not topic_route_data:
+            logger.error(
+                "Failed to get topic route data",
+                extra={
+                    "topic": topic,
+                },
+            )
+            return False
 
-        for addr, remote in self._nameserver_connections.items():
-            try:
-                # 使用NameServer客户端查询路由信息
-                client = SyncNameServerClient(
-                    remote, self._config.send_msg_timeout / 1000.0
-                )
-
-                # 查询Topic路由信息
-                topic_route_data = client.query_topic_route_info(topic)
-
-                # 维护broker连接
-                for broker_data in topic_route_data.broker_data_list:
-                    for idx, broker_addr in broker_data.broker_addresses.items():
-                        logger.info(
-                            "Adding broker",
-                            extra={
-                                "broker_id": idx,
-                                "broker_address": broker_addr,
-                                "broker_name": broker_data.broker_name,
-                            },
-                        )
-                        self._broker_manager.add_broker(
-                            broker_addr,
-                            broker_data.broker_name,
-                        )
-
-                # 更新本地缓存
-                success = self._topic_mapping.update_route_info(topic, topic_route_data)
-
-                if success:
-                    logger.info(
-                        "Route info updated for topic",
-                        extra={
-                            "topic": topic,
-                            "nameserver_address": addr,
-                            "brokers_count": len(topic_route_data.broker_data_list),
-                        },
-                    )
-                    return True
-                else:
-                    logger.warning(
-                        "Failed to update route cache for topic",
-                        extra={
-                            "topic": topic,
-                            "nameserver_address": addr,
-                        },
-                    )
-
-            except Exception as e:
-                logger.error(
-                    "Failed to get route info from NameServer",
+        # 维护broker连接
+        for broker_data in topic_route_data.broker_data_list:
+            for idx, broker_addr in broker_data.broker_addresses.items():
+                logger.info(
+                    "Adding broker",
                     extra={
-                        "nameserver_address": addr,
-                        "topic": topic,
-                        "error": str(e),
-                        "error_type": type(e).__name__,
+                        "broker_id": idx,
+                        "broker_address": broker_addr,
+                        "broker_name": broker_data.broker_name,
                     },
-                    exc_info=True,
                 )
+                self._broker_manager.add_broker(
+                    broker_addr,
+                    broker_data.broker_name,
+                )
+
+        # 更新本地缓存
+        success = self._topic_mapping.update_route_info(topic, topic_route_data)
+        if success:
+            logger.info(
+                "Route info updated for topic",
+                extra={
+                    "topic": topic,
+                    "brokers_count": len(topic_route_data.broker_data_list),
+                },
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to update route cache for topic",
+                extra={"topic": topic},
+            )
 
         # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_mapping.force_refresh(topic)
