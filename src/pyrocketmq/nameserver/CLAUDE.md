@@ -1,371 +1,488 @@
-# NameServer模块设计文档
+# NameServer模块文档
 
 ## 模块概述
 
-NameServer模块是pyrocketmq的核心组件之一，提供与RocketMQ NameServer通信的完整功能。NameServer作为RocketMQ的注册发现中心，负责管理Topic路由信息、Broker集群信息等关键数据。该模块实现了完整的NameServer客户端功能，支持同步和异步两种通信模式，为Producer和Consumer提供路由信息服务。
+NameServer模块是pyrocketmq的核心注册发现组件，提供与RocketMQ NameServer通信的完整功能。NameServer作为RocketMQ的注册发现中心，负责管理Topic路由信息、Broker集群信息等关键数据。
 
-## 模块架构
+该模块支持同步和异步两种通信模式，提供统一的路由查询和缓存管理功能，封装了broker地址查询、路由信息缓存等通用逻辑，避免在多个模块中重复实现。
 
-### 文件结构
+### 核心特性
+- **双模式支持**: 同时提供同步和异步客户端，满足不同应用场景需求
+- **智能缓存**: 自动管理broker地址和路由信息缓存，减少NameServer查询频率
+- **线程安全**: 采用锁机制保证并发访问安全
+- **容错机制**: 自动重试和故障处理，提升系统稳定性
+- **统一管理**: 提供NameServer管理器，统一管理连接和缓存
+
+## 架构设计
+
+### 分层架构
 ```
-nameserver/
-├── __init__.py          # 模块入口，统一导出接口
-├── client.py            # NameServer客户端实现（同步/异步）
-├── models.py            # 数据结构模型导入
-└── errors.py            # NameServer异常定义
+┌─────────────────────────────────────────────────────────────┐
+│                    应用层 (Application)                      │
+├─────────────────────────────────────────────────────────────┤
+│              管理层 (Manager Layer)                          │
+│  ┌─────────────────┐              ┌─────────────────┐         │
+│  │ NameServer      │              │ AsyncNameServer  │         │
+│  │ Manager         │              │ Manager          │         │
+│  └─────────────────┘              └─────────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│               客户端层 (Client Layer)                        │
+│  ┌─────────────────┐              ┌─────────────────┐         │
+│  │ SyncNameServer  │              │ AsyncNameServer  │         │
+│  │ Client          │              │ Client           │         │
+│  └─────────────────┘              └─────────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│                模型层 (Model Layer)                           │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │ TopicRouteData  │  │ BrokerData      │  │ BrokerCluster   │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+├─────────────────────────────────────────────────────────────┤
+│                异常层 (Error Layer)                           │
+│              NameServerError异常体系                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 架构设计原则
+### 数据流设计
+```
+Application Request
+        ↓
+NameServerManager (缓存检查)
+        ↓
+NameServer Client (网络通信)
+        ↓
+RocketMQ NameServer
+        ↓
+Response & Cache Update
+```
 
-1. **双模式支持**: 同时提供同步(SyncNameServerClient)和异步(AsyncNameServerClient)客户端
-2. **数据兼容性**: 严格处理Go语言JSON序列化的整数key兼容性问题
-3. **异常分层**: 定义专门的NameServer异常体系，精确处理各种错误场景
-4. **路由缓存**: 支持路由信息的本地缓存和更新机制
-5. **协议兼容**: 完全兼容RocketMQ NameServer协议
+## 核心组件
 
-## 核心数据结构
+### 1. NameServerManager (同步管理器)
 
-### 1. BrokerData - Broker信息
-表示单个Broker的详细信息，包含集群归属、名称和地址信息。
+统一管理NameServer连接和缓存的同步管理器。
+
+#### 输入参数
+- `config: NameServerConfig` - NameServer配置对象
+
+#### 输出返回
+- 提供broker地址查询、Topic路由查询、缓存管理等功能
+- 返回值类型: `str | None`, `TopicRouteData | None`, `dict[str, Any]`等
+
+#### 使用示例
+```python
+from pyrocketmq.nameserver import create_nameserver_manager
+
+# 创建管理器
+manager = create_nameserver_manager(
+    nameserver_addrs="localhost:9876;localhost:9877",
+    timeout=30.0,
+    broker_cache_ttl=600  # 10分钟缓存
+)
+
+# 启动管理器
+manager.start()
+
+# 查询broker地址
+address = manager.get_broker_address("broker-a", "test-topic")
+print(f"Broker地址: {address}")
+
+# 查询Topic路由
+route_data = manager.get_topic_route("test-topic")
+print(f"路由信息: {route_data}")
+
+# 获取缓存信息
+cache_info = manager.get_cache_info()
+print(f"缓存状态: {cache_info}")
+
+# 停止管理器
+manager.stop()
+```
+
+### 2. AsyncNameServerManager (异步管理器)
+
+提供异步接口的NameServer管理器，适用于高并发异步应用。
+
+#### 输入参数
+- `config: NameServerConfig` - NameServer配置对象
+
+#### 输出返回
+- 所有方法返回协程对象，需要使用await关键字
+- 返回值类型: `str | None`, `TopicRouteData | None`, `dict[str, Any]`等
+
+#### 使用示例
+```python
+import asyncio
+from pyrocketmq.nameserver import create_async_nameserver_manager
+
+async def async_example():
+    # 创建异步管理器
+    manager = create_async_nameserver_manager(
+        nameserver_addrs="localhost:9876;localhost:9877",
+        timeout=30.0
+    )
+    
+    # 启动管理器
+    await manager.start()
+    
+    # 异步查询broker地址
+    address = await manager.get_broker_address("broker-a", "test-topic")
+    print(f"Broker地址: {address}")
+    
+    # 异步查询Topic路由
+    route_data = await manager.get_topic_route("test-topic")
+    print(f"路由信息: {route_data}")
+    
+    # 获取所有broker地址
+    addresses = await manager.get_all_broker_addresses("test-topic")
+    print(f"所有Broker: {addresses}")
+    
+    # 停止管理器
+    await manager.stop()
+
+# 运行异步示例
+asyncio.run(async_example())
+```
+
+### 3. SyncNameServerClient (同步客户端)
+
+与RocketMQ NameServer进行同步通信的客户端实现。
+
+#### 主要方法
+- `query_topic_route_info(topic: str) -> TopicRouteData`: 查询Topic路由信息
+- `get_broker_cluster_info() -> BrokerClusterInfo`: 获取Broker集群信息
+- `connect() -> None`: 建立连接
+- `disconnect() -> None`: 断开连接
+
+#### 使用示例
+```python
+from pyrocketmq.nameserver import create_sync_client
+from pyrocketmq.remote.factory import create_sync_remote
+
+# 创建远程连接
+remote = create_sync_remote("localhost", 9876)
+remote.connect()
+
+# 创建客户端
+client = create_sync_client(remote, timeout=30.0)
+
+# 查询Topic路由
+route_data = client.query_topic_route_info("test-topic")
+print(f"Topic路由: {route_data}")
+
+# 获取集群信息
+cluster_info = client.get_broker_cluster_info()
+print(f"集群信息: {cluster_info}")
+```
+
+### 4. AsyncNameServerClient (异步客户端)
+
+与RocketMQ NameServer进行异步通信的客户端实现。
+
+#### 主要方法
+- `query_topic_route_info(topic: str) -> TopicRouteData`: 异步查询Topic路由信息
+- `get_broker_cluster_info() -> BrokerClusterInfo`: 异步获取Broker集群信息
+- `connect() -> None`: 异步建立连接
+- `disconnect() -> None`: 异步断开连接
+
+#### 使用示例
+```python
+import asyncio
+from pyrocketmq.nameserver import create_async_client
+from pyrocketmq.remote.factory import create_async_remote
+
+async def async_client_example():
+    # 创建异步远程连接
+    remote = create_async_remote("localhost", 9876)
+    await remote.connect()
+
+    # 创建异步客户端
+    client = create_async_client(remote, timeout=30.0)
+
+    # 异步查询Topic路由
+    route_data = await client.query_topic_route_info("test-topic")
+    print(f"Topic路由: {route_data}")
+
+    # 异步获取集群信息
+    cluster_info = await client.get_broker_cluster_info()
+    print(f"集群信息: {cluster_info}")
+
+asyncio.run(async_client_example())
+```
+
+## 配置管理
+
+### NameServerConfig配置类
 
 ```python
 @dataclass
-class BrokerData:
-    cluster: str                    # 集群名称
-    broker_name: str               # Broker名称
-    broker_addresses: Dict[int, str]  # Broker地址映射 {brokerId: address}
+class NameServerConfig:
+    """NameServer管理器配置类"""
+    
+    nameserver_addrs: str                    # NameServer地址，多个用分号分隔
+    timeout: float = 30.0                    # 请求超时时间，单位秒
+    connect_timeout: float = 10.0            # 连接超时时间，单位秒
+    broker_cache_ttl: int = 300              # broker地址缓存TTL，单位秒(5分钟)
+    route_cache_ttl: int = 300               # 路由信息缓存TTL，单位秒(5分钟)
+    max_retry_times: int = 3                 # 最大重试次数
+    retry_interval: float = 1.0              # 重试间隔，单位秒
 ```
 
-**关键特性**:
-- **地址映射**: 支持多个Broker地址，以brokerId为key
-- **兼容性处理**: 专门处理Go语言JSON整数key的兼容性问题
-- **序列化支持**: 提供完整的序列化/反序列化方法
-
-### 2. QueueData - 队列信息
-描述Broker上的队列配置信息。
-
+#### 配置示例
 ```python
-@dataclass
-class QueueData:
-    broker_name: str               # Broker名称
-    read_queue_nums: int           # 读队列数量
-    write_queue_nums: int          # 写队列数量
-    perm: int                      # 权限标识
-    topic_syn_flag: int            # Topic同步标志
-    compression_type: str = "gzip" # 压缩类型
+# 基础配置
+config = NameServerConfig(nameserver_addrs="localhost:9876")
+
+# 生产环境配置
+config = NameServerConfig(
+    nameserver_addrs="broker1:9876;broker2:9876;broker3:9876",
+    timeout=60.0,
+    connect_timeout=15.0,
+    broker_cache_ttl=1800,    # 30分钟
+    route_cache_ttl=1800,     # 30分钟
+    max_retry_times=5,
+    retry_interval=2.0
+)
 ```
 
-**权限标识**:
-- `6`: 可读可写
-- `4`: 只读
-- `2`: 只写
+## 数据模型
 
-### 3. TopicRouteData - Topic路由信息
-核心数据结构，包含Topic的完整路由信息。
+### TopicRouteData
+Topic路由数据结构，包含Topic下的所有Broker和队列信息。
 
 ```python
 @dataclass
 class TopicRouteData:
-    order_topic_conf: str                           # 顺序Topic配置
-    queue_data_list: List[QueueData]               # 队列数据列表
-    broker_data_list: List[BrokerData]             # Broker数据列表
+    topic: str                          # Topic名称
+    queue_data_list: list[QueueData]     # 队列数据列表
+    broker_data_list: list[BrokerData]   # Broker数据列表
+    order_topic_conf: str                 # 顺序Topic配置
 ```
 
-**数据组成**:
-- **队列信息**: 包含该Topic的所有队列配置
-- **Broker信息**: 包含承载该Topic的所有Broker信息
-- **顺序配置**: 顺序消息的特殊配置
+### BrokerData
+Broker数据结构，包含Broker的基本信息和地址列表。
 
-### 4. BrokerClusterInfo - Broker集群信息
-整个集群的概览信息，包含所有Broker和集群的映射关系。
+```python
+@dataclass
+class BrokerData:
+    broker_name: str                    # Broker名称
+    broker_addrs: dict[str, str]         # broker地址映射(broker_id -> address)
+    cluster: str                        # 集群名称
+```
+
+### BrokerClusterInfo
+Broker集群信息，包含整个集群的元数据。
 
 ```python
 @dataclass
 class BrokerClusterInfo:
-    broker_addr_table: Dict[str, BrokerData]       # Broker地址表
-    cluster_addr_table: Dict[str, List[str]]       # 集群地址表
+    broker_addr_table: dict[str, BrokerData]  # broker地址表
+    cluster_addr_table: dict[str, str]        # 集群地址表
+    # ... 其他字段
 ```
 
-## 客户端实现
-
-### SyncNameServerClient - 同步客户端
-基于Remote实现的同步NameServer客户端。
-
-**核心方法**:
-- `query_topic_route_info(topic)` - 查询Topic路由信息
-- `get_broker_cluster_info()` - 获取Broker集群信息
-- `connect()/disconnect()` - 连接管理
-- `is_connected()` - 连接状态检查
-
-**使用示例**:
-```python
-from pyrocketmq.nameserver import create_sync_client
-
-# 创建同步客户端
-client = create_sync_client("localhost", 9876)
-client.connect()
-
-# 查询Topic路由
-route_data = client.query_topic_route_info("test_topic")
-print(f"Found {len(route_data.broker_data_list)} brokers")
-```
-
-### AsyncNameServerClient - 异步客户端
-基于AsyncRemote实现的异步NameServer客户端。
-
-**核心方法**:
-- `async_query_topic_route_info(topic)` - 异步查询Topic路由信息
-- `async_get_broker_cluster_info()` - 异步获取Broker集群信息
-- `async_connect()/async_disconnect()` - 异步连接管理
-- `is_connected()` - 连接状态检查
-
-**使用示例**:
-```python
-from pyrocketmq.nameserver import create_async_client
-
-# 创建异步客户端
-client = await create_async_client("localhost", 9876)
-await client.connect()
-
-# 异步查询Topic路由
-route_data = await client.async_query_topic_route_info("test_topic")
-print(f"Found {len(route_data.broker_data_list)} brokers")
-```
-
-## 协议处理
-
-### 请求类型
-NameServer主要支持以下请求类型：
-
-1. **GET_ROUTE_INFO** - 获取Topic路由信息
-   - 请求代码: `RequestCode.GET_ROUTEINFO`
-   - 请求参数: topic名称
-   - 响应数据: TopicRouteData
-
-2. **GET_BROKER_CLUSTER_INFO** - 获取Broker集群信息
-   - 请求代码: `RequestCode.GET_BROKER_CLUSTER_INFO`
-   - 请求参数: 无
-   - 响应数据: BrokerClusterInfo
-
-### 数据兼容性处理
-专门处理Go语言JSON序列化的兼容性问题：
-
-```python
-# Go语言返回的JSON可能包含整数key
-{
-    "brokerAddrs": {
-        "0": "127.0.0.1:10911",  // 字符串形式的整数
-        "1": "127.0.0.1:10912"
-    }
-}
-
-# 使用ast.literal_eval处理，保持整数类型
-import ast
-data_str = data.decode("utf-8")
-parsed_data = ast.literal_eval(data_str)
-
-# 转换为标准的整数key
-normalized_addrs = {}
-for broker_id_str, address in broker_addrs.items():
-    broker_id = int(broker_id_str)  # 转换为整数
-    normalized_addrs[broker_id] = str(address)
-```
-
-## 异常处理体系
+## 异常处理
 
 ### 异常层次结构
 ```
 NameServerError (基础异常)
-├── NameServerConnectionError (连接错误)
-├── NameServerTimeoutError (超时错误)
-├── NameServerProtocolError (协议错误)
-├── NameServerResponseError (响应错误)
-└── NameServerDataParseError (数据解析错误)
+├── NameServerConnectionError    # 连接异常
+├── NameServerTimeoutError       # 超时异常
+├── NameServerProtocolError      # 协议异常
+├── NameServerResponseError      # 响应异常
+└── NameServerDataParseError     # 数据解析异常
 ```
 
-### 异常处理特点
-1. **精确分类**: 按照错误类型进行精确分类
-2. **上下文保留**: 保留相关的错误上下文信息
-3. **兼容性考虑**: 特别处理Go语言服务端的特殊错误格式
-
-## 工厂函数
-
-### create_sync_client()
-创建同步NameServer客户端的工厂函数。
-
+### 异常使用示例
 ```python
-def create_sync_client(host: str, port: int, timeout: float = 30.0) -> SyncNameServerClient
+from pyrocketmq.nameserver import NameServerError, NameServerTimeoutError
+
+try:
+    route_data = client.query_topic_route_info("test-topic")
+except NameServerTimeoutError as e:
+    print(f"查询超时: {e}")
+except NameServerConnectionError as e:
+    print(f"连接失败: {e}")
+except NameServerError as e:
+    print(f"NameServer错误: {e}")
 ```
 
-**参数**:
-- `host`: NameServer主机地址
-- `port`: NameServer端口
-- `timeout`: 请求超时时间
+## 缓存机制
 
-**返回**: 配置好的SyncNameServerClient实例
+### 缓存策略
+- **broker地址缓存**: 缓存broker名称到地址的映射，TTL默认5分钟
+- **路由信息缓存**: 缓存Topic到路由数据的映射，TTL默认5分钟
+- **自动过期**: 使用时间戳检查缓存是否过期
+- **线程安全**: 使用锁机制保证并发访问安全
 
-### create_async_client()
-创建异步NameServer客户端的工厂函数。
-
+### 缓存管理示例
 ```python
-async def create_async_client(host: str, port: int, timeout: float = 30.0) -> AsyncNameServerClient
+# 查看缓存状态
+cache_info = manager.get_cache_info()
+print(f"缓存的broker地址数量: {cache_info['cached_broker_addresses']}")
+print(f"缓存的路由数量: {cache_info['cached_routes']}")
+print(f"连接的NameServer数量: {cache_info['connected_nameservers']}")
+
+# 清理缓存
+manager.clear_cache()
+print("缓存已清理")
 ```
 
-**参数**: 与同步版本相同
-**返回**: 配置好的AsyncNameServerClient实例
+## 依赖项列表
 
-## 路由信息管理
+### 内部依赖
+- `pyrocketmq.remote` - 远程通信模块
+- `pyrocketmq.logging` - 日志模块
+- `pyrocketmq.model` - 数据模型模块
 
-### 路由查询流程
-1. **客户端请求**: 向NameServer发送Topic路由查询请求
-2. **NameServer响应**: 返回TopicRouteData结构
-3. **数据处理**: 
-   - 解析队列信息(QueueData)
-   - 解析Broker信息(BrokerData)
-   - 处理Go语言兼容性问题
-4. **结果返回**: 返回完整的路由信息
-
-### 路由信息组成
-Topic路由信息包含两个核心部分：
-
-1. **队列数据(QueueData)**: 描述队列的配置信息
-   - 读/写队列数量
-   - 权限设置
-   - 同步标志
-
-2. **Broker数据(BrokerData)**: 描述Broker的地址信息
-   - Broker集群归属
-   - 多地址支持
-   - BrokerId映射
-
-## 使用场景
-
-### 1. Producer路由发现
-Producer启动时需要查询Topic的路由信息，确定消息发送的目标Broker。
-
-```python
-# Producer获取路由信息
-route_data = name_server_client.query_topic_route_info(topic)
-
-# 选择Broker发送消息
-for broker_data in route_data.broker_data_list:
-    for broker_id, address in broker_data.broker_addresses.items():
-        # 连接Broker并发送消息
-        send_message_to_broker(address, message)
-```
-
-### 2. Consumer路由发现
-Consumer启动时需要查询Topic的路由信息，确定消息消费的来源Broker。
-
-```python
-# Consumer获取路由信息
-route_data = name_server_client.query_topic_route_info(topic)
-
-# 建立消费连接
-for queue_data in route_data.queue_data_list:
-    # 连接指定的队列进行消费
-    start_consume_from_queue(queue_data.broker_name, queue_data)
-```
-
-### 3. 集群管理
-通过查询Broker集群信息，了解整个集群的拓扑结构。
-
-```python
-# 获取集群概览
-cluster_info = name_server_client.get_broker_cluster_info()
-
-# 分析集群状态
-for cluster_name, broker_list in cluster_info.cluster_addr_table.items():
-    print(f"Cluster {cluster_name}: {len(broker_list)} brokers")
-```
+### 外部依赖
+- `asyncio` - 异步编程支持
+- `dataclasses` - 数据类支持
+- `threading` - 线程同步支持
+- `typing` - 类型注解支持
+- `time` - 时间相关功能
 
 ## 性能优化
 
-### 1. 连接复用
-- 客户端复用底层TCP连接，减少连接建立开销
-- 支持长连接保持，避免频繁断连重连
+### 连接池管理
+- 自动维护与NameServer的连接池
+- 支持多NameServer地址，提供故障转移能力
+- 连接复用，减少连接建立开销
 
-### 2. 异步支持
-- 提供异步客户端，支持高并发场景
-- 使用asyncio实现非阻塞IO操作
+### 缓存优化
+- 智能缓存策略，减少网络查询
+- 缓存TTL管理，平衡数据新鲜度和性能
+- 线程安全的缓存操作
 
-### 3. 缓存机制
-- 路由信息可以在客户端缓存，减少重复查询
-- 支持定时刷新，保证路由信息的时效性
-
-### 4. 批量查询
-- 支持一次查询多个Topic的路由信息
-- 减少网络往返次数，提高查询效率
-
-## 协议兼容性
-
-### RocketMQ协议支持
-- **版本兼容**: 支持RocketMQ 4.x/5.x版本
-- **请求类型**: 支持所有核心NameServer请求
-- **数据格式**: 严格遵循RocketMQ数据格式规范
-
-### 跨语言兼容
-- **Go语言兼容**: 专门处理Go语言JSON序列化的兼容性问题
-- **整数key处理**: 使用ast.literal_eval处理Go返回的整数key格式
-- **字段映射**: 字段名称与Go语言实现保持一致
+### 重试机制
+- 可配置的重试次数和间隔
+- 自动故障恢复
+- 错误日志记录
 
 ## 最佳实践
 
 ### 1. 连接管理
 ```python
-# 推荐的连接管理模式
-client = create_sync_client(nameserver_host, nameserver_port)
-try:
-    client.connect()
-    # 使用客户端...
-finally:
-    client.disconnect()
+# 推荐：使用管理器统一管理连接
+manager = create_nameserver_manager("ns1:9876;ns2:9876")
+manager.start()
+
+# 使用完毕后正确清理
+manager.stop()
 ```
 
-### 2. 异步操作
+### 2. 异步使用
 ```python
-# 异步操作推荐模式
-async def with_nameserver():
-    client = await create_async_client(nameserver_host, nameserver_port)
+# 推荐：在高并发场景使用异步管理器
+async def handle_request():
+    manager = create_async_nameserver_manager("ns1:9876")
+    await manager.start()
+    
     try:
-        await client.connect()
-        route_data = await client.async_query_topic_route_info(topic)
+        # 业务逻辑
+        route_data = await manager.get_topic_route("test-topic")
         return route_data
     finally:
-        await client.disconnect()
+        await manager.stop()
 ```
 
-### 3. 异常处理
+### 3. 错误处理
 ```python
-# 完善的异常处理
+# 推荐：完善的错误处理
 try:
-    route_data = client.query_topic_route_info(topic)
-except NameServerConnectionError:
-    # 处理连接错误
-    reconnect_client()
+    route_data = manager.get_topic_route("test-topic")
+    if not route_data:
+        logger.warning("Topic路由不存在")
+        return None
 except NameServerTimeoutError:
-    # 处理超时错误
-    retry_with_backoff()
+    logger.error("NameServer查询超时")
+    raise
 except NameServerError as e:
-    # 处理其他NameServer错误
-    log_error_and_alert(e)
+    logger.error(f"NameServer查询失败: {e}")
+    raise
 ```
 
-### 4. 路由缓存
+### 4. 缓存使用
 ```python
-# 简单的路由缓存实现
-class RouteCache:
-    def __init__(self, ttl: int = 30):
-        self.cache = {}
-        self.ttl = ttl
+# 推荐：定期检查缓存状态
+def monitor_cache():
+    cache_info = manager.get_cache_info()
     
-    def get_route(self, topic: str) -> Optional[TopicRouteData]:
-        # 实现缓存逻辑
-        pass
-    
-    def refresh_route(self, topic: str, client: SyncNameServerClient):
-        # 刷新缓存逻辑
-        pass
+    if cache_info['cached_routes'] > 1000:
+        logger.warning("路由缓存数量过多，考虑清理")
+        
+    if cache_info['connected_nameservers'] == 0:
+        logger.error("没有可用的NameServer连接")
 ```
 
-NameServer模块是pyrocketmq实现服务发现的核心组件，为整个消息系统提供可靠的路由信息服务，确保Producer和Consumer能够准确定位和访问RocketMQ Broker。
+## 故障排查
+
+### 常见问题
+
+#### 1. 连接失败
+**现象**: 无法建立NameServer连接
+**原因**: 网络问题或NameServer未启动
+**解决**: 检查网络连接和NameServer状态
+
+```python
+# 诊断代码
+try:
+    manager.start()
+except NameServerError as e:
+    print(f"连接失败: {e}")
+    # 检查NameServer地址配置
+    print(f"配置的地址: {manager.config.nameserver_addrs}")
+```
+
+#### 2. 查询超时
+**现象**: 查询请求超时
+**原因**: 网络延迟或NameServer负载过高
+**解决**: 调整超时配置或增加重试次数
+
+```python
+# 调整配置
+config = NameServerConfig(
+    nameserver_addrs="localhost:9876",
+    timeout=60.0,        # 增加超时时间
+    max_retry_times=5    # 增加重试次数
+)
+```
+
+#### 3. 缓存问题
+**现象**: 返回的路由信息不是最新的
+**原因**: 缓存未过期
+**解决**: 手动清理缓存
+
+```python
+# 清理缓存
+manager.clear_cache()
+```
+
+### 调试技巧
+1. **启用详细日志**: 设置日志级别为DEBUG
+2. **监控缓存状态**: 定期检查`get_cache_info()`返回的信息
+3. **网络诊断**: 使用telnet或nc工具测试NameServer连通性
+4. **性能监控**: 监控查询延迟和成功率
+
+## 版本变更记录
+
+### v1.0.0 (2025-11-06)
+- ✅ 初始版本发布
+- ✅ 实现同步和异步NameServer客户端
+- ✅ 实现NameServer管理器，提供统一的路由查询和缓存管理
+- ✅ 完整的数据模型定义
+- ✅ 异常处理体系
+- ✅ 详细的文档和示例
+
+### 主要特性
+- **统一接口**: 同步和异步版本使用相同的配置和缓存策略
+- **智能缓存**: 自动管理broker地址和路由信息缓存
+- **故障容错**: 自动重试和故障转移机制
+- **类型安全**: 完整的类型注解和文档字符串
+- **线程安全**: 支持高并发访问场景
+
+---
+
+**文档维护**: pyrocketmq开发团队  
+**最后更新**: 2025-11-06  
+**版本**: v1.0.0  
+**状态**: ✅ 生产就绪
