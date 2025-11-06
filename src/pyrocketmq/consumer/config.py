@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.pyrocketmq.model import AllocateQueueStrategy, ConsumeFromWhere, MessageModel
+from pyrocketmq.model import AllocateQueueStrategy, ConsumeFromWhere, MessageModel
 
 
 @dataclass

@@ -399,13 +399,16 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Optional
 
-class ConsumeFromWhere(Enum):
-    """消费起始位置策略"""
-    LAST_OFFSET = "CONSUME_FROM_LAST_OFFSET"
-    FIRST_OFFSET = "CONSUME_FROM_FIRST_OFFSET"
-    TIMESTAMP = "CONSUME_FROM_TIMESTAMP"
-    MIN_OFFSET = "CONSUME_FROM_MIN_OFFSET"
-    MAX_OFFSET = "CONSUME_FROM_MAX_OFFSET"
+
+# 消费起始位置枚举
+class ConsumeFromWhere:
+    """消费起始位置"""
+
+    CONSUME_FROM_LAST_OFFSET: str = "CONSUME_FROM_LAST_OFFSET"  # 从最后偏移量开始消费
+    CONSUME_FROM_FIRST_OFFSET: str = (
+        "CONSUME_FROM_FIRST_OFFSET"  # 从第一个偏移量开始消费
+    )
+    CONSUME_FROM_TIMESTAMP: str = "CONSUME_FROM_TIMESTAMP"  # 从指定时间戳开始消费
 
 class AllocateQueueStrategy(Enum):
     """队列负载均衡策略"""
@@ -433,7 +436,7 @@ class ConsumerConfig:
     max_reconsume_times: int = 16
 
     # 消费起始位置
-    consume_from_where: ConsumeFromWhere = ConsumeFromWhere.LAST_OFFSET
+    consume_from_where: ConsumeFromWhere = ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET
     consume_timestamp: int = 0
 
     # 负载均衡
@@ -568,16 +571,12 @@ class ConsumeFromWhereManager:
     def get_consume_offset(self, queue: MessageQueue, strategy: ConsumeFromWhere,
                           timestamp: int = 0) -> int:
         """根据策略获取消费起始偏移量"""
-        if strategy == ConsumeFromWhere.LAST_OFFSET:
+        if strategy == ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET:
             return self.get_max_offset(queue)
-        elif strategy == ConsumeFromWhere.FIRST_OFFSET:
+        elif strategy == ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET:
             return self.get_min_offset(queue)
-        elif strategy == ConsumeFromWhere.TIMESTAMP:
+        elif strategy == ConsumeFromWhere.CONSUME_FROM_TIMESTAMP:
             return self.get_offset_by_timestamp(queue, timestamp)
-        elif strategy == ConsumeFromWhere.MIN_OFFSET:
-            return self.get_min_offset(queue)
-        elif strategy == ConsumeFromWhere.MAX_OFFSET:
-            return self.get_max_offset(queue)
 ```
 
 ## 订阅关系与消息过滤

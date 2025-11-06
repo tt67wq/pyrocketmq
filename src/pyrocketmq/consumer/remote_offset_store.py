@@ -19,7 +19,6 @@ from collections import defaultdict
 from typing import Any, override
 
 from pyrocketmq.broker import BrokerClient, BrokerManager
-from pyrocketmq.consumer.errors import NameServerError
 from pyrocketmq.consumer.offset_store import (
     OffsetStore,
     OffsetStoreMetrics,
@@ -27,11 +26,9 @@ from pyrocketmq.consumer.offset_store import (
 )
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
-from pyrocketmq.nameserver.client import SyncNameServerClient
-from pyrocketmq.nameserver.models import BrokerClusterInfo
+from pyrocketmq.nameserver import NameServerManager
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
-from pyrocketmq.remote.sync_remote import Remote
 
 logger = get_logger(__name__)
 
@@ -58,29 +55,29 @@ class RemoteOffsetStore(OffsetStore):
 
     def __init__(
         self,
-        namesrv_addr: str,
         consumer_group: str,
         broker_manager: BrokerManager,
+        nameserver_manager: NameServerManager,
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
     ) -> None:
-        """
-        初始化远程偏移量存储
+        """初始化远程偏移量存储.
 
         Args:
-            namesrv_addr: NameServer地址，格式："host1:port1;host2:port2"
             consumer_group: 消费者组名称
             broker_manager: Broker管理器，用于与Broker通信
+            nameserver_manager: NameServer管理器，用于路由查询
             persist_interval: 持久化间隔（毫秒），默认5秒
             persist_batch_size: 批量提交大小，默认10个偏移量
 
-        初始化组件：
-        - remote_offset_cache: 偏移量本地缓存，减少网络请求
-        - _lock: 线程安全锁，保护所有共享状态
-        - _nameserver_connections: NameServer连接池，用于路由查询
-        - _broker_addr_cache: Broker地址缓存，避免频繁查询NameServer
-        - metrics: 指标收集器，监控性能和操作统计
-        - _persist_thread: 后台持久化线程，定期同步偏移量到Broker
+        Raises:
+            ValueError: 当参数值无效时抛出
+
+        Note:
+            初始化的组件包括：
+            - remote_offset_cache: 偏移量本地缓存，减少网络请求
+            - _lock: 线程安全锁，保护所有共享状态
+            - _persist_thread: 后台持久化线程，定期同步偏移量到Broker
         """
         super().__init__(consumer_group)
         self.broker_manager: BrokerManager = broker_manager
@@ -94,10 +91,7 @@ class RemoteOffsetStore(OffsetStore):
         self._lock: threading.RLock = threading.RLock()
 
         # NameServer连接管理（仅用于路由查询）
-        self._nameserver_connections: dict[str, Remote] = {}
-        self._nameserver_addrs: dict[str, str] = self._parse_nameserver_addrs(
-            namesrv_addr
-        )
+        self._nameserver_manager: NameServerManager = nameserver_manager
 
         # router
         self._router: MessageRouter = MessageRouter(TopicBrokerMapping())
@@ -109,15 +103,15 @@ class RemoteOffsetStore(OffsetStore):
         self._persist_thread: threading.Thread | None = None
         self._running: bool = False
 
-        # broker地址缓存，避免频繁查询NameServer
-        self._broker_addr_cache: dict[
-            str, tuple[str, float]
-        ] = {}  # broker_name -> (address, timestamp)
-        self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
-
     @override
     def start(self) -> None:
-        """启动偏移量存储服务"""
+        """启动偏移量存储服务.
+
+        启动后台持久化线程，开始定期同步偏移量到Broker。
+
+        Note:
+            如果偏移量存储已经启动，此方法会直接返回而不重复启动。
+        """
         if self._running:
             return
 
@@ -127,13 +121,20 @@ class RemoteOffsetStore(OffsetStore):
             target=self._periodic_persist, daemon=True
         )
         self._persist_thread.start()
+        self._nameserver_manager.start()
         logger.info(
             "remote offset store started", extra={"consumer_group": self.consumer_group}
         )
 
     @override
     def stop(self) -> None:
-        """停止偏移量存储服务"""
+        """停止偏移量存储服务.
+
+        停止后台持久化线程，等待所有待持久化的偏移量完成同步。
+
+        Note:
+            如果偏移量存储已经停止，此方法会直接返回而不重复停止。
+        """
         if not self._running:
             return
 
@@ -146,17 +147,22 @@ class RemoteOffsetStore(OffsetStore):
         # 持久化所有缓存的偏移量
         self.persist_all()
 
+        # 停止名称服务器管理器
+        self._nameserver_manager.stop()
+
         logger.info(
             "remote offset store stopped", extra={"consumer_group": self.consumer_group}
         )
 
     @override
     def load(self) -> None:
-        """
-        从Broker加载偏移量到本地缓存
+        """从Broker加载偏移量到本地缓存.
 
         对于远程存储，初始化时不需要加载所有偏移量，
         而是在第一次读取时按需从Broker获取。
+
+        Note:
+            此方法为空实现，因为远程存储采用按需加载策略。
         """
         try:
             logger.info(
@@ -173,12 +179,16 @@ class RemoteOffsetStore(OffsetStore):
 
     @override
     def update_offset(self, queue: MessageQueue, offset: int) -> None:
-        """
-        更新偏移量到本地缓存
+        """更新偏移量到本地缓存.
+
+        将偏移量更新到本地缓存中，后台持久化线程会定期同步到Broker。
 
         Args:
-            queue: 消息队列
-            offset: 偏移量
+            queue: 消息队列，包含Topic、Broker名称和队列ID
+            offset: 新的偏移量值，必须大于等于0
+
+        Raises:
+            ValueError: 当offset为负数时抛出
         """
         with self._lock:
             # 更新本地缓存
@@ -194,11 +204,16 @@ class RemoteOffsetStore(OffsetStore):
 
     @override
     def persist(self, queue: MessageQueue) -> None:
-        """
-        持久化单个队列的偏移量到Broker
+        """持久化单个队列的偏移量到Broker.
+
+        立即将指定队列的偏移量同步到Broker，不等待后台持久化线程。
 
         Args:
-            queue: 消息队列
+            queue: 需要持久化偏移量的消息队列
+
+        Raises:
+            ConnectionError: 当无法连接到Broker时抛出
+            BrokerError: 当Broker返回错误时抛出
         """
         with self._lock:
             if queue not in self.offset_table:
@@ -244,7 +259,14 @@ class RemoteOffsetStore(OffsetStore):
 
     @override
     def persist_all(self) -> None:
-        """批量持久化所有偏移量"""
+        """批量持久化所有偏移量.
+
+        立即将所有缓存的偏移量同步到对应的Broker。
+
+        Raises:
+            ConnectionError: 当无法连接到Broker时抛出
+            BrokerError: 当Broker返回错误时抛出
+        """
         if not self.offset_table:
             return
 
@@ -286,15 +308,25 @@ class RemoteOffsetStore(OffsetStore):
 
     @override
     def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
-        """
-        读取偏移量
+        """读取偏移量.
+
+        从Broker读取指定队列的消费偏移量。首先检查本地缓存，
+        如果缓存未命中或已过期，则从Broker查询最新偏移量。
 
         Args:
-            queue: 消息队列
-            read_type: 读取类型
+            queue: 消息队列，包含Topic、Broker名称和队列ID
+            read_type: 读取类型，支持MEMORY_FIRST_THEN_STORE、
+                      READ_FROM_MEMORY、READ_FROM_STORE等
 
         Returns:
-            int: 偏移量，如果不存在返回-1
+            int: 队列的消费偏移量，如果不存在返回-1
+
+        Raises:
+            ConnectionError: 当无法连接到Broker时抛出
+            BrokerError: 当Broker返回错误时抛出
+
+        Note:
+            读取成功的偏移量会自动更新本地缓存。
         """
         with self._lock:
             # 1. 优先从内存读取
@@ -364,11 +396,16 @@ class RemoteOffsetStore(OffsetStore):
 
     @override
     def remove_offset(self, queue: MessageQueue) -> None:
-        """
-        移除队列的偏移量
+        """移除队列的偏移量.
+
+        从本地缓存中移除指定队列的偏移量，并从Broker删除该队列的偏移量记录。
 
         Args:
-            queue: 消息队列
+            queue: 需要移除偏移量的消息队列
+
+        Raises:
+            ConnectionError: 当无法连接到Broker时抛出
+            BrokerError: 当Broker返回错误时抛出
         """
         with self._lock:
             # 从本地缓存移除
@@ -381,11 +418,13 @@ class RemoteOffsetStore(OffsetStore):
             logger.debug("removed offset from cache", extra={"queue": str(queue)})
 
     def _group_offsets_by_broker(self) -> dict[str, list[tuple[MessageQueue, int]]]:
-        """
-        按Broker分组偏移量
+        """按Broker分组偏移量.
+
+        将所有缓存的偏移量按照Broker名称进行分组，便于批量提交到对应的Broker。
 
         Returns:
-            dict[str, list[tuple[MessageQueue, int]]]: 按Broker名称分组的偏移量列表
+            dict[str, list[tuple[MessageQueue, int]]]: 按Broker名称分组的偏移量列表，
+                                                      键为Broker名称，值为(队列, 偏移量)元组列表
         """
         broker_offsets: dict[str, list[tuple[MessageQueue, int]]] = defaultdict(list)
 
@@ -402,12 +441,17 @@ class RemoteOffsetStore(OffsetStore):
     def _persist_to_broker(
         self, broker_name: str, offsets: list[tuple[MessageQueue, int]]
     ) -> None:
-        """
-        持久化偏移量到指定Broker
+        """持久化偏移量到指定Broker.
+
+        将多个队列的偏移量批量提交到指定的Broker进行持久化。
 
         Args:
-            broker_name: Broker名称
-            offsets: 偏移量列表
+            broker_name: Broker名称，用于连接对应的Broker服务器
+            offsets: 偏移量列表，每个元素为(队列, 偏移量)元组
+
+        Raises:
+            ConnectionError: 当无法连接到Broker时抛出
+            BrokerError: 当Broker返回错误时抛出
         """
         if not offsets:
             return
@@ -458,7 +502,14 @@ class RemoteOffsetStore(OffsetStore):
             raise
 
     def _periodic_persist(self) -> None:
-        """定期持久化任务（在后台线程中运行）"""
+        """定期持久化任务（在后台线程中运行）.
+
+        后台线程定期执行，按照配置的间隔时间自动将本地缓存的偏移量同步到Broker。
+        采用批量提交的方式提高性能。
+
+        Note:
+            此方法在单独的线程中运行，会被_stop方法中断。
+        """
         while self._running:
             try:
                 time.sleep(self.persist_interval / 1000)
@@ -469,112 +520,40 @@ class RemoteOffsetStore(OffsetStore):
             except Exception as e:
                 logger.error("error in periodic persist task", extra={"error": str(e)})
 
-    def _parse_nameserver_addrs(self, namesrv_addr: str) -> dict[str, str]:
-        """解析NameServer地址列表
-
-        Args:
-            namesrv_addr: NameServer地址，格式为"host1:port1;host2:port2"
-
-        Returns:
-            dict[str, str]: 地址字典 {addr: host:port}
-        """
-        addrs: dict[str, str] = {}
-        for addr in namesrv_addr.split(";"):
-            addr = addr.strip()
-            if addr:
-                addrs[addr] = addr
-        return addrs
-
     def _get_broker_addr_by_name(self, broker_name: str) -> str | None:
-        """根据broker名称查询broker地址
+        """根据broker名称查询broker地址.
 
-        优先从本地缓存查询，缓存未命中或过期时查询NameServer获取最新地址信息。
-        使用缓存机制可以显著减少对NameServer的查询频率，提升性能。
-
-        缓存策略：
-        - 缓存结构：broker_name -> (address, timestamp)
-        - 缓存TTL：5分钟，过期自动清理
-        - 线程安全：使用self._lock保护缓存操作
-        - 缓存更新：查询成功后自动更新缓存
+        从NameServer查询指定broker的网络地址，支持主从地址选择。
 
         Args:
-            broker_name: 要查询的broker名称
+            broker_name: broker名称，用于标识具体的broker实例
 
         Returns:
-            str | None: 找到的broker地址，格式为"host:port"，未找到则返回None
+            str | None: broker地址，格式为"host:port"，未找到则返回None
 
-        Raises:
-            NameServerError: 当NameServer连接不可用或查询失败时抛出
-
-        查询流程：
-        1. 检查本地缓存，命中且未过期则直接返回
-        2. 缓存未命中或过期，遍历NameServer连接查询
-        3. 查询成功后更新本地缓存并返回地址
-        4. 所有NameServer都查询失败则返回None
+        Note:
+            优先选择master broker的地址。
         """
         logger.debug("查询broker地址", extra={"broker_name": broker_name})
 
-        # 先检查缓存
-        with self._lock:
-            if broker_name in self._broker_addr_cache:
-                address, timestamp = self._broker_addr_cache[broker_name]
-                # 检查缓存是否过期
-                if time.time() - timestamp < self._broker_cache_ttl:
-                    logger.debug(
-                        "使用缓存的broker地址",
-                        extra={"broker_name": broker_name, "address": address},
-                    )
-                    return address
-                else:
-                    # 缓存过期，删除
-                    del self._broker_addr_cache[broker_name]
-                    logger.debug(
-                        "broker地址缓存过期", extra={"broker_name": broker_name}
-                    )
-
-        if not self._nameserver_connections:
-            raise NameServerError("", "NameServer连接不可用，无法查询broker地址")
-
-        for addr, remote in self._nameserver_connections.items():
-            try:
-                # 使用NameServer客户端查询路由信息
-                client: SyncNameServerClient = SyncNameServerClient(remote)
-
-                # 查询Topic路由信息
-                cluster_info: BrokerClusterInfo = client.get_broker_cluster_info()
-
-                # 在路由数据中查找目标broker
-                for name, broker_data in cluster_info.broker_addr_table.items():
-                    if name == broker_name:
-                        address = self._router.select_broker_address(broker_data)
-
-                        if not address:
-                            continue
-
-                        # 更新缓存
-                        with self._lock:
-                            self._broker_addr_cache[broker_name] = (
-                                address,
-                                time.time(),
-                            )
-                            logger.debug(
-                                "缓存broker地址",
-                                extra={"broker_name": broker_name, "address": address},
-                            )
-
-                        return address
-
-            except Exception as e:
-                logger.warning(
-                    "从NameServer查询失败", extra={"addr": addr, "error": str(e)}
-                )
-                continue
-
-        logger.warning("未找到broker地址信息", extra={"broker_name": broker_name})
-        return None
+        return self._nameserver_manager.get_broker_address(broker_name)
 
     def get_metrics(self) -> dict[str, Any]:
-        """获取指标信息"""
+        """获取指标信息.
+
+        返回远程偏移量存储的性能和操作统计信息，
+        包括缓存命中率、持久化统计、错误统计等。
+
+        Returns:
+            dict[str, Any]: 包含以下键的指标字典：
+                - cached_offsets_count: 缓存的偏移量数量
+                - cache_hit_rate: 缓存命中率
+                - persist_success_count: 持久化成功次数
+                - persist_failure_count: 持久化失败次数
+                - load_success_count: 加载成功次数
+                - load_failure_count: 加载失败次数
+                - running: 是否正在运行
+        """
         metrics_dict = self.metrics.to_dict()
         metrics_dict.update(
             {

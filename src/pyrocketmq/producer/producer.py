@@ -630,22 +630,6 @@ class Producer:
 
             raise MessageSendError(f"Oneway batch message send failed: {e}") from e
 
-    def _parse_nameserver_addrs(self, namesrv_addr: str) -> dict[str, str]:
-        """解析NameServer地址列表
-
-        Args:
-            namesrv_addr: NameServer地址，格式为"host1:port1;host2:port2"
-
-        Returns:
-            dict[str, str]: 地址字典 {addr: host:port}
-        """
-        addrs: dict[str, str] = {}
-        for addr in namesrv_addr.split(";"):
-            addr = addr.strip()
-            if addr:
-                addrs[addr] = addr
-        return addrs
-
     def _init_nameserver_connections(self) -> None:
         """初始化NameServer连接"""
         logger.info("Initializing NameServer connections...")
