@@ -74,6 +74,7 @@ class LocalOffsetStore(OffsetStore):
         self._running: bool = False
         self._stop_event: threading.Event = threading.Event()
 
+    @override
     def start(self) -> None:
         """启动偏移量存储服务"""
         if self._running:
@@ -96,6 +97,7 @@ class LocalOffsetStore(OffsetStore):
             },
         )
 
+    @override
     def stop(self) -> None:
         """停止偏移量存储服务"""
         if not self._running:

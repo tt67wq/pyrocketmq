@@ -117,6 +117,7 @@ class RemoteOffsetStore(OffsetStore):
         ] = {}  # broker_name -> (address, timestamp)
         self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
 
+    @override
     def start(self) -> None:
         """启动偏移量存储服务"""
         if self._running:
@@ -132,6 +133,7 @@ class RemoteOffsetStore(OffsetStore):
             "remote offset store started", extra={"consumer_group": self.consumer_group}
         )
 
+    @override
     def stop(self) -> None:
         """停止偏移量存储服务"""
         if not self._running:
