@@ -6,6 +6,8 @@
 """
 
 import logging
+import threading
+import time
 from typing import Any
 
 from typing_extensions import override
@@ -104,6 +106,13 @@ class AsyncTransactionProducer(AsyncProducer):
         self._max_check_times: int = 15  # 最大回查次数
 
         self._failed_registrations: set[str] = set()
+
+        # broker地址缓存，避免频繁查询NameServer
+        self._broker_addr_cache: dict[
+            str, tuple[str, float]
+        ] = {}  # broker_name -> (address, timestamp)
+        self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
+        self._cache_lock: threading.RLock = threading.RLock()
 
     @override
     async def start(self) -> None:
@@ -633,6 +642,24 @@ class AsyncTransactionProducer(AsyncProducer):
             "查询broker地址", extra={"broker_name": broker_name, "topic": topic}
         )
 
+        # 先检查缓存
+        with self._cache_lock:
+            if broker_name in self._broker_addr_cache:
+                address, timestamp = self._broker_addr_cache[broker_name]
+                # 检查缓存是否过期
+                if time.time() - timestamp < self._broker_cache_ttl:
+                    self._logger.debug(
+                        "使用缓存的broker地址",
+                        extra={"broker_name": broker_name, "address": address},
+                    )
+                    return address
+                else:
+                    # 缓存过期，删除
+                    del self._broker_addr_cache[broker_name]
+                    self._logger.debug(
+                        "broker地址缓存过期", extra={"broker_name": broker_name}
+                    )
+
         if not self._nameserver_connections:
             raise ProducerError("NameServer客户端不可用，无法查询broker地址")
 
@@ -650,7 +677,25 @@ class AsyncTransactionProducer(AsyncProducer):
                 # 在路由数据中查找目标broker
                 for broker_data in topic_route_data.broker_data_list:
                     if broker_data.broker_name == broker_name:
-                        return self._message_router.select_broker_address(broker_data)
+                        address = self._message_router.select_broker_address(
+                            broker_data
+                        )
+
+                        if not address:
+                            continue
+
+                        # 更新缓存
+                        with self._cache_lock:
+                            self._broker_addr_cache[broker_name] = (
+                                address,
+                                time.time(),
+                            )
+                            self._logger.debug(
+                                "缓存broker地址",
+                                extra={"broker_name": broker_name, "address": address},
+                            )
+
+                        return address
 
             except Exception as e:
                 self._logger.warning(

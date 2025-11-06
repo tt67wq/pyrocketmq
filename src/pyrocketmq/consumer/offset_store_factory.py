@@ -6,16 +6,16 @@ OffsetStore工厂 - 偏移量存储工厂
 - 广播模式：LocalOffsetStore
 """
 
-import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
 from pyrocketmq.broker import BrokerManager
+from pyrocketmq.consumer.config import MessageModel
 from pyrocketmq.consumer.local_offset_store import LocalOffsetStore
 from pyrocketmq.consumer.offset_store import OffsetStore
+from pyrocketmq.consumer.remote_offset_store import RemoteOffsetStore
 from pyrocketmq.logging import get_logger
-from src.pyrocketmq.consumer.remote_offset_store import RemoteOffsetStore
-from src.pyrocketmq.model import MessageModel
 
 logger = get_logger(__name__)
 
@@ -31,6 +31,7 @@ class OffsetStoreFactory:
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
+        auto_start: bool = True,
         **kwargs,
     ) -> OffsetStore:
         """
@@ -43,6 +44,7 @@ class OffsetStoreFactory:
             store_path: 本地存储路径（广播模式使用）
             persist_interval: 持久化间隔（毫秒）
             persist_batch_size: 批量提交大小
+            auto_start: 是否自动启动OffsetStore
             **kwargs: 其他配置参数
 
         Returns:
@@ -63,7 +65,7 @@ class OffsetStoreFactory:
                 f"Creating RemoteOffsetStore for consumer group: {consumer_group}"
             )
 
-            return RemoteOffsetStore(
+            offset_store = RemoteOffsetStore(
                 consumer_group=consumer_group,
                 broker_manager=broker_manager,
                 persist_interval=persist_interval,
@@ -77,7 +79,7 @@ class OffsetStoreFactory:
                 f"Creating LocalOffsetStore for consumer group: {consumer_group}, path: {store_path}"
             )
 
-            return LocalOffsetStore(
+            offset_store = LocalOffsetStore(
                 consumer_group=consumer_group,
                 store_path=store_path,
                 persist_interval=persist_interval,
@@ -88,15 +90,21 @@ class OffsetStoreFactory:
         else:
             raise ValueError(f"Unsupported message model: {message_model}")
 
+        # 自动启动
+        if auto_start:
+            offset_store.start()
+
+        return offset_store
+
 
 class OffsetStoreManager:
-    """偏移量存储管理器"""
+    """偏移量存储管理器（同步版本）"""
 
     def __init__(self):
         self._offset_stores: dict[str, OffsetStore] = {}
-        self._lock = asyncio.Lock()
+        self._lock: threading.RLock = threading.RLock()
 
-    async def get_or_create_offset_store(
+    def get_or_create_offset_store(
         self,
         consumer_group: str,
         message_model: MessageModel,
@@ -121,8 +129,8 @@ class OffsetStoreManager:
         Returns:
             OffsetStore: 偏移量存储实例
         """
-        async with self._lock:
-            key = f"{consumer_group}:{message_model.value}"
+        with self._lock:
+            key = f"{consumer_group}:{message_model}"
 
             if key not in self._offset_stores:
                 # 创建新的OffsetStore实例
@@ -133,11 +141,9 @@ class OffsetStoreManager:
                     store_path=store_path,
                     persist_interval=persist_interval,
                     persist_batch_size=persist_batch_size,
+                    auto_start=True,
                     **kwargs,
                 )
-
-                # 启动OffsetStore
-                await offset_store.start()
 
                 # 缓存实例
                 self._offset_stores[key] = offset_store
@@ -146,7 +152,7 @@ class OffsetStoreManager:
 
             return self._offset_stores[key]
 
-    async def close_offset_store(
+    def close_offset_store(
         self, consumer_group: str, message_model: MessageModel
     ) -> None:
         """
@@ -156,28 +162,25 @@ class OffsetStoreManager:
             consumer_group: 消费者组名称
             message_model: 消息模式
         """
-        async with self._lock:
-            key = f"{consumer_group}:{message_model.value}"
+        with self._lock:
+            key = f"{consumer_group}:{message_model}"
 
             if key in self._offset_stores:
                 offset_store = self._offset_stores[key]
-                await offset_store.stop()
-                del self._offset_stores[key]
-
-                logger.info(f"Closed OffsetStore for {key}")
-
-    async def close_all(self) -> None:
-        """关闭所有偏移量存储实例"""
-        async with self._lock:
-            tasks = []
-
-            for key, offset_store in self._offset_stores.items():
-                task = offset_store.stop()
-                tasks.append((key, task))
-
-            for key, task in tasks:
                 try:
-                    await task
+                    offset_store.stop()
+                except Exception as e:
+                    logger.error(f"Failed to stop OffsetStore for {key}: {e}")
+                finally:
+                    del self._offset_stores[key]
+                    logger.info(f"Closed OffsetStore for {key}")
+
+    def close_all(self) -> None:
+        """关闭所有偏移量存储实例"""
+        with self._lock:
+            for key, offset_store in list(self._offset_stores.items()):
+                try:
+                    offset_store.stop()
                     logger.info(f"Closed OffsetStore for {key}")
                 except Exception as e:
                     logger.error(f"Failed to close OffsetStore for {key}: {e}")
@@ -186,50 +189,69 @@ class OffsetStoreManager:
 
     def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         """获取所有OffsetStore的指标"""
-        metrics = {}
+        with self._lock:
+            metrics = {}
 
-        for key, offset_store in self._offset_stores.items():
-            try:
-                if hasattr(offset_store, "get_metrics"):
-                    metrics[key] = offset_store.get_metrics()
-                else:
-                    metrics[key] = {"error": "Metrics not supported"}
-            except Exception as e:
-                metrics[key] = {"error": str(e)}
+            for key, offset_store in self._offset_stores.items():
+                try:
+                    if hasattr(offset_store, "get_metrics"):
+                        metrics[key] = offset_store.get_metrics()
+                    else:
+                        metrics[key] = {"error": "Metrics not supported"}
+                except Exception as e:
+                    metrics[key] = {"error": str(e)}
 
-        return metrics
+            return metrics
 
     def get_managed_stores_info(self) -> dict[str, dict[str, Any]]:
         """获取管理的OffsetStore信息"""
-        info = {}
+        with self._lock:
+            info = {}
 
-        for key, offset_store in self._offset_stores.items():
-            consumer_group, message_model = key.split(":", 1)
+            for key, offset_store in self._offset_stores.items():
+                consumer_group, message_model = key.split(":", 1)
 
-            store_info = {
-                "consumer_group": consumer_group,
-                "message_model": message_model,
-                "store_type": type(offset_store).__name__,
-                "is_running": getattr(offset_store, "_running", False),
-            }
+                store_info = {
+                    "consumer_group": consumer_group,
+                    "message_model": message_model,
+                    "store_type": type(offset_store).__name__,
+                    "is_running": getattr(offset_store, "_running", False),
+                }
 
-            # 添加特定类型的信息
-            if isinstance(offset_store, LocalOffsetStore):
-                if hasattr(offset_store, "get_file_info"):
-                    store_info.update(offset_store.get_file_info())
-            elif isinstance(offset_store, RemoteOffsetStore):
-                store_info.update(
-                    {
-                        "cached_offsets_count": len(offset_store.offset_table),
-                        "remote_cache_count": len(
-                            getattr(offset_store, "remote_offset_cache", {})
-                        ),
-                    }
-                )
+                # 添加特定类型的信息
+                if isinstance(offset_store, LocalOffsetStore):
+                    if hasattr(offset_store, "get_file_info"):
+                        store_info.update(offset_store.get_file_info())
+                elif isinstance(offset_store, RemoteOffsetStore):
+                    store_info.update(
+                        {
+                            "cached_offsets_count": len(offset_store.offset_table),
+                            "remote_cache_count": len(
+                                getattr(offset_store, "remote_offset_cache", {})
+                            ),
+                        }
+                    )
 
-            info[key] = store_info
+                info[key] = store_info
 
-        return info
+            return info
+
+    def get_offset_store(
+        self, consumer_group: str, message_model: MessageModel
+    ) -> OffsetStore | None:
+        """
+        获取已创建的偏移量存储实例
+
+        Args:
+            consumer_group: 消费者组名称
+            message_model: 消息模式
+
+        Returns:
+            OffsetStore | None: 偏移量存储实例，如果不存在返回None
+        """
+        with self._lock:
+            key = f"{consumer_group}:{message_model}"
+            return self._offset_stores.get(key)
 
 
 # 全局OffsetStore管理器实例
@@ -241,7 +263,7 @@ def get_offset_store_manager() -> OffsetStoreManager:
     return _offset_store_manager
 
 
-async def create_offset_store(
+def create_offset_store(
     consumer_group: str,
     message_model: MessageModel,
     broker_manager: BrokerManager | None = None,
@@ -266,7 +288,7 @@ async def create_offset_store(
         OffsetStore: 偏移量存储实例
     """
     manager = get_offset_store_manager()
-    return await manager.get_or_create_offset_store(
+    return manager.get_or_create_offset_store(
         consumer_group=consumer_group,
         message_model=message_model,
         broker_manager=broker_manager,
@@ -277,7 +299,7 @@ async def create_offset_store(
     )
 
 
-async def close_offset_store(consumer_group: str, message_model: MessageModel) -> None:
+def close_offset_store(consumer_group: str, message_model: MessageModel) -> None:
     """
     便捷函数：关闭偏移量存储实例
 
@@ -286,13 +308,13 @@ async def close_offset_store(consumer_group: str, message_model: MessageModel) -
         message_model: 消息模式
     """
     manager = get_offset_store_manager()
-    await manager.close_offset_store(consumer_group, message_model)
+    manager.close_offset_store(consumer_group, message_model)
 
 
-async def close_all_offset_stores() -> None:
+def close_all_offset_stores() -> None:
     """便捷函数：关闭所有偏移量存储实例"""
     manager = get_offset_store_manager()
-    await manager.close_all()
+    manager.close_all()
 
 
 def get_offset_store_metrics() -> dict[str, dict[str, Any]]:

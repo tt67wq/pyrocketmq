@@ -83,6 +83,12 @@ class RemoteOffsetStore(OffsetStore):
         self._persist_thread: threading.Thread | None = None
         self._running: bool = False
 
+        # broker地址缓存，避免频繁查询NameServer
+        self._broker_addr_cache: dict[
+            str, tuple[str, float]
+        ] = {}  # broker_name -> (address, timestamp)
+        self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
+
     def start(self) -> None:
         """启动偏移量存储服务"""
         if self._running:
@@ -243,6 +249,7 @@ class RemoteOffsetStore(OffsetStore):
                         "failed to persist offsets to broker",
                         extra={"broker_name": broker_name, "error": str(e)},
                     )
+                    continue
 
             logger.info(
                 "offset persistence completed",
@@ -466,6 +473,24 @@ class RemoteOffsetStore(OffsetStore):
         """
         logger.debug("查询broker地址", extra={"broker_name": broker_name})
 
+        # 先检查缓存
+        with self._lock:
+            if broker_name in self._broker_addr_cache:
+                address, timestamp = self._broker_addr_cache[broker_name]
+                # 检查缓存是否过期
+                if time.time() - timestamp < self._broker_cache_ttl:
+                    logger.debug(
+                        "使用缓存的broker地址",
+                        extra={"broker_name": broker_name, "address": address},
+                    )
+                    return address
+                else:
+                    # 缓存过期，删除
+                    del self._broker_addr_cache[broker_name]
+                    logger.debug(
+                        "broker地址缓存过期", extra={"broker_name": broker_name}
+                    )
+
         if not self._nameserver_connections:
             raise NameServerError("", "NameServer连接不可用，无法查询broker地址")
 
@@ -480,7 +505,23 @@ class RemoteOffsetStore(OffsetStore):
                 # 在路由数据中查找目标broker
                 for name, broker_data in cluster_info.broker_addr_table.items():
                     if name == broker_name:
-                        return self._router.select_broker_address(broker_data)
+                        address = self._router.select_broker_address(broker_data)
+
+                        if not address:
+                            continue
+
+                        # 更新缓存
+                        with self._lock:
+                            self._broker_addr_cache[broker_name] = (
+                                address,
+                                time.time(),
+                            )
+                            logger.debug(
+                                "缓存broker地址",
+                                extra={"broker_name": broker_name, "address": address},
+                            )
+
+                        return address
 
             except Exception as e:
                 logger.warning(

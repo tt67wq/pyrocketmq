@@ -6,7 +6,10 @@
 """
 
 import logging
+import threading
+import time
 from typing import Any
+
 from typing_extensions import override
 
 from pyrocketmq.broker.client import BrokerClient
@@ -15,9 +18,9 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     LocalTransactionState,
     Message,
+    MessageQueue,
     RemotingCommand,
     SendMessageResult,
-    MessageQueue,
 )
 from pyrocketmq.model.enums import RequestCode
 from pyrocketmq.model.headers import (
@@ -26,6 +29,7 @@ from pyrocketmq.model.headers import (
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.message_ext import MessageExt
 from pyrocketmq.model.message_id import MessageID, unmarshal_msg_id
+from pyrocketmq.nameserver.client import SyncNameServerClient
 from pyrocketmq.nameserver.models import TopicRouteData
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
@@ -35,19 +39,18 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.nameserver.client import SyncNameServerClient
 from pyrocketmq.producer.router import RoutingResult
 from pyrocketmq.remote.sync_remote import Remote
 
 from .producer import Producer
 from .transaction import (
+    CheckTransactionStateCallback,
     TransactionCheckError,
     TransactionCommitError,
     TransactionError,
     TransactionListener,
     TransactionRollbackError,
     TransactionSendResult,
-    CheckTransactionStateCallback,
 )
 
 
@@ -97,6 +100,13 @@ class TransactionProducer(Producer):
         self._max_check_times: int = 15  # 最大回查次数
 
         self._failed_registrations: set[str] = set()
+
+        # broker地址缓存，避免频繁查询NameServer
+        self._broker_addr_cache: dict[
+            str, tuple[str, float]
+        ] = {}  # broker_name -> (address, timestamp)
+        self._broker_cache_ttl: int = 300  # 缓存TTL：5分钟
+        self._cache_lock: threading.RLock = threading.RLock()
 
     @override
     def start(self) -> None:
@@ -669,6 +679,24 @@ class TransactionProducer(Producer):
             "查询broker地址", extra={"broker_name": broker_name, "topic": topic}
         )
 
+        # 先检查缓存
+        with self._cache_lock:
+            if broker_name in self._broker_addr_cache:
+                address, timestamp = self._broker_addr_cache[broker_name]
+                # 检查缓存是否过期
+                if time.time() - timestamp < self._broker_cache_ttl:
+                    self._logger.debug(
+                        "使用缓存的broker地址",
+                        extra={"broker_name": broker_name, "address": address},
+                    )
+                    return address
+                else:
+                    # 缓存过期，删除
+                    del self._broker_addr_cache[broker_name]
+                    self._logger.debug(
+                        "broker地址缓存过期", extra={"broker_name": broker_name}
+                    )
+
         if not self._nameserver_connections:
             raise ProducerError("NameServer连接不可用，无法查询broker地址")
 
@@ -685,7 +713,24 @@ class TransactionProducer(Producer):
                 # 在路由数据中查找目标broker
                 for broker_data in topic_route_data.broker_data_list:
                     if broker_data.broker_name == broker_name:
-                        return self._message_router.select_broker_address(broker_data)
+                        address = self._message_router.select_broker_address(
+                            broker_data
+                        )
+                        if not address:
+                            continue
+
+                        # 更新缓存
+                        with self._cache_lock:
+                            self._broker_addr_cache[broker_name] = (
+                                address,
+                                time.time(),
+                            )
+                            self._logger.debug(
+                                "缓存broker地址",
+                                extra={"broker_name": broker_name, "address": address},
+                            )
+
+                        return address
 
             except Exception as e:
                 self._logger.warning(
