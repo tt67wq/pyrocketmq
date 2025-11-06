@@ -12,7 +12,7 @@ import abc
 import asyncio
 import random
 import threading
-from typing_extensions import override
+from typing import override
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message, MessageProperty

@@ -16,9 +16,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
-
-from typing_extensions import override
+from typing import Any, override
 
 from pyrocketmq.consumer.offset_store import (
     OffsetEntry,

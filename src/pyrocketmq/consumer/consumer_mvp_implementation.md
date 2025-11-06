@@ -558,32 +558,6 @@ class HashAllocateStrategy:
         # 算法: 基于Consumer ID哈希值确定分配起始位置
 ```
 
-### 3. ConfigAllocateStrategy (配置指定策略)
-```python
-class ConfigAllocateStrategy:
-    """基于配置文件的分配策略
-
-    允许通过配置文件指定Consumer和队列的映射关系，提供最精确的控制。
-    适用于有特定业务需求或运维要求的场景。
-    """
-    def allocate(self, consumer_group: str, current_cid: str,
-                 mq_all: List[MessageQueue], cid_all: List[str]) -> List[MessageQueue]:
-        # 算法: 读取配置文件中的映射关系
-```
-
-### 4. MachineRoomAllocateStrategy (机房优先策略)
-```python
-class MachineRoomAllocateStrategy:
-    """机房优先分配策略
-
-    优先将Consumer分配到同机房的Broker队列，减少跨机房网络开销。
-    适用于多机房部署的场景。
-    """
-    def allocate(self, consumer_group: str, current_cid: str,
-                 mq_all: List[MessageQueue], cid_all: List[str]) -> List[MessageQueue]:
-        # 算法: 优先分配同机房队列，剩余队列按平均策略分配
-```
-
 ## 消费起始位置管理
 
 ### ConsumeFromWhere策略实现

@@ -8,9 +8,7 @@
 import logging
 import threading
 import time
-from typing import Any
-
-from typing_extensions import override
+from typing import Any, override
 
 from pyrocketmq.broker.async_client import AsyncBrokerClient
 from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError

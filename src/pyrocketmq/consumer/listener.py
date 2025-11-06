@@ -10,12 +10,11 @@ MVP版本专注于核心功能，后续版本会扩展更多监听器类型。
 import time
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Callable
-from typing_extensions import override
+from typing import Any, Callable, override
 
+from ..logging import get_logger
 from ..model.message_ext import MessageExt
 from ..model.message_queue import MessageQueue
-from ..logging import get_logger
 
 logger = get_logger(__name__)
 

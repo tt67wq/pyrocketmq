@@ -16,9 +16,7 @@ RemoteOffsetStore - 集群模式偏移量存储
 import threading
 import time
 from collections import defaultdict
-from typing import Any
-
-from typing_extensions import override
+from typing import Any, override
 
 from pyrocketmq.broker import BrokerClient, BrokerManager
 from pyrocketmq.consumer.errors import NameServerError
