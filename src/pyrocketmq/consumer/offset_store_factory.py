@@ -48,7 +48,7 @@ class OffsetStoreFactory:
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
         auto_start: bool = True,
-        **kwargs,
+        **kwargs: dict[str, Any],
     ) -> OffsetStore:
         """创建偏移量存储实例
 

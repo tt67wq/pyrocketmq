@@ -128,14 +128,6 @@ class RemoteConfig:
         config.connection_pool_size = pool_size
         return config
 
-    # def with_transport_config(
-    #     self, transport_config: TransportConfig
-    # ) -> "RemoteConfig":
-    #     """设置传输层配置"""
-    #     config = self._copy()
-    #     config.transport_config = transport_config
-    #     return config
-
     def with_metrics_enabled(self, enabled: bool) -> "RemoteConfig":
         """设置是否启用性能指标"""
         config = self._copy()

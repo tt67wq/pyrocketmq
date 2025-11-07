@@ -1,10 +1,9 @@
 import asyncio
-import time
 import logging
-from contextlib import asynccontextmanager
+import time
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
-
 
 from pyrocketmq.broker.connection_info import BrokerConnectionInfo, BrokerState
 from pyrocketmq.logging import get_logger
@@ -64,8 +63,8 @@ class AsyncBrokerConnectionPool:
         self._logger = get_logger(f"broker.pool.{broker_name}")
 
         # 连接池状态
-        self._connections: list[AsyncRemote] = []
-        self._available_connections: asyncio.Queue[AsyncRemote] = asyncio.Queue()
+        self._connections = []
+        self._available_connections = asyncio.Queue()
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -523,12 +522,12 @@ class AsyncBrokerManager:
         self._logger = get_logger("broker.manager")
 
         # Broker连接信息映射
-        self._brokers: dict[str, BrokerConnectionInfo] = {}
-        self._broker_pools: dict[str, AsyncBrokerConnectionPool] = {}
+        self._brokers = {}
+        self._broker_pools = {}
         self._lock = asyncio.Lock()
 
         # 后台任务
-        self._health_check_task: asyncio.Task[None] | None = None
+        self._health_check_task = None
         self._shutdown_event = asyncio.Event()
 
         self._logger.info(

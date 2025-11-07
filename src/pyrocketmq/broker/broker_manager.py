@@ -1115,7 +1115,7 @@ class BrokerManager:
             brokers_to_check = list(self._brokers.items())
 
         # 并发执行健康检查（使用线程池）
-        check_threads = []
+        check_threads: list[threading.Thread] = []
         for broker_addr, broker_info in brokers_to_check:
             thread = threading.Thread(
                 target=self._check_single_broker,

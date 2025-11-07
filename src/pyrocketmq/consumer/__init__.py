@@ -55,6 +55,7 @@ from .allocate_queue_strategy import (
     create_hash_strategy,
 )
 from .base_consumer import BaseConsumer
+from .concurrent_consumer import ConcurrentConsumer
 
 # ==================== 配置管理 ====================
 from .config import ConsumerConfig, create_config, create_consumer_config
@@ -131,6 +132,7 @@ from .subscription_manager import (
 __all__ = [
     # 核心消费者类
     "BaseConsumer",
+    "ConcurrentConsumer",
     # 配置管理
     "ConsumerConfig",
     "create_consumer_config",
