@@ -16,6 +16,16 @@ pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于Ro
 - **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
 - **Producer模块**: ✅ 完整版本实现完成，支持同步/异步消息发送、批量消息发送、心跳机制和完整的事务消息功能
 - **事务消息模块**: ✅ 完整实现，支持TransactionProducer、事务监听器和完整的生命周期管理
+- **Consumer模块**: 🚧 基础架构完成，核心Consumer实现中
+  - ✅ 配置管理：完整的Consumer配置体系
+  - ✅ 偏移量存储：本地/远程存储完整实现
+  - ✅ 订阅管理：订阅关系管理和冲突检测
+  - ✅ 消息监听器：并发和顺序消费接口
+  - ✅ 队列分配策略：平均分配算法实现
+  - ✅ 消费起始位置管理：三种策略支持
+  - ✅ 异常体系：20+种专用异常类型
+  - ✅ 监控指标：全面的性能和状态监控
+  - ❌ 核心Consumer：ConcurrentConsumer/OrderlyConsumer实现中
 
 ## 开发环境配置
 
@@ -58,6 +68,9 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 # 运行Producer模块测试
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/producer/ -v
 
+# 运行Consumer模块测试
+export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest tests/consumer/ -v
+
 # 运行示例代码
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_producer.py
 export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/basic_async_producer.py
@@ -75,7 +88,9 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python examples/
 3. **远程通信层** (`remote/`): 异步/同步RPC通信和连接池管理，提供高级通信抽象
 4. **注册发现层** (`nameserver/`): NameServer客户端，提供路由查询和集群管理
 5. **Broker通信层** (`broker/`): Broker客户端封装，提供消息收发等核心功能
-6. **高级应用层** (`producer/`): 消息生产者实现，包含路由、事务等高级特性
+6. **高级应用层**:
+   - **producer/**: 消息生产者实现，包含路由、事务等高级特性
+   - **consumer/**: 消息消费者实现，包含订阅管理、偏移量存储、消息监听等核心功能
 7. **日志系统层** (`logging/`): 统一的日志记录和管理系统
 
 ### 关键设计模式
@@ -132,9 +147,12 @@ Client Application
 ┌─────────────────────────────────────────────────────────────┐
 │                    应用层 (Application)                        │
 ├─────────────────────────────────────────────────────────────┤
-│                  Producer层 (高级功能)                         │
+│                Producer层 & Consumer层 (高级功能)              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │   Producer      │  │ AsyncProducer   │  │TransactionProd │ │
+│  │   Producer      │  │   Consumer      │  │TransactionProd │ │
+│  │                 │  │                 │  │                 │ │
+│  │ AsyncProducer   │  │ ConcurrentCons  │  │ AsyncTransaction│ │
+│  │                 │  │ OrderlyConsumer │  │     Producer    │ │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
 ├─────────────────────────────────────────────────────────────┤
 │              客户端层 (NameServer & Broker)                   │
@@ -557,7 +575,147 @@ with manager.connection("broker1:10911") as broker_client:
 - 完善的监控：统计信息、健康状态、事务状态追踪
 - 企业级特性：配置管理、异常处理、错误恢复、最佳实践指导
 
-### 7. Logging层 (`src/pyrocketmq/logging/`) - 日志记录系统
+### 7. Consumer层 (`src/pyrocketmq/consumer/`) - 消息消费者
+
+**模块概述**: Consumer模块是pyrocketmq的消息消费者实现，提供完整的消息消费、订阅管理、偏移量存储和消息监听功能。采用分层架构设计，支持并发消费和顺序消费两种模式。
+
+**核心组件**:
+- **BaseConsumer**: 消费者抽象基类，定义生命周期管理
+- **ConsumerConfig**: 消费者配置管理，支持完整的消费行为配置
+- **消息监听器体系**: MessageListener、MessageListenerConcurrently、MessageListenerOrderly
+- **偏移量存储系统**: RemoteOffsetStore(集群模式)、LocalOffsetStore(广播模式)
+- **订阅管理器**: SubscriptionManager，管理主题订阅和选择器
+- **队列分配策略**: AverageAllocateStrategy，实现平均分配算法
+- **消费起始位置管理**: ConsumeFromWhereManager，支持三种起始策略
+
+#### ConsumerConfig配置管理
+**配置类别**:
+- **基础配置**: consumer_group、namesrv_addr
+- **消费行为**: message_model、consume_from_where、allocate_strategy
+- **性能配置**: consume_thread_min/max、pull_batch_size、consume_timeout
+- **存储配置**: persist_interval、offset_store_path、cache_size
+- **高级配置**: auto_commit、message_trace、pull_threshold_for_all
+
+```python
+@dataclass
+class ConsumerConfig:
+    consumer_group: str
+    namesrv_addr: str
+    message_model: str = MessageModel.CLUSTERING
+    consume_thread_min: int = 20
+    consume_thread_max: int = 64
+    pull_batch_size: int = 32
+    persist_interval: int = 5000
+    auto_commit: bool = True
+```
+
+#### 消息监听器体系
+**监听器类型**:
+- **MessageListener**: 基础监听器接口
+- **MessageListenerConcurrently**: 并发消息监听器，支持多线程并行处理
+- **MessageListenerOrderly**: 顺序消息监听器，保证消息顺序性
+- **SimpleMessageListener**: 简单监听器实现，便于快速开发
+
+```python
+class MessageListenerConcurrently(MessageListener):
+    @abstractmethod
+    def consume_message_concurrently(self, messages: List[MessageExt], context) -> ConsumeResult:
+        """并发消费消息"""
+        pass
+
+class MessageListenerOrderly(MessageListener):
+    @abstractmethod
+    def consume_message_orderly(self, messages: List[MessageExt], context) -> ConsumeResult:
+        """顺序消费消息"""
+        pass
+```
+
+#### 偏移量存储系统
+**存储模式**:
+- **RemoteOffsetStore**: 集群模式，偏移量存储在Broker端，支持多消费者协调
+- **LocalOffsetStore**: 广播模式，偏移量存储在本地文件，每个消费者独立维护
+- **OffsetStoreFactory**: 工厂模式创建存储实例
+- **OffsetStoreManager**: 全局存储实例管理，支持实例复用
+
+**关键特性**:
+- 线程安全的偏移量更新和持久化
+- 支持批量提交和定期持久化
+- 完整的指标收集和监控
+- 原子性文件操作保证数据一致性
+
+#### 订阅管理器
+**核心功能**:
+- 主题订阅和消息选择器管理
+- 订阅冲突检测和处理
+- 订阅数据的导入导出
+- 指标收集和监控
+
+```python
+class SubscriptionManager:
+    def subscribe(self, topic: str, selector: MessageSelector) -> bool:
+        """订阅主题"""
+        pass
+    
+    def unsubscribe(self, topic: str) -> bool:
+        """取消订阅"""
+        pass
+    
+    def update_selector(self, topic: str, selector: MessageSelector) -> bool:
+        """更新消息选择器"""
+        pass
+```
+
+#### 队列分配策略
+**AverageAllocateStrategy**: 
+- 基于平均分配算法的队列分配策略
+- 考虑消费者顺序和队列顺序的独立性
+- 支持边界条件处理（队列数不能被消费者数整除）
+- 大规模分配的性能优化
+
+#### 消费起始位置管理
+**三种策略**:
+- **CONSUME_FROM_LAST_OFFSET**: 从最新偏移量开始消费（默认）
+- **CONSUME_FROM_FIRST_OFFSET**: 从最早偏移量开始消费
+- **CONSUME_FROM_TIMESTAMP**: 从指定时间戳位置开始消费
+
+**关键特性**:
+- 支持Broker交互查询最大/最小偏移量
+- 时间戳转换的边界情况处理
+- 连接管理和资源清理
+
+**使用示例**:
+```python
+from pyrocketmq.consumer import ConsumerConfig, create_consumer
+from pyrocketmq.consumer.listener import MessageListenerConcurrently, ConsumeResult
+
+# 创建并发消费者
+class MyMessageListener(MessageListenerConcurrently):
+    def consume_message_concurrently(self, messages, context):
+        for message in messages:
+            print(f"消费消息: {message.body.decode()}")
+        return ConsumeResult.CONSUME_SUCCESS
+
+# 创建消费者
+config = ConsumerConfig(
+    consumer_group="test_consumer_group",
+    namesrv_addr="localhost:9876",
+    message_model=MessageModel.CLUSTERING
+)
+
+consumer = create_consumer(config, MyMessageListener())
+consumer.start()
+
+# 订阅主题
+consumer.subscribe("test_topic", "*")
+
+# 等待消息
+import time
+time.sleep(60)
+
+consumer.shutdown()
+```
+
+### 8. Logging层 (`src/pyrocketmq/logging/`) - 日志记录系统
 
 **模块概述**: logging模块为pyrocketmq提供完整的日志记录功能，支持多种格式化器和灵活配置。包含JSON格式化器，支持结构化日志输出，便于日志分析和监控。
 
@@ -781,6 +939,59 @@ elif result.is_rollback:
     print(f"Transaction {result.transaction_id} rolled back")
 ```
 
+### Consumer使用模式
+```python
+# 并发消费者使用
+from pyrocketmq.consumer import ConsumerConfig, create_consumer
+from pyrocketmq.consumer.listener import MessageListenerConcurrently, ConsumeResult
+
+class OrderProcessorListener(MessageListenerConcurrently):
+    def consume_message_concurrently(self, messages, context):
+        for message in messages:
+            try:
+                # 处理订单消息
+                order_data = json.loads(message.body.decode())
+                process_order(order_data)
+                print(f"订单处理成功: {order_data['order_id']}")
+            except Exception as e:
+                print(f"订单处理失败: {e}")
+                return ConsumeResult.RECONSUME_LATER  # 稍后重试
+        
+        return ConsumeResult.CONSUME_SUCCESS
+
+# 创建消费者
+config = ConsumerConfig(
+    consumer_group="order_consumer_group",
+    namesrv_addr="localhost:9876",
+    message_model=MessageModel.CLUSTERING,
+    consume_thread_max=40,  # 增加消费线程数
+    pull_batch_size=16      # 批量拉取
+)
+
+consumer = create_consumer(config, OrderProcessorListener())
+consumer.start()
+consumer.subscribe("order_topic", "*")
+
+# 顺序消费者使用（保证同一用户的消息顺序处理）
+from pyrocketmq.consumer.listener import MessageListenerOrderly
+
+class UserMessageListener(MessageListenerOrderly):
+    def consume_message_orderly(self, messages, context):
+        for message in messages:
+            # 处理用户相关消息，保证顺序性
+            user_id = message.get_property("user_id")
+            process_user_message(user_id, message.body)
+        
+        return ConsumeResult.CONSUME_SUCCESS
+
+# 广播模式消费者（每个消费者都收到所有消息）
+broadcast_config = ConsumerConfig(
+    consumer_group="notification_group",
+    namesrv_addr="localhost:9876",
+    message_model=MessageModel.BROADCASTING  # 广播模式
+)
+```
+
 ### 扩展自定义选择器
 ```python
 from pyrocketmq.producer.topic_broker_mapping import QueueSelector
@@ -856,12 +1067,30 @@ uv sync
     - `create_transaction_message()` 创建事务消息
     - `create_simple_transaction_listener()` 创建简单事务监听器
     - `create_transaction_send_result()` 创建事务发送结果
+13. **Consumer模块**: 🚧 基础架构完成，核心Consumer实现中
+    - **配置管理**: 支持完整的Consumer配置参数，包括线程数、批量大小、消费模式等
+    - **消息监听器**: 支持并发消费(`MessageListenerConcurrently`)和顺序消费(`MessageListenerOrderly`)
+    - **偏移量存储**: 集群模式使用RemoteOffsetStore存储在Broker，广播模式使用LocalOffsetStore存储在本地
+    - **订阅管理**: 支持主题订阅、消息选择器和订阅冲突检测
+    - **队列分配**: AverageAllocateStrategy实现平均分配算法，支持大规模分配优化
+    - **消费起始位置**: 支持从最新、最早、指定时间戳三种起始位置开始消费
+    - **异常处理**: 20+种专用异常类型，精确处理各种消费错误场景
+    - **监控指标**: 全面的性能和状态监控，包括消费速率、成功率、延迟等
 
 ---
 
 ## 📚 文档维护信息
 
 ### 版本历史
+- **v2.1** (2025-01-07): Consumer模块文档补充
+  - ✅ 新增Consumer层详细说明，包含完整的模块功能描述
+  - ✅ 添加Consumer配置管理、消息监听器、偏移量存储等核心组件介绍
+  - ✅ 更新项目状态，明确Consumer模块的开发进度
+  - ✅ 补充Consumer使用模式和示例代码
+  - ✅ 更新模块依赖关系图，包含Consumer层
+  - ✅ 添加Consumer模块测试运行命令
+  - ✅ 完善注意事项，添加Consumer相关说明
+
 - **v2.0** (2025-01-04): 重大文档整合更新
   - ✅ 整合所有子模块CLAUDE.md文档
   - ✅ 新增完整的模块依赖关系图
@@ -920,6 +1149,6 @@ CLAUDE.md (项目级文档)
 
 ---
 
-**最后更新**: 2025-01-04
-**文档版本**: v2.0
-**项目状态**: ✅ 生产就绪，完整功能实现
+**最后更新**: 2025-01-07
+**文档版本**: v2.1
+**项目状态**: ✅ 生产就绪，Consumer模块实现中

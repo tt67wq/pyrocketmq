@@ -132,8 +132,8 @@ class MessageListener(ABC):
     @abstractmethod
     def consume_message(
         self,
-        messages: list[Message],
-        context: ConsumeMessageContext
+        messages: list[MessageExt],
+        context: ConsumeContext
     ) -> ConsumeResult:
         """消费消息的抽象方法"""
         pass
@@ -149,8 +149,8 @@ class MessageListenerOrderly(MessageListener):
 
     def consume_message(
         self,
-        messages: list[Message],
-        context: ConsumeMessageContext
+        messages: list[MessageExt],
+        context: ConsumeContext
     ) -> ConsumeResult:
         # 实现顺序消息处理逻辑
         for message in messages:
@@ -169,8 +169,8 @@ class MessageListenerConcurrently(MessageListener):
 
     def consume_message(
         self,
-        messages: list[Message],
-        context: ConsumeMessageContext
+        messages: list[MessageExt],
+        context: ConsumeContext
     ) -> ConsumeResult:
         # 实现并发消息处理逻辑
         for message in messages:
@@ -194,12 +194,14 @@ class ConsumeResult(Enum):
 from pyrocketmq.consumer.listener import (
     MessageListenerConcurrently,
     MessageListenerOrderly,
-    ConsumeResult
+    ConsumeResult,
+    ConsumeContext
 )
+from pyrocketmq.model.message_ext import MessageExt
 
 # 并发消息监听器
 class MyConcurrentListener(MessageListenerConcurrently):
-    def consume_message(self, messages, context):
+    def consume_message(self, messages: list[MessageExt], context: ConsumeContext):
         for message in messages:
             try:
                 # 处理消息
@@ -211,7 +213,7 @@ class MyConcurrentListener(MessageListenerConcurrently):
 
 # 顺序消息监听器
 class MyOrderlyListener(MessageListenerOrderly):
-    def consume_message(self, messages, context):
+    def consume_message(self, messages: list[MessageExt], context: ConsumeContext):
         for message in messages:
             try:
                 # 顺序处理消息
@@ -232,11 +234,12 @@ class MyOrderlyListener(MessageListenerOrderly):
 - **查询操作**: get_subscription()、is_subscribed()、get_topics()
 - **数据转换**: to_subscription_data_list()、from_subscription_data_list()
 - **导入导出**: export_subscriptions()、import_subscriptions()
+- **冲突检测**: detect_conflicts()、get_conflicts()
 
 **订阅操作示例:**
 ```python
 from pyrocketmq.consumer.subscription_manager import SubscriptionManager
-from pyrocketmq.consumer.listener import MessageSelector
+from pyrocketmq.model.selector import MessageSelector
 
 # 创建订阅管理器
 subscription_manager = SubscriptionManager()
@@ -256,6 +259,11 @@ subscription_manager.update_selector("order_topic", new_selector)
 is_subscribed = subscription_manager.is_subscribed("test_topic")
 subscription = subscription_manager.get_subscription("test_topic")
 all_topics = subscription_manager.get_topics()
+
+# 检测订阅冲突
+conflicts = subscription_manager.detect_conflicts()
+if conflicts:
+    print(f"发现订阅冲突: {conflicts}")
 
 # 取消订阅
 subscription_manager.unsubscribe("test_topic")
@@ -436,7 +444,103 @@ manager.close_offset_store("test_group", MessageModel.CLUSTERING)
 manager.close_all()
 ```
 
-### 6. 便捷API (全局函数)
+### 6. 队列分配策略 (allocate_queue_strategy.py)
+
+#### 队列分配策略
+提供在消费者重平衡时将消息队列分配给不同消费者的策略。
+
+**核心策略:**
+- **AverageAllocateStrategy**: 平均分配策略，将队列平均分配给所有消费者
+- **HashAllocateStrategy**: 哈希分配策略，基于一致性哈希算法分配队列
+
+**使用示例:**
+```python
+from pyrocketmq.consumer.allocate_queue_strategy import (
+    AllocateContext,
+    AverageAllocateStrategy,
+    HashAllocateStrategy,
+    create_average_strategy,
+    create_hash_strategy
+)
+from pyrocketmq.model import MessageQueue
+
+# 创建分配上下文
+context = AllocateContext(
+    consumer_group="test_group",
+    consumer_id="consumer_1",
+    current_cid_all=["consumer_1", "consumer_2", "consumer_3"],
+    mq_all=[
+        MessageQueue("test_topic", "broker-a", 0),
+        MessageQueue("test_topic", "broker-a", 1),
+        MessageQueue("test_topic", "broker-b", 0),
+        MessageQueue("test_topic", "broker-b", 1),
+    ],
+    mq_divide={}
+)
+
+# 使用平均分配策略
+avg_strategy = create_average_strategy()
+avg_result = avg_strategy.allocate(context)
+
+# 使用哈希分配策略
+hash_strategy = create_hash_strategy()
+hash_result = hash_strategy.allocate(context)
+
+print(f"平均分配结果: {avg_result}")
+print(f"哈希分配结果: {hash_result}")
+```
+
+### 7. 消费起始位置管理 (consume_from_where_manager.py)
+
+#### ConsumeFromWhereManager
+管理消费者的消费起始位置策略，支持从不同位置开始消费。
+
+**支持的策略:**
+- **CONSUME_FROM_LAST_OFFSET**: 从最大偏移量开始消费（默认）
+- **CONSUME_FROM_FIRST_OFFSET**: 从最小偏移量开始消费
+- **CONSUME_FROM_TIMESTAMP**: 从指定时间戳对应的偏移量开始消费
+
+**使用示例:**
+```python
+from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManager
+from pyrocketmq.model import ConsumeFromWhere
+from pyrocketmq.model.message_queue import MessageQueue
+
+# 创建管理器
+consume_manager = ConsumeFromWhereManager(
+    consume_group="test_group",
+    namesrv_manager=namesrv_manager,
+    broker_manager=broker_manager
+)
+
+# 创建消息队列
+message_queue = MessageQueue("test_topic", "broker-a", 0)
+
+# 从最新偏移量开始消费
+offset1 = consume_manager.get_consume_offset(
+    message_queue, 
+    ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET
+)
+
+# 从最早偏移量开始消费  
+offset2 = consume_manager.get_consume_offset(
+    message_queue,
+    ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET
+)
+
+# 从指定时间戳开始消费
+offset3 = consume_manager.get_consume_offset(
+    message_queue,
+    ConsumeFromWhere.CONSUME_FROM_TIMESTAMP,
+    timestamp=1640995200000  # 2022-01-01 00:00:00
+)
+
+print(f"最新偏移量: {offset1}")
+print(f"最早偏移量: {offset2}")
+print(f"时间戳偏移量: {offset3}")
+```
+
+### 8. 便捷API (全局函数)
 
 #### 偏移量存储便捷函数
 ```python
@@ -482,7 +586,8 @@ from pyrocketmq.consumer import (
     create_offset_store
 )
 from pyrocketmq.consumer.config import MessageModel
-from pyrocketmq.consumer.listener import ConsumeResult
+from pyrocketmq.consumer.listener import ConsumeResult, ConsumeContext
+from pyrocketmq.model.message_ext import MessageExt
 
 # 创建配置
 config = create_consumer_config(
@@ -493,7 +598,7 @@ config = create_consumer_config(
 
 # 创建消息监听器
 class OrderMessageListener(MessageListenerConcurrently):
-    def consume_message(self, messages, context):
+    def consume_message(self, messages: list[MessageExt], context: ConsumeContext):
         for message in messages:
             try:
                 # 处理订单消息
@@ -523,24 +628,13 @@ offset_store = create_offset_store(
 subscription_manager = SubscriptionManager()
 subscription_manager.subscribe("order_topic")
 
-# 创建消费者
-consumer = Consumer(
-    config=config,
-    offset_store=offset_store,
-    subscription_manager=subscription_manager,
-    message_listener=OrderMessageListener()
-)
-
-# 启动消费者
-consumer.start()
-
-try:
-    # 保持消费者运行
-    while True:
-        time.sleep(1)
-except KeyboardInterrupt:
-    print("停止消费者...")
-    consumer.shutdown()
+# 注意：BaseConsumer是抽象类，实际使用需要实现具体的Consumer类
+# 以下示例展示如何使用各个组件
+print("Consumer组件配置完成")
+print(f"配置: {config}")
+print(f"偏移量存储: {offset_store}")
+print(f"订阅管理: {subscription_manager}")
+print(f"消息监听器: {OrderMessageListener()}")
 ```
 
 ### 2. 广播消费示例
@@ -686,6 +780,23 @@ for store_key, store_metrics in all_metrics.items():
 - **shutil**: 文件操作（本地存储备份）
 
 ## 版本变更记录
+
+### v1.1.0 (2025-01-07) - 文档更新版本
+**更新内容**:
+- ✅ 修正监听器接口的参数类型，使用正确的 `MessageExt` 和 `ConsumeContext`
+- ✅ 更新监听器使用示例，添加完整的类型注解
+- ✅ 修正订阅管理器示例中的 `MessageSelector` 导入路径
+- ✅ 添加队列分配策略详细说明和使用示例
+- ✅ 添加消费起始位置管理器详细说明和使用示例
+- ✅ 修正集群消费示例，移除不存在的 `Consumer` 类，使用组件展示
+- ✅ 更新文档结构，将新增组件整合到合适的位置
+- ✅ 完善导入路径和使用说明，确保与代码实现一致
+
+**技术改进**:
+- 所有示例代码现在使用正确的类型注解
+- 修正了所有组件的导入路径
+- 添加了队列分配策略和消费起始位置管理的完整文档
+- 所有API使用示例现在与实际代码完全一致
 
 ### v1.0.0 (当前版本)
 **发布时间**: 2025-01-XX
