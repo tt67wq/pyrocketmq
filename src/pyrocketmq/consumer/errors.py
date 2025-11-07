@@ -203,6 +203,38 @@ class OffsetError(ConsumerError):
         )
 
 
+class OffsetFetchError(OffsetError):
+    """
+    获取偏移量失败异常
+
+    当从Broker获取消费偏移量时发生错误时抛出，如网络异常、
+    权限不足、队列不存在、Broker响应异常等。
+    """
+
+    def __init__(
+        self,
+        topic: str,
+        queue_id: int,
+        consumer_group: str,
+        message: str,
+        cause: Exception | None = None,
+    ):
+        context = {
+            "topic": topic,
+            "queue_id": queue_id,
+            "consumer_group": consumer_group,
+        }
+        super().__init__(
+            topic=topic,
+            queue_id=queue_id,
+            offset=-1,  # 获取失败时offset未知，使用-1表示
+            message=message,
+            cause=cause,
+        )
+        self.error_code = "OFFSET_FETCH_ERROR"
+        self.context = context
+
+
 class RebalanceError(ConsumerError):
     """
     重平衡异常
@@ -352,6 +384,17 @@ def create_timeout_error(
 ) -> TimeoutError:
     """创建超时异常的便利函数"""
     return TimeoutError(operation, timeout_ms, message, cause)
+
+
+def create_offset_fetch_error(
+    topic: str,
+    queue_id: int,
+    consumer_group: str,
+    message: str,
+    cause: Exception | None = None,
+) -> OffsetFetchError:
+    """创建获取偏移量失败异常的便利函数"""
+    return OffsetFetchError(topic, queue_id, consumer_group, message, cause)
 
 
 def is_retriable_error(error: Exception) -> bool:
