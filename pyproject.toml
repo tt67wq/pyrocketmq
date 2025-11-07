@@ -18,3 +18,10 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.pyright]
+typeCheckingMode = "all"
+reportExplicitAny = false
+executionEnvironments = [
+    {"root" = ".", "extraPaths" = ["src"]}
+]
