@@ -21,6 +21,7 @@ asyncio_mode = "auto"
 
 [tool.pyright]
 typeCheckingMode = "strict"
+reportUnknownVariableType = false
 reportExplicitAny = false
 executionEnvironments = [
     {"root" = ".", "extraPaths" = ["src"]}

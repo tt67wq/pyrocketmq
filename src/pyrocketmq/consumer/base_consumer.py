@@ -12,7 +12,7 @@ BaseConsumer是pyrocketmq消费者模块的核心抽象基类，定义了所有�
 # 标准库导入
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, Union
+from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.logging import get_logger
