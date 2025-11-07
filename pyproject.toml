@@ -20,7 +20,7 @@ dev = [
 asyncio_mode = "auto"
 
 [tool.pyright]
-typeCheckingMode = "all"
+typeCheckingMode = "strict"
 reportExplicitAny = false
 executionEnvironments = [
     {"root" = ".", "extraPaths" = ["src"]}

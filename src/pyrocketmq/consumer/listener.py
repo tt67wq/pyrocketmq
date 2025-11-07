@@ -34,6 +34,10 @@ class ConsumeResult(Enum):
         "SUSPEND_CURRENT_QUEUE_A_MOMENT"  # 挂起当前队列片刻
     )
 
+    @staticmethod
+    def is_success(result: "ConsumeResult") -> bool:
+        return result in [ConsumeResult.SUCCESS, ConsumeResult.COMMIT]
+
 
 class ConsumeContext:
     """

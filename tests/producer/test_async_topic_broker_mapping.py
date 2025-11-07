@@ -136,15 +136,11 @@ class TestAsyncQueueSelectors:
 
         # 测试无分片键的消息
         message_no_key = Message(topic=topic, body=b"no_key")
-        selected_no_key = await selector.select(
-            topic, available_queues, message_no_key
-        )
+        selected_no_key = await selector.select(topic, available_queues, message_no_key)
         assert selected_no_key is not None
 
         # 测试空消息
-        selected_no_message = await selector.select(
-            topic, available_queues, None
-        )
+        selected_no_message = await selector.select(topic, available_queues, None)
         assert selected_no_message is not None
 
 
@@ -190,9 +186,7 @@ class TestAsyncTopicBrokerMapping:
         topic = "test_topic"
 
         # 测试更新路由信息
-        success = await mapping.update_route_info(
-            topic, sample_topic_route_data
-        )
+        success = await mapping.update_route_info(topic, sample_topic_route_data)
         assert success
 
         # 测试获取路由信息
@@ -345,9 +339,7 @@ class TestAsyncTopicBrokerMapping:
 
         # 添加一些路由信息
         for i in range(3):
-            await mapping.update_route_info(
-                f"topic_{i}", sample_topic_route_data
-            )
+            await mapping.update_route_info(f"topic_{i}", sample_topic_route_data)
 
         # 启动后台清理任务（短时间运行）
         cleanup_task = asyncio.create_task(

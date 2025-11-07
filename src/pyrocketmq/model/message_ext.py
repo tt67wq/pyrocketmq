@@ -16,9 +16,9 @@ from .message import Message, MessageProperty
 class MessageSysFlag:
     """消息系统标志常量"""
 
-    COMPRESSED = 0x1
-    BORN_HOST_V6 = 0x1 << 4
-    STORE_HOST_V6 = 0x1 << 5
+    COMPRESSED: int = 0x1
+    BORN_HOST_V6: int = 0x1 << 4
+    STORE_HOST_V6: int = 0x1 << 5
 
 
 @dataclass

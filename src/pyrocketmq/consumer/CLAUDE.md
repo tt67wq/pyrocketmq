@@ -128,11 +128,11 @@ except ConsumerError as e:
 ```python
 class MessageListener(ABC):
     """基础消息监听器接口"""
-    
+
     @abstractmethod
     def consume_message(
-        self, 
-        messages: list[Message], 
+        self,
+        messages: list[Message],
         context: ConsumeMessageContext
     ) -> ConsumeResult:
         """消费消息的抽象方法"""
@@ -143,13 +143,13 @@ class MessageListener(ABC):
 ```python
 class MessageListenerOrderly(MessageListener):
     """顺序消息监听器
-    
+
     保证同一队列中的消息按顺序消费，适用于需要严格顺序的业务场景。
     """
-    
+
     def consume_message(
-        self, 
-        messages: list[Message], 
+        self,
+        messages: list[Message],
         context: ConsumeMessageContext
     ) -> ConsumeResult:
         # 实现顺序消息处理逻辑
@@ -163,13 +163,13 @@ class MessageListenerOrderly(MessageListener):
 ```python
 class MessageListenerConcurrently(MessageListener):
     """并发消息监听器
-    
+
     支持多线程并发消费消息，提供更高的吞吐量。
     """
-    
+
     def consume_message(
-        self, 
-        messages: list[Message], 
+        self,
+        messages: list[Message],
         context: ConsumeMessageContext
     ) -> ConsumeResult:
         # 实现并发消息处理逻辑
@@ -192,7 +192,7 @@ class ConsumeResult(Enum):
 **监听器使用示例:**
 ```python
 from pyrocketmq.consumer.listener import (
-    MessageListenerConcurrently, 
+    MessageListenerConcurrently,
     MessageListenerOrderly,
     ConsumeResult
 )
@@ -209,7 +209,7 @@ class MyConcurrentListener(MessageListenerConcurrently):
                 print(f"消息处理失败: {e}")
                 return ConsumeResult.RECONSUME_LATER
 
-# 顺序消息监听器  
+# 顺序消息监听器
 class MyOrderlyListener(MessageListenerOrderly):
     def consume_message(self, messages, context):
         for message in messages:
@@ -273,32 +273,32 @@ subscription_manager.import_subscriptions(export_data)
 ```python
 class OffsetStore(ABC):
     """偏移量存储抽象基类"""
-    
+
     @abstractmethod
     def start(self) -> None:
         """启动偏移量存储服务"""
         pass
-        
+
     @abstractmethod
     def stop(self) -> None:
         """停止偏移量存储服务"""
         pass
-        
+
     @abstractmethod
     def load(self) -> None:
         """加载偏移量数据"""
         pass
-        
+
     @abstractmethod
     def update_offset(self, queue: MessageQueue, offset: int) -> None:
         """更新偏移量到本地缓存"""
         pass
-        
+
     @abstractmethod
     def persist(self, queue: MessageQueue) -> None:
         """持久化单个队列的偏移量"""
         pass
-        
+
     @abstractmethod
     def persist_all(self) -> None:
         """持久化所有偏移量"""
@@ -347,7 +347,7 @@ remote_store.persist_all()
 
 # 读取偏移量
 offset = remote_store.read_offset(
-    message_queue, 
+    message_queue,
     ReadOffsetType.MEMORY_FIRST_THEN_STORE
 )
 
@@ -499,13 +499,13 @@ class OrderMessageListener(MessageListenerConcurrently):
                 # 处理订单消息
                 order_data = json.loads(message.body.decode())
                 print(f"处理订单: {order_data['order_id']}")
-                
+
                 # 更新偏移量
                 context.offset_store.update_offset(
-                    context.message_queue, 
+                    context.message_queue,
                     message.queue_offset + 1
                 )
-                
+
                 return ConsumeResult.SUCCESS
             except Exception as e:
                 print(f"订单处理失败: {e}")
@@ -568,7 +568,7 @@ class NotificationListener(MessageListenerOrderly):
                 # 处理通知消息
                 notification = json.loads(message.body.decode())
                 print(f"处理通知: {notification['title']}")
-                
+
                 return ConsumeResult.SUCCESS
             except Exception as e:
                 print(f"通知处理失败: {e}")

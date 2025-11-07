@@ -38,6 +38,8 @@ def main():
     while True:
         try:
             message = Message(topic="test_im_015", body=b"Hello, RocketMQ From Python!")
+            message.set_tags("TAG!||TAG2")
+            message.set_keys("KEY1 KEY2")
             ret = producer.send(message)
             print("Message sent ret:", ret)
 
