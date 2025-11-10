@@ -17,10 +17,10 @@ ConcurrentConsumer是pyrocketmq的核心消费者实现，支持高并发消息�
 import queue
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, cast
+from typing import Any
 
 # pyrocketmq导入
-from pyrocketmq.broker import BrokerManager
+from pyrocketmq.broker import BrokerClient, BrokerManager
 from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateQueueStrategyFactory,
 )
@@ -34,8 +34,9 @@ from pyrocketmq.consumer.errors import (
 )
 from pyrocketmq.consumer.listener import MessageListenerConcurrently
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
+from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import MessageModel, TopicRouteData
+from pyrocketmq.model import MessageModel, PullMessageResult, TopicRouteData
 from pyrocketmq.model.client_data import MessageSelector
 from pyrocketmq.model.message_ext import MessageExt
 from pyrocketmq.model.message_queue import MessageQueue
@@ -100,6 +101,9 @@ class ConcurrentConsumer(BaseConsumer):
             self._config.namesrv_addr
         )
         self._broker_manager: BrokerManager = BrokerManager(DEFAULT_CONFIG)
+        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
+            ConsumerTopicBrokerMapping()
+        )
 
         # 创建偏移量存储
         self._offset_store = OffsetStoreFactory.create_offset_store(
@@ -132,7 +136,7 @@ class ConcurrentConsumer(BaseConsumer):
         )
 
         # 状态管理
-        self._pull_tasks: dict[MessageQueue, Future] = {}
+        self._pull_tasks: dict[MessageQueue, Future[None]] = {}
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
         self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
         self._last_rebalance_time: float = 0.0
@@ -379,24 +383,19 @@ class ConcurrentConsumer(BaseConsumer):
             # 获取所有Topic的路由信息
             all_queues: list[MessageQueue] = []
             for topic in topics:
-                try:
-                    route_data: TopicRouteData | None = (
-                        self._name_server_manager.get_topic_route(topic)
-                    )
-                    if (
-                        route_data
-                        and hasattr(route_data, "message_queues")
-                        and route_data.queue_data_list
-                    ):
-                        all_queues.extend(route_data.message_queues)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to get route data for topic {topic}: {e}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "topic": topic,
-                        },
-                    )
+                route_data: TopicRouteData | None = (
+                    self._name_server_manager.get_topic_route(topic)
+                )
+                if route_data:
+                    _ = self._topic_broker_mapping.update_route_info(topic, route_data)
+                all_queues.extend(
+                    [
+                        x
+                        for (x, _) in self._topic_broker_mapping.get_subscribe_queues(
+                            topic
+                        )
+                    ]
+                )
 
             if not all_queues:
                 logger.debug("No queues available for subscribed topics")
@@ -440,6 +439,7 @@ class ConcurrentConsumer(BaseConsumer):
         Returns:
             list[MessageQueue]: 分配给当前消费者的队列列表
         """
+        # TODO
         # 这里简化处理，实际应该根据消费者组信息进行分配
         # 暂时返回所有队列，后续可以集成完整的重平衡机制
         return all_queues.copy()
@@ -459,7 +459,7 @@ class ConcurrentConsumer(BaseConsumer):
             removed_queues: set[MessageQueue] = old_queues - new_queue_set
             for queue in removed_queues:
                 if queue in self._pull_tasks:
-                    future: Future = self._pull_tasks.pop(queue)
+                    future: Future[None] = self._pull_tasks.pop(queue)
                     if future and not future.done():
                         future.cancel()
                 self._assigned_queues.pop(queue, None)
@@ -491,7 +491,7 @@ class ConcurrentConsumer(BaseConsumer):
         if not self._pull_executor or not self._assigned_queues:
             return
 
-        self._start_pull_tasks_for_queues(self._assigned_queues.keys())
+        self._start_pull_tasks_for_queues(set(self._assigned_queues.keys()))
 
     def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """
@@ -500,10 +500,13 @@ class ConcurrentConsumer(BaseConsumer):
         Args:
             queues: 要启动拉取任务的队列集合
         """
-        for queue in queues:
-            if queue not in self._pull_tasks:
-                future = self._pull_executor.submit(self._pull_messages_loop, queue)
-                self._pull_tasks[queue] = future
+        if not self._pull_executor:
+            raise ValueError("Pull executor is not initialized")
+
+        for q in queues:
+            if q not in self._pull_tasks:
+                future = self._pull_executor.submit(self._pull_messages_loop, q)
+                self._pull_tasks[q] = future
 
     def _stop_pull_tasks(self) -> None:
         """
@@ -512,7 +515,7 @@ class ConcurrentConsumer(BaseConsumer):
         if not self._pull_tasks:
             return
 
-        for queue, future in self._pull_tasks.items():
+        for _, future in self._pull_tasks.items():
             if future and not future.done():
                 future.cancel()
 
@@ -538,7 +541,7 @@ class ConcurrentConsumer(BaseConsumer):
                 if messages:
                     # 更新偏移量
                     last_message: MessageExt = messages[-1]
-                    new_offset: int = last_message.queue_offset + len(messages)
+                    new_offset: int = last_message.queue_offset or 0 + len(messages)
                     self._assigned_queues[message_queue] = new_offset
 
                     # 将消息放入处理队列
@@ -587,17 +590,21 @@ class ConcurrentConsumer(BaseConsumer):
         try:
             self._stats["pull_requests"] += 1
 
-            # 使用BrokerManager拉取消息
-            with self._broker_manager.connection(
+            broker_address = self._name_server_manager.get_broker_address(
                 message_queue.broker_name
-            ) as broker_client:
-                from pyrocketmq.broker.broker_client import PullResult
+            )
+            if not broker_address:
+                raise ValueError(
+                    f"Broker address not found for {message_queue.broker_name}"
+                )
 
-                result: PullResult | None = broker_client.pull_message(
+            # 使用BrokerManager拉取消息
+            with self._broker_manager.connection(broker_address) as conn:
+                result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
-                    offset=offset,
+                    queue_offset=offset,
                     max_num=self._config.pull_batch_size,
                 )
 
@@ -618,14 +625,10 @@ class ConcurrentConsumer(BaseConsumer):
                 },
             )
             raise MessageConsumeError(
+                message_queue.topic,
                 "Failed to pull messages",
+                offset,
                 cause=e,
-                context={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "offset": offset,
-                },
             ) from e
 
     # ==================== 内部方法：消息处理 ====================
@@ -638,7 +641,7 @@ class ConcurrentConsumer(BaseConsumer):
             return
 
         # 启动多个消费任务
-        for i in range(self._config.consume_thread_max):
+        for _ in range(self._config.consume_thread_max):
             self._consume_executor.submit(self._consume_messages_loop)
 
     def _consume_messages_loop(self) -> None:
@@ -669,7 +672,7 @@ class ConcurrentConsumer(BaseConsumer):
                 if success:
                     try:
                         last_message: MessageExt = messages[-1]
-                        new_offset: int = last_message.queue_offset + len(messages)
+                        new_offset: int = last_message.queue_offset or 0 + len(messages)
                         self._offset_store.update_offset(message_queue, new_offset)
                     except Exception as e:
                         logger.warning(
@@ -801,7 +804,7 @@ class ConcurrentConsumer(BaseConsumer):
                 self._offset_store.stop()
 
             if hasattr(self, "_broker_manager") and self._broker_manager:
-                self._broker_manager.stop()
+                self._broker_manager.shutdown()
 
             if hasattr(self, "_name_server_manager") and self._name_server_manager:
                 self._name_server_manager.stop()

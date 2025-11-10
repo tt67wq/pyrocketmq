@@ -70,9 +70,7 @@ class ConsumerTopicBrokerMapping(ProducerTopicBrokerMapping):
         Returns:
             list[tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
         """
-        queues = super().get_subscribe_queues(topic)
-        logger.debug(f"Consumer got {len(queues)} subscribe queues for topic: {topic}")
-        return queues
+        return super().get_subscribe_queues(topic)
 
     def update_route_info(self, topic: str, topic_route_data: "TopicRouteData") -> bool:
         """
@@ -87,19 +85,7 @@ class ConsumerTopicBrokerMapping(ProducerTopicBrokerMapping):
         Returns:
             bool: 更新是否成功
         """
-        result = super().update_route_info(topic, topic_route_data)
-
-        if result:
-            logger.info(
-                "Consumer route info updated successfully",
-                extra={
-                    "topic": topic,
-                    "brokers_count": len(topic_route_data.broker_data_list),
-                    "queue_data_count": len(topic_route_data.queue_data_list),
-                },
-            )
-
-        return result
+        return super().update_route_info(topic, topic_route_data)
 
     def remove_route_info(self, topic: str) -> bool:
         """
@@ -113,12 +99,7 @@ class ConsumerTopicBrokerMapping(ProducerTopicBrokerMapping):
         Returns:
             bool: 移除是否成功
         """
-        result = super().remove_route_info(topic)
-
-        if result:
-            logger.info(f"Consumer route info removed for topic: {topic}")
-
-        return result
+        return super().remove_route_info(topic)
 
     def get_cache_stats(self) -> dict[str, int | list[str] | float]:
         """
@@ -156,12 +137,7 @@ class ConsumerTopicBrokerMapping(ProducerTopicBrokerMapping):
         Returns:
             int: 清理的Topic数量
         """
-        cleared_count = super().clear_expired_routes(timeout)
-
-        if cleared_count > 0:
-            logger.info(f"Cleared {cleared_count} expired consumer routes")
-
-        return cleared_count
+        return super().clear_expired_routes(timeout)
 
     async def start_background_cleanup(self, interval: float = 60.0):
         """

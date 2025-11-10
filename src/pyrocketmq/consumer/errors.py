@@ -165,10 +165,10 @@ class MessageConsumeError(ConsumerError):
         self,
         topic: str,
         message: str,
-        message_count: int = 0,
+        offset: int = 0,
         cause: Exception | None = None,
     ):
-        context = {"topic": topic, "message_count": message_count}
+        context = {"topic": topic, "message_count": offset}
         super().__init__(
             message=message,
             error_code="MESSAGE_CONSUME_ERROR",
@@ -378,7 +378,7 @@ def create_consumer_start_error(
     message: str, cause: Exception | None = None
 ) -> ConsumerStartError:
     """创建Consumer启动异常的便利函数"""
-    return ConsumerStartError(message, cause)
+    return ConsumerStartError(message, None, cause)
 
 
 def create_message_consume_error(
