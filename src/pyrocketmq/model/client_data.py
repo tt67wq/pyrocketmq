@@ -449,12 +449,14 @@ class ConsumerData:
     """
 
     group_name: str  # 消费者组名
-    consume_type: str  # 消费类型 (PUSH/PULL)
+    consume_type: str  # 消费类型 (CONSUME_PASSIVELY/CONSUME_ACTIVELY)
     message_model: str  # 消费模式 (BROADCASTING/CLUSTERING)
     consume_from_where: (
         str  # 消费起始位置 (CONSUME_FROM_LAST_OFFSET/CONSUME_FROM_FIRST_OFFSET)
     )
-    subscription_data: list[SubscriptionData] = field(default_factory=list)  # 订阅关系
+    subscription_data: list[SubscriptionData] | None = field(
+        default_factory=list
+    )  # 订阅关系
 
     def unique_id(self) -> str:
         """获取唯一标识符，对应Go实现的UniqueID()方法"""
@@ -514,7 +516,7 @@ class ConsumerData:
             f"ConsumerData[groupName={self.group_name}, "
             f"consumeType={self.consume_type}, "
             f"messageModel={self.message_model}, "
-            f"subscriptions={len(self.subscription_data)}]"
+            f"subscriptions={len(self.subscription_data) if self.subscription_data else 0}]"
         )
 
 
@@ -711,18 +713,18 @@ class ConsumerRunningInfo:
             ConsumerRunningInfo实例
         """
         # 解析subscription_data
-        subscription_data = {}
-        sub_data_raw = data.get("subscriptionData", {})
+        subscription_data: dict[SubscriptionData, bool] = {}
+        sub_data_raw: dict[str, Any] = data.get("subscriptionData", {})
         if isinstance(sub_data_raw, dict):
-            for sub_key, sub_value in sub_data_raw.items():
+            for _sub_key, sub_value in sub_data_raw.items():
                 if isinstance(sub_value, dict) and "subscriptionData" in sub_value:
-                    sub_info = sub_value["subscriptionData"]
-                    is_active = sub_value.get("isActive", False)
+                    sub_info: dict[str, Any] = sub_value["subscriptionData"]
+                    is_active: bool = sub_value.get("isActive", False)
                     subscription_data[SubscriptionData.from_dict(sub_info)] = is_active
 
         # 解析mq_table
-        mq_table = {}
-        mq_table_raw = data.get("mqTable", {})
+        mq_table: dict[MessageQueue, ProcessQueueInfo] = {}
+        mq_table_raw: dict[str, Any] = data.get("mqTable", {})
         if isinstance(mq_table_raw, dict):
             for mq_key, process_info_data in mq_table_raw.items():
                 # 解析MessageQueue key (格式: topic@brokerName:queueId)
@@ -742,8 +744,8 @@ class ConsumerRunningInfo:
                     continue
 
         # 解析status_table
-        status_table = {}
-        status_table_raw = data.get("statusTable", {})
+        status_table: dict[str, ConsumeStatus] = {}
+        status_table_raw: dict[str, Any] = data.get("statusTable", {})
         if isinstance(status_table_raw, dict):
             for status_key, status_data in status_table_raw.items():
                 status_table[status_key] = ConsumeStatus.from_dict(status_data)

@@ -15,6 +15,7 @@ ConcurrentConsumer是pyrocketmq的核心消费者实现，支持高并发消息�
 """
 
 import queue
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
@@ -36,7 +37,13 @@ from pyrocketmq.consumer.listener import MessageListenerConcurrently
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import MessageModel, PullMessageResult, TopicRouteData
+from pyrocketmq.model import (
+    ConsumerData,
+    HeartbeatData,
+    MessageModel,
+    PullMessageResult,
+    TopicRouteData,
+)
 from pyrocketmq.model.client_data import MessageSelector
 from pyrocketmq.model.message_ext import MessageExt
 from pyrocketmq.model.message_queue import MessageQueue
@@ -141,6 +148,13 @@ class ConcurrentConsumer(BaseConsumer):
         self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
         self._last_rebalance_time: float = 0.0
 
+        # 心跳任务管理
+        self._heartbeat_interval: float = getattr(
+            config, "heartbeat_interval", 30.0
+        )  # 心跳间隔(秒)
+        self._last_heartbeat_time: float = 0.0
+        self._heartbeat_thread: threading.Thread | None = None
+
         # 统计信息
         self._stats: dict[str, Any] = {
             "messages_consumed": 0,
@@ -150,6 +164,8 @@ class ConcurrentConsumer(BaseConsumer):
             "pull_failures": 0,
             "consume_duration_total": 0.0,
             "start_time": 0.0,
+            "heartbeat_success_count": 0,
+            "heartbeat_failure_count": 0,
         }
 
         logger.info(
@@ -229,6 +245,9 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 启动重平衡任务
                 self._start_rebalance_task()
+
+                # 启动心跳任务
+                self._start_heartbeat_task()
 
                 self._is_running = True
                 self._stats["start_time"] = time.time()
@@ -731,6 +750,140 @@ class ConcurrentConsumer(BaseConsumer):
         """
         if self._pull_executor:
             self._pull_executor.submit(self._rebalance_loop)
+
+    def _start_heartbeat_task(self) -> None:
+        """启动心跳任务"""
+        if self._pull_executor:
+            self._pull_executor.submit(self._heartbeat_loop)
+
+    def _heartbeat_loop(self) -> None:
+        """心跳循环"""
+        logger.info("Heartbeat loop started")
+
+        while self._is_running:
+            try:
+                current_time = time.time()
+
+                # 检查是否需要发送心跳
+                if current_time - self._last_heartbeat_time >= self._heartbeat_interval:
+                    self._send_heartbeat_to_all_brokers()
+                    self._last_heartbeat_time = current_time
+
+                # 等待一段时间再检查
+                time.sleep(1.0)
+
+            except Exception as e:
+                logger.error(
+                    f"Error in heartbeat loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 等待一段时间再重试
+                time.sleep(5.0)
+
+        logger.info("Heartbeat loop stopped")
+
+    def _send_heartbeat_to_all_brokers(self) -> None:
+        """向所有Broker发送心跳"""
+        logger.debug("Sending heartbeat to all brokers...")
+
+        try:
+            # 获取所有已知的Broker地址
+            broker_addrs: set[str] = set()
+            all_topics = self._topic_broker_mapping.get_all_topics()
+
+            for topic in all_topics:
+                brokers = self._topic_broker_mapping.get_available_brokers(topic)
+                for broker_data in brokers:
+                    # 获取主从地址
+                    if broker_data.broker_addresses:
+                        for addr in broker_data.broker_addresses.values():
+                            if addr:  # 过滤空地址
+                                broker_addrs.add(addr)
+
+            if not broker_addrs:
+                logger.debug("No broker addresses found for heartbeat")
+                return
+
+            heartbeat_data = HeartbeatData(
+                client_id=self._config.client_id,
+                consumer_data_set=[
+                    ConsumerData(
+                        group_name=self._config.consumer_group,
+                        consume_type="CONSUME_PASSIVELY",
+                        message_model=self._config.message_model,
+                        consume_from_where=self._config.consume_from_where,
+                        subscription_data=[
+                            e.subscription_data
+                            for e in self._subscription_manager.get_all_subscriptions()
+                        ],
+                    )
+                ],
+            )
+
+            # 向每个Broker发送心跳
+            heartbeat_success_count = 0
+            heartbeat_failure_count = 0
+
+            for broker_addr in broker_addrs:
+                try:
+                    # 创建Broker客户端连接
+                    with self._broker_manager.connection(broker_addr) as conn:
+                        # 发送心跳请求
+                        result = BrokerClient(conn).send_heartbeat(heartbeat_data)
+
+                        if result:
+                            heartbeat_success_count += 1
+                            logger.debug(
+                                f"Heartbeat sent successfully to broker: {broker_addr}"
+                            )
+                        else:
+                            heartbeat_failure_count += 1
+                            logger.warning(f"Heartbeat failed to broker: {broker_addr}")
+
+                except Exception as e:
+                    heartbeat_failure_count += 1
+                    logger.warning(
+                        f"Failed to send heartbeat to broker {broker_addr}: {e}",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "consumer_group": self._config.consumer_group,
+                            "error": str(e),
+                        },
+                    )
+
+            # 更新统计信息
+            self._stats["heartbeat_success_count"] = (
+                self._stats.get("heartbeat_success_count", 0) + heartbeat_success_count
+            )
+            self._stats["heartbeat_failure_count"] = (
+                self._stats.get("heartbeat_failure_count", 0) + heartbeat_failure_count
+            )
+
+            if heartbeat_success_count > 0 or heartbeat_failure_count > 0:
+                logger.info(
+                    f"Heartbeat summary: {heartbeat_success_count} success, "
+                    f"{heartbeat_failure_count} failure",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "heartbeat_success_count": heartbeat_success_count,
+                        "heartbeat_failure_count": heartbeat_failure_count,
+                        "total_brokers": len(broker_addrs),
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error sending heartbeat to brokers: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
 
     def _rebalance_loop(self) -> None:
         """
