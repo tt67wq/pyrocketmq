@@ -24,6 +24,7 @@ from typing import Any
 # pyrocketmq导入
 from pyrocketmq.broker import BrokerClient, BrokerManager
 from pyrocketmq.consumer.allocate_queue_strategy import (
+    AllocateContext,
     AllocateQueueStrategyFactory,
 )
 from pyrocketmq.consumer.base_consumer import BaseConsumer
@@ -145,7 +146,6 @@ class ConcurrentConsumer(BaseConsumer):
         # 线程池和队列管理
         self._consume_executor: ThreadPoolExecutor | None = None
         self._pull_executor: ThreadPoolExecutor | None = None
-        self._message_queue: queue.Queue[MessageQueue] = queue.Queue()
         self._process_queue: queue.Queue[tuple[list[MessageExt], MessageQueue]] = (
             queue.Queue()
         )
@@ -417,32 +417,31 @@ class ConcurrentConsumer(BaseConsumer):
                 logger.debug("No topics subscribed, skipping rebalance")
                 return
 
-            # 获取所有Topic的路由信息
-            all_queues: list[MessageQueue] = []
+            allocated_queues: list[MessageQueue] = []
             for topic in topics:
                 route_data: TopicRouteData | None = (
                     self._name_server_manager.get_topic_route(topic)
                 )
                 if route_data:
                     _ = self._topic_broker_mapping.update_route_info(topic, route_data)
-                all_queues.extend(
-                    [
-                        x
-                        for (x, _) in self._topic_broker_mapping.get_subscribe_queues(
-                            topic
-                        )
-                    ]
-                )
+                all_queues: list[MessageQueue] = [
+                    x
+                    for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)
+                ]
 
-            if not all_queues:
-                logger.debug("No queues available for subscribed topics")
-                return
+                if not all_queues:
+                    logger.debug(
+                        "No queues available for subscribed topic",
+                        extra={"topic": topic},
+                    )
+                    continue
 
-            # 执行队列分配（这里简化处理，实际需要获取所有消费者信息）
-            allocated_queues: list[MessageQueue] = self._allocate_queues(all_queues)
+                # 执行队列分配（这里简化处理，实际需要获取所有消费者信息）
+                allocated_queues.extend(self._allocate_queues(topic, all_queues))
 
             # 更新分配的队列
-            self._update_assigned_queues(allocated_queues)
+            if allocated_queues:
+                self._update_assigned_queues(allocated_queues)
 
             self._last_rebalance_time = time.time()
 
@@ -451,7 +450,6 @@ class ConcurrentConsumer(BaseConsumer):
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "total_topics": len(topics),
-                    "total_queues": len(all_queues),
                     "assigned_queues": len(allocated_queues),
                 },
             )
@@ -466,20 +464,32 @@ class ConcurrentConsumer(BaseConsumer):
                 exc_info=True,
             )
 
-    def _allocate_queues(self, all_queues: list[MessageQueue]) -> list[MessageQueue]:
+    def _allocate_queues(
+        self, topic: str, all_queues: list[MessageQueue]
+    ) -> list[MessageQueue]:
         """
         分配队列（简化版本）
 
         Args:
+            topic: 主题名称
             all_queues: 所有可用的队列列表
 
         Returns:
             list[MessageQueue]: 分配给当前消费者的队列列表
         """
-        # TODO
-        # 这里简化处理，实际应该根据消费者组信息进行分配
-        # 暂时返回所有队列，后续可以集成完整的重平衡机制
-        return all_queues.copy()
+        cids = self._find_consumer_list(topic)
+        if not cids:
+            return []
+
+        return self._allocate_strategy.allocate(
+            AllocateContext(
+                self._config.consumer_group,
+                self._config.client_id,
+                cids,
+                all_queues,
+                {},
+            )
+        )
 
     def _update_assigned_queues(self, new_queues: list[MessageQueue]) -> None:
         """
@@ -499,7 +509,7 @@ class ConcurrentConsumer(BaseConsumer):
                     future: Future[None] | None = self._pull_tasks.pop(queue)
                     if future and not future.done():
                         future.cancel()
-                self._assigned_queues.pop(queue, None)
+                _ = self._assigned_queues.pop(queue, None)
 
             # 启动新分配队列的拉取任务
             added_queues: set[MessageQueue] = new_queue_set - old_queues
@@ -810,6 +820,26 @@ class ConcurrentConsumer(BaseConsumer):
         logger.info("Received notification of consumer IDs changed")
         self._do_rebalance()
 
+    def _find_consumer_list(self, topic: str) -> list[str]:
+        """
+        查找消费者列表
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            消费者列表
+        """
+        broker_addr = self._name_server_manager.get_broker_address(topic)
+        if not broker_addr:
+            logger.error("Broker address not found for topic", extra={"topic": topic})
+            return []
+
+        with self._broker_manager.connection(broker_addr) as conn:
+            return BrokerClient(conn).get_consumers_by_group(
+                self._config.consumer_group
+            )
+
     # ==================== 内部方法：心跳 ====================
 
     def _start_heartbeat_task(self) -> None:
@@ -1031,14 +1061,7 @@ class ConcurrentConsumer(BaseConsumer):
         """
         super()._cleanup_resources()
 
-        # 清理队列
-        if hasattr(self, "_message_queue"):
-            while not self._message_queue.empty():
-                try:
-                    self._message_queue.get_nowait()
-                except queue.Empty:
-                    break
-
+        # 清理处理队列
         if hasattr(self, "_process_queue"):
             while not self._process_queue.empty():
                 try:
