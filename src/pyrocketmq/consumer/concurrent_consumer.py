@@ -193,13 +193,27 @@ class ConcurrentConsumer(BaseConsumer):
         )
 
     def start(self) -> None:
-        """
-        启动并发消费者
+        """启动并发消费者。
 
-        启动消费者的各个组件，包括网络连接、线程池、消息拉取等。
+        初始化并启动消费者的所有组件，包括：
+        - 建立与NameServer和Broker的网络连接
+        - 创建消息拉取和处理线程池
+        - 执行初始队列分配和重平衡
+        - 启动心跳和重平衡后台任务
+
+        启动失败时会自动清理已分配的资源。
 
         Raises:
-            ConsumerStartError: 启动失败时抛出
+            ConsumerStartError: 当以下情况发生时抛出：
+                - 未注册消息监听器
+                - 消息监听器类型不匹配（需要MessageListenerConcurrently）
+                - 网络连接失败
+                - 线程池创建失败
+                - 其他初始化错误
+
+        Note:
+            此方法是线程安全的，多次调用只会启动一次。
+            启动成功后，消费者会自动开始拉取和处理消息。
         """
         with self._lock:
             if self._is_running:
@@ -293,14 +307,33 @@ class ConcurrentConsumer(BaseConsumer):
                 ) from e
 
     def shutdown(self) -> None:
-        """
-        停止并发消费者
+        """优雅停止并发消费者。
 
-        优雅地停止消费者，等待所有正在处理的消息完成，
-        持久化偏移量，然后清理所有资源。
+        执行以下关闭流程：
+        1. 停止接受新的消息拉取请求
+        2. 等待正在处理的消息完成（最多等待30秒）
+        3. 持久化所有队列的消费偏移量
+        4. 关闭所有线程池和后台任务
+        5. 清理网络连接和资源
+
+        Args:
+            None
+
+        Returns:
+            None
 
         Raises:
-            ConsumerShutdownError: 停止过程中发生错误时抛出
+            ConsumerShutdownError: 当以下情况发生时抛出：
+                - 偏移量持久化失败
+                - 线程池关闭超时
+                - 网络连接清理失败
+                - 其他清理过程中的错误
+
+        Note:
+            - 此方法是线程安全的，可以多次调用
+            - 会尽力等待正在处理的消息完成，但不会无限期等待
+            - 即使关闭过程中发生错误，也会继续执行后续的清理步骤
+            - 关闭后的消费者不能重新启动，需要创建新实例
         """
         with self._lock:
             if not self._is_running:
@@ -371,12 +404,29 @@ class ConcurrentConsumer(BaseConsumer):
                 ) from e
 
     def subscribe(self, topic: str, selector: MessageSelector) -> None:
-        """
-        订阅Topic
+        """订阅指定Topic的消息。
+
+        将消费者注册为指定Topic的订阅者，并设置消息选择器来过滤消息。
+        如果消费者已经运行，会自动触发重平衡来分配新的队列。
 
         Args:
-            topic: 要订阅的Topic名称
-            selector: 消息选择器
+            topic (str): 要订阅的Topic名称，不能为空或None
+            selector (MessageSelector): 消息选择器，用于过滤消息
+                - TAG选择器：基于消息标签进行过滤
+                - SQL选择器：基于消息属性进行复杂过滤
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: 当topic为空或无效时
+            SubscriptionConflict: 当订阅与现有订阅冲突时
+
+        Note:
+            - 可以多次调用此方法订阅多个Topic
+            - 相同Topic的重复订阅会更新选择器
+            - 消费者运行时调用会触发重平衡
+            - 订阅会在消费者重启后保持（如果偏移量已持久化）
         """
         super().subscribe(topic, selector)
 
@@ -385,11 +435,25 @@ class ConcurrentConsumer(BaseConsumer):
             self._trigger_rebalance()
 
     def unsubscribe(self, topic: str) -> None:
-        """
-        取消订阅Topic
+        """取消订阅指定Topic。
+
+        移除对指定Topic的订阅，停止拉取该Topic的消息，
+        并释放相关的队列资源。如果消费者正在运行，会触发重平衡。
 
         Args:
-            topic: 要取消订阅的Topic名称
+            topic (str): 要取消订阅的Topic名称
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法不会抛出异常，失败的取消订阅会被记录但不会中断执行
+
+        Note:
+            - 如果Topic未被订阅，此方法不会产生任何效果
+            - 消费者运行时调用会触发重平衡，可能导致其他队列重新分配
+            - 取消订阅不会删除已持久化的偏移量，可以通过重新订阅恢复
+            - 建议在取消订阅前确保相关业务逻辑已处理完毕
         """
         super().unsubscribe(topic)
 
@@ -400,10 +464,35 @@ class ConcurrentConsumer(BaseConsumer):
     # ==================== 内部方法：重平衡管理 ====================
 
     def _do_rebalance(self) -> None:
-        """
-        执行重平衡操作
+        """执行消费者重平衡操作。
 
-        根据当前订阅信息和集群状态，重新分配队列。
+        根据当前订阅的所有Topic，重新计算和分配队列给当前消费者。
+        重平衡是RocketMQ实现负载均衡的核心机制，确保消费者组内的队列分配合理。
+
+        执行流程：
+        1. 获取所有已订阅的Topic列表
+        2. 查询每个Topic的完整路由信息
+        3. 为每个Topic执行队列分配算法
+        4. 更新当前消费者的分配队列集合
+        5. 启动新分配队列的拉取任务
+
+        重平衡触发条件：
+        - 消费者启动时
+        - 新订阅或取消订阅Topic时
+        - 定期重平衡检查（默认20秒间隔）
+        - 收到消费者组变更通知时
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志，不会向上抛出
+
+        Note:
+            - 重平衡过程中可能会短暂停止消息拉取
+            - 新分配的队列会自动开始拉取消息
+            - 被回收的队列会停止拉取并等待当前消息处理完成
+            - 重平衡失败不会影响已运行的队列，会在下次重试
         """
         try:
             logger.debug(
@@ -552,11 +641,27 @@ class ConcurrentConsumer(BaseConsumer):
             return all_queues.copy()
 
     def _update_assigned_queues(self, new_queues: list[MessageQueue]) -> None:
-        """
-        更新���配的队列
+        """更新当前消费者的分配队列集合。
+
+        比较新旧队列分配，执行增量更新：
+        - 停止被回收队列的拉取任务
+        - 启动新分配队列的拉取任务
+        - 维护队列偏移量信息
 
         Args:
-            new_queues: 新分配的队列列表
+            new_queues (list[MessageQueue]): 新分配给当前消费者的队列列表
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会处理所有异常情况
+
+        Note:
+            - 队列变更不会中断正在处理的消息
+            - 被回收的队列会等待当前消息处理完成后才停止
+            - 新队列会立即开始拉取消息
+            - 偏移量信息会在队列分配变更时保留
         """
         with self._lock:
             old_queues: set[MessageQueue] = set(self._assigned_queues.keys())
@@ -634,11 +739,32 @@ class ConcurrentConsumer(BaseConsumer):
         self._pull_tasks.clear()
 
     def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
-        """
-        持续拉取消息的循环
+        """持续拉取指定队列的消息。
+
+        为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
+        并放入处理队列。这是消费者消息拉取的核心执行循环。
+
+        执行流程：
+        1. 从队列的当前偏移量开始拉取消息
+        2. 如果拉取到消息，更新本地偏移量记录
+        3. 将消息和处理队列信息提交给消费线程池
+        4. 根据配置的拉取间隔进行休眠控制
 
         Args:
-            message_queue: 要拉取消息的队列
+            message_queue (MessageQueue): 要持续拉取消息的目标队列
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志，不会中断拉取循环
+
+        Note:
+            - 每个队列有独立的拉取线程，避免队列间相互影响
+            - 偏移量在本地维护，定期或在消息处理成功后更新到Broker
+            - 拉取失败会记录日志并等待重试，不会影响其他队列
+            - 消费者停止时此循环会自动退出
+            - 支持通过配置控制拉取频率
         """
         while self._is_running:
             try:
@@ -908,7 +1034,33 @@ class ConcurrentConsumer(BaseConsumer):
             self._pull_executor.submit(self._heartbeat_loop)
 
     def _heartbeat_loop(self) -> None:
-        """心跳循环"""
+        """消费者心跳发送循环。
+
+        定期向所有相关的Broker发送心跳包，维持消费者与Broker的连接状态。
+        心跳机制确保Broker能够感知消费者的在线状态，及时进行重平衡操作。
+
+        执行流程：
+        1. 计算距离下次心跳的等待时间
+        2. 使用事件等待机制，支持优雅停止
+        3. 到达心跳时间时，向所有Broker发送心跳
+        4. 记录心跳统计信息
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志
+
+        Note:
+            - 默认心跳间隔为30秒，可通过配置调整
+            - 使用Event.wait()替代time.sleep()，支持快速响应停止请求
+            - 心跳失败不会影响消费者的正常运行
+            - 统计心跳成功/失败次数用于监控连接健康状态
+            - 消费者停止时会立即退出心跳循环
+        """
         logger.info("Heartbeat loop started")
 
         while self._is_running:
@@ -1053,8 +1205,30 @@ class ConcurrentConsumer(BaseConsumer):
     # ==================== 内部方法：资源清理 ====================
 
     def _cleanup_on_start_failure(self) -> None:
-        """
-        启动失败时的清理
+        """启动失败时的资源清理操作。
+
+        当消费者启动过程中发生异常时，调用此方法清理已分配的资源，
+        确保消费者状态一致，避免资源泄漏。
+
+        清理流程：
+        1. 关闭线程池（拉取线程池、消费线程池）
+        2. 停止核心组件（NameServer、BrokerManager、偏移量存储）
+        3. 清理内存资源和队列
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志
+
+        Note:
+            - 仅在启动失败时调用，正常关闭使用shutdown()方法
+            - 清理过程中的异常不会中断清理流程
+            - 确保消费者处于完全停止状态
+            - 所有清理操作都会记录详细日志
         """
         try:
             self._shutdown_thread_pools()
@@ -1163,11 +1337,40 @@ class ConcurrentConsumer(BaseConsumer):
         }
 
     def get_stats(self) -> dict[str, Any]:
-        """
-        获取当前统计信息
+        """获取消费者的实时统计信息。
+
+        返回包含消费者运行状态、性能指标和资源使用情况的详细统计数据。
 
         Returns:
-            dict: 统计信息字典
+            dict[str, Any]: 统计信息字典，包含以下字段：
+                - messages_consumed (int): 已消费的消息总数
+                - messages_failed (int): 消费失败的消息总数
+                - pull_requests (int): 拉取请求总数
+                - pull_successes (int): 拉取成功的次数
+                - pull_failures (int): 拉取失败的次数
+                - consume_duration_total (float): 总消费耗时（秒）
+                - start_time (float): 启动时间戳
+                - heartbeat_success_count (int): 心跳成功次数
+                - heartbeat_failure_count (int): 心跳失败次数
+                - uptime_seconds (float): 运行时长（秒）
+                - assigned_queues (int): 当前分配的队列数量
+                - avg_consume_duration (float): 平均消费耗时（秒）
+                - pull_success_rate (float): 拉取成功率（0-1之间）
+                - consume_success_rate (float): 消费成功率（0-1之间）
+
+        Raises:
+            None: 此方法不会抛出异常
+
+        Note:
+            - 统计数据在消费者生命周期内持续累积
+            - 平均值基于实际消费次数计算
+            - 成功率基于实际操作次数计算
+            - 可用于监控消费者健康状态和性能调优
+
+        Example:
+            >>> stats = consumer.get_stats()
+            >>> print(f"消费成功率: {stats['consume_success_rate']:.2%}")
+            >>> print(f"平均消费耗时: {stats['avg_consume_duration']:.3f}秒")
         """
         return self._get_final_stats()
 

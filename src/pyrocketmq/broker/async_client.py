@@ -8,7 +8,6 @@ import time
 import uuid
 from typing import Any
 
-
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
 
@@ -245,7 +244,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> SendMessageResult:
         """异步发送消息
 
@@ -388,7 +387,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """异步单向发送消息（不等待响应）
 
@@ -479,7 +478,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> SendMessageResult:
         """异步批量发送消息
 
@@ -629,7 +628,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """异步单向批量发送消息（不等待响应）
 
@@ -721,7 +720,7 @@ class AsyncBrokerClient:
         queue_id: int,
         queue_offset: int,
         max_msg_nums: int = 32,
-        **kwargs,
+        **kwargs: Any,
     ) -> PullMessageResult:
         """异步拉取消息
 
@@ -1729,9 +1728,7 @@ class AsyncBrokerClient:
             )
 
     async def send_heartbeat(
-        self,
-        heartbeat_data: HeartbeatData,
-        **kwargs,
+        self, heartbeat_data: HeartbeatData, **kwargs: Any
     ) -> None:
         """异步发送心跳
 
@@ -1824,7 +1821,7 @@ class AsyncBrokerClient:
         consumer_group: str,
         delay_level: int = 0,
         max_consume_retry_times: int = 16,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """异步消费者发送消息回退
 
@@ -2102,7 +2099,9 @@ class AsyncBrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的消费者列表通常是JSON格式
-                        consumer_data = json.loads(response.body.decode("utf-8"))
+                        consumer_data: dict[str, list[str]] = json.loads(
+                            response.body.decode("utf-8")
+                        )
 
                         # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
                         if (
@@ -2110,9 +2109,6 @@ class AsyncBrokerClient:
                             and "consumerIdList" in consumer_data
                         ):
                             consumer_list = consumer_data["consumerIdList"]
-                        elif isinstance(consumer_data, list):
-                            # 如果直接返回列表
-                            consumer_list = consumer_data
                         else:
                             logger.warning(
                                 "Unexpected consumer data format",
@@ -2278,7 +2274,9 @@ class AsyncBrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的锁定结果通常是JSON格式
-                        lock_result = json.loads(response.body.decode("utf-8"))
+                        lock_result: dict[str, list[dict[str, Any]]] = json.loads(
+                            response.body.decode("utf-8")
+                        )
 
                         # 根据RocketMQ协议，锁定成功的队列列表通常在lockOKMQSet字段中
                         if (
@@ -2286,9 +2284,6 @@ class AsyncBrokerClient:
                             and "lockOKMQSet" in lock_result
                         ):
                             locked_mqs = lock_result["lockOKMQSet"]
-                        elif isinstance(lock_result, list):
-                            # 如果直接返回列表
-                            locked_mqs = lock_result
                         else:
                             logger.warning(
                                 "Unexpected lock result format",
@@ -2497,7 +2492,10 @@ class AsyncBrokerClient:
 
 
 def create_async_broker_client(
-    host: str, port: int, timeout: float = 30.0, **kwargs
+    host: str,
+    port: int,
+    timeout: float = 30.0,
+    **kwargs: Any,
 ) -> AsyncBrokerClient:
     """创建异步Broker客户端
 

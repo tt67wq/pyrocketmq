@@ -2267,7 +2267,9 @@ class BrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的消费者列表通常是JSON格式
-                        consumer_data = json.loads(response.body.decode("utf-8"))
+                        consumer_data: dict[str, list[str]] = json.loads(
+                            response.body.decode("utf-8")
+                        )
                         consumer_list: list[str]
 
                         # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
@@ -2276,9 +2278,6 @@ class BrokerClient:
                             and "consumerIdList" in consumer_data
                         ):
                             consumer_list = consumer_data["consumerIdList"]
-                        elif isinstance(consumer_data, list):
-                            # 如果直接返回列表
-                            consumer_list = consumer_data
                         else:
                             self._logger.warning(
                                 "Unexpected consumer data format",
@@ -2450,7 +2449,7 @@ class BrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的锁定结果通常是JSON格式
-                        lock_result: dict[str, Any] = json.loads(
+                        lock_result: dict[str, list[dict[str, Any]]] = json.loads(
                             response.body.decode("utf-8")
                         )
                         locked_mqs: list[dict[str, Any]]
@@ -2461,9 +2460,6 @@ class BrokerClient:
                             and "lockOKMQSet" in lock_result
                         ):
                             locked_mqs = lock_result["lockOKMQSet"]
-                        elif isinstance(lock_result, list):
-                            # 如果直接返回列表
-                            locked_mqs = lock_result
                         else:
                             self._logger.warning(
                                 "Unexpected lock result format",
