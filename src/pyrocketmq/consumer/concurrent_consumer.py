@@ -18,6 +18,7 @@ import queue
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
 from typing import Any
 
 # pyrocketmq导入
@@ -38,17 +39,24 @@ from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
+    BrokerData,
+    ConsumeMessageDirectlyHeader,
+    ConsumeMessageDirectlyResult,
     ConsumerData,
     HeartbeatData,
+    MessageExt,
     MessageModel,
+    MessageQueue,
+    MessageSelector,
     PullMessageResult,
+    RemotingCommand,
+    RemotingCommandBuilder,
+    RequestCode,
+    ResponseCode,
     TopicRouteData,
 )
-from pyrocketmq.model.client_data import MessageSelector
-from pyrocketmq.model.message_ext import MessageExt
-from pyrocketmq.model.message_queue import MessageQueue
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
-from pyrocketmq.remote import DEFAULT_CONFIG
+from pyrocketmq.remote import DEFAULT_CONFIG, Remote
 
 logger = get_logger(__name__)
 
@@ -154,6 +162,12 @@ class ConcurrentConsumer(BaseConsumer):
         )  # 心跳间隔(秒)
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
+
+        # 线程同步事件
+        self._rebalance_event: threading.Event = (
+            threading.Event()
+        )  # 用于重平衡循环的事件
+        self._heartbeat_event: threading.Event = threading.Event()  # 用于心跳循环的事件
 
         # 统计信息
         self._stats: dict[str, Any] = {
@@ -298,6 +312,10 @@ class ConcurrentConsumer(BaseConsumer):
                     "Shutting down ConcurrentConsumer",
                     extra={"consumer_group": self._config.consumer_group},
                 )
+
+                # 先设置Event以唤醒可能阻塞的线程
+                self._rebalance_event.set()
+                self._heartbeat_event.set()
 
                 self._is_running = False
 
@@ -478,7 +496,7 @@ class ConcurrentConsumer(BaseConsumer):
             removed_queues: set[MessageQueue] = old_queues - new_queue_set
             for queue in removed_queues:
                 if queue in self._pull_tasks:
-                    future: Future[None] = self._pull_tasks.pop(queue)
+                    future: Future[None] | None = self._pull_tasks.pop(queue)
                     if future and not future.done():
                         future.cancel()
                 self._assigned_queues.pop(queue, None)
@@ -497,7 +515,10 @@ class ConcurrentConsumer(BaseConsumer):
         触发重平衡
         """
         if self._is_running:
-            # 在后台线程中执行重平衡
+            # 唤醒重平衡循环，使其立即执行重平衡
+            self._rebalance_event.set()
+
+            # 同时在后台线程中执行重平衡（确保立即响应）
             if self._pull_executor:
                 self._pull_executor.submit(self._do_rebalance)
 
@@ -524,7 +545,9 @@ class ConcurrentConsumer(BaseConsumer):
 
         for q in queues:
             if q not in self._pull_tasks:
-                future = self._pull_executor.submit(self._pull_messages_loop, q)
+                future: Future[None] = self._pull_executor.submit(
+                    self._pull_messages_loop, q
+                )
                 self._pull_tasks[q] = future
 
     def _stop_pull_tasks(self) -> None:
@@ -560,7 +583,7 @@ class ConcurrentConsumer(BaseConsumer):
                 if messages:
                     # 更新偏移量
                     last_message: MessageExt = messages[-1]
-                    new_offset: int = last_message.queue_offset or 0 + len(messages)
+                    new_offset: int = (last_message.queue_offset or 0) + len(messages)
                     self._assigned_queues[message_queue] = new_offset
 
                     # 将消息放入处理队列
@@ -609,7 +632,7 @@ class ConcurrentConsumer(BaseConsumer):
         try:
             self._stats["pull_requests"] += 1
 
-            broker_address = self._name_server_manager.get_broker_address(
+            broker_address: str | None = self._name_server_manager.get_broker_address(
                 message_queue.broker_name
             )
             if not broker_address:
@@ -619,6 +642,7 @@ class ConcurrentConsumer(BaseConsumer):
 
             # 使用BrokerManager拉取消息
             with self._broker_manager.connection(broker_address) as conn:
+                self._prepare_consumer_remote(conn)
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
@@ -691,7 +715,9 @@ class ConcurrentConsumer(BaseConsumer):
                 if success:
                     try:
                         last_message: MessageExt = messages[-1]
-                        new_offset: int = last_message.queue_offset or 0 + len(messages)
+                        new_offset: int = (last_message.queue_offset or 0) + len(
+                            messages
+                        )
                         self._offset_store.update_offset(message_queue, new_offset)
                     except Exception as e:
                         logger.warning(
@@ -751,6 +777,41 @@ class ConcurrentConsumer(BaseConsumer):
         if self._pull_executor:
             self._pull_executor.submit(self._rebalance_loop)
 
+    def _rebalance_loop(self) -> None:
+        """
+        定期重平衡循环
+        """
+        while self._is_running:
+            try:
+                # 使用Event.wait()替代time.sleep()
+                if self._rebalance_event.wait(timeout=self._rebalance_interval):
+                    # Event被触发，检查是否需要退出
+                    if not self._is_running:
+                        break
+                    # 重置事件状态
+                    self._rebalance_event.clear()
+
+                if self._is_running:
+                    self._do_rebalance()
+
+            except Exception as e:
+                logger.error(
+                    f"Error in rebalance loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+    def _on_notify_consumer_ids_changed(
+        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+    ) -> None:
+        logger.info("Received notification of consumer IDs changed")
+        self._do_rebalance()
+
+    # ==================== 内部方法：心跳 ====================
+
     def _start_heartbeat_task(self) -> None:
         """启动心跳任务"""
         if self._pull_executor:
@@ -764,13 +825,30 @@ class ConcurrentConsumer(BaseConsumer):
             try:
                 current_time = time.time()
 
+                # 计算到下一次心跳的等待时间
+                time_until_next_heartbeat: float = self._heartbeat_interval - (
+                    current_time - self._last_heartbeat_time
+                )
+
+                # 如果还没到心跳时间，等待一小段时间或直到被唤醒
+                if time_until_next_heartbeat > 0:
+                    # 使用Event.wait()替代time.sleep()
+                    wait_timeout: float = min(
+                        time_until_next_heartbeat, 1.0
+                    )  # 最多等待1秒
+                    if self._heartbeat_event.wait(timeout=wait_timeout):
+                        # Event被触发，检查是否需要退出
+                        if not self._is_running:
+                            break
+                        # 重置事件状态
+                        self._heartbeat_event.clear()
+                        continue  # 重新计算等待时间
+
                 # 检查是否需要发送心跳
+                current_time = time.time()  # 重新获取当前时间
                 if current_time - self._last_heartbeat_time >= self._heartbeat_interval:
                     self._send_heartbeat_to_all_brokers()
                     self._last_heartbeat_time = current_time
-
-                # 等待一段时间再检查
-                time.sleep(1.0)
 
             except Exception as e:
                 logger.error(
@@ -781,8 +859,11 @@ class ConcurrentConsumer(BaseConsumer):
                     },
                     exc_info=True,
                 )
-                # 等待一段时间再重试
-                time.sleep(5.0)
+                # 等待一段时间再重试，使用Event.wait()
+                if self._heartbeat_event.wait(timeout=5.0):
+                    if not self._is_running:
+                        break
+                    self._heartbeat_event.clear()
 
         logger.info("Heartbeat loop stopped")
 
@@ -793,10 +874,12 @@ class ConcurrentConsumer(BaseConsumer):
         try:
             # 获取所有已知的Broker地址
             broker_addrs: set[str] = set()
-            all_topics = self._topic_broker_mapping.get_all_topics()
+            all_topics: set[str] = self._topic_broker_mapping.get_all_topics()
 
             for topic in all_topics:
-                brokers = self._topic_broker_mapping.get_available_brokers(topic)
+                brokers: list[BrokerData] = (
+                    self._topic_broker_mapping.get_available_brokers(topic)
+                )
                 for broker_data in brokers:
                     # 获取主从地址
                     if broker_data.broker_addresses:
@@ -825,24 +908,16 @@ class ConcurrentConsumer(BaseConsumer):
             )
 
             # 向每个Broker发送心跳
-            heartbeat_success_count = 0
-            heartbeat_failure_count = 0
+            heartbeat_success_count: int = 0
+            heartbeat_failure_count: int = 0
 
             for broker_addr in broker_addrs:
                 try:
                     # 创建Broker客户端连接
                     with self._broker_manager.connection(broker_addr) as conn:
+                        self._prepare_consumer_remote(conn)
                         # 发送心跳请求
-                        result = BrokerClient(conn).send_heartbeat(heartbeat_data)
-
-                        if result:
-                            heartbeat_success_count += 1
-                            logger.debug(
-                                f"Heartbeat sent successfully to broker: {broker_addr}"
-                            )
-                        else:
-                            heartbeat_failure_count += 1
-                            logger.warning(f"Heartbeat failed to broker: {broker_addr}")
+                        BrokerClient(conn).send_heartbeat(heartbeat_data)
 
                 except Exception as e:
                     heartbeat_failure_count += 1
@@ -884,27 +959,6 @@ class ConcurrentConsumer(BaseConsumer):
                 },
                 exc_info=True,
             )
-
-    def _rebalance_loop(self) -> None:
-        """
-        定期重平衡循环
-        """
-        while self._is_running:
-            try:
-                time.sleep(self._rebalance_interval)
-
-                if self._is_running:
-                    self._do_rebalance()
-
-            except Exception as e:
-                logger.error(
-                    f"Error in rebalance loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
 
     # ==================== 内部方法：资源清理 ====================
 
@@ -1033,3 +1087,78 @@ class ConcurrentConsumer(BaseConsumer):
             dict: 统计信息字典
         """
         return self._get_final_stats()
+
+    # ==================== 其他方法 ====================
+    def _prepare_consumer_remote(self, conn: Remote) -> None:
+        _ = conn.register_request_processor_lazy(
+            RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
+            self._on_notify_consumer_ids_changed,
+        )
+        _ = conn.register_request_processor_lazy(
+            RequestCode.CONSUME_MESSAGE_DIRECTLY,
+            self._on_notify_consume_message_directly,
+        )
+
+    def _on_notify_consume_message_directly(
+        self, command: RemotingCommand, _addr: tuple[str, int]
+    ) -> RemotingCommand:
+        header: ConsumeMessageDirectlyHeader = ConsumeMessageDirectlyHeader.decode(
+            command.ext_fields
+        )
+        if header.client_id == self._config.client_id:
+            return self._on_notify_consume_message_directly_internal(header, command)
+        else:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark(f"Can't find client ID {header.client_id}")
+                .build()
+            )
+
+    def _on_notify_consume_message_directly_internal(
+        self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
+    ) -> RemotingCommand:
+        if not command.body:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("No message body")
+                .build()
+            )
+
+        msgs = MessageExt.decode_messages(command.body)
+        if len(msgs) == 0:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("No message")
+                .build()
+            )
+
+        msg: MessageExt = msgs[0]
+
+        q: MessageQueue
+        if msg.queue:
+            q = MessageQueue(msg.topic, header.broker_name, msg.queue.queue_id)
+        else:
+            q = MessageQueue(msg.topic, header.broker_name, 0)
+
+        now = datetime.now()
+
+        if self._consume_message(msgs, q):
+            res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
+                order=False,
+                auto_commit=True,
+                consume_result="SUCCESS",
+                remark="Message consumed",
+                spent_time_mills=int((datetime.now() - now).total_seconds() * 1000),
+            )
+            return (
+                RemotingCommandBuilder(ResponseCode.SUCCESS)
+                .with_remark("Message consumed")
+                .with_body(res.encode())
+                .build()
+            )
+        else:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("Failed to consume message")
+                .build()
+            )

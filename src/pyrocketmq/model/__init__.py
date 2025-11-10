@@ -19,6 +19,8 @@ from .command import RemotingCommand
 from .consumer import (
     AllocateQueueStrategy,
     ConsumeFromWhere,
+    ConsumeMessageDirectlyResult,
+    ConsumeResult,
     MessageModel,
 )
 from .enums import (
@@ -51,6 +53,29 @@ from .errors import (
 from .factory import (
     RemotingCommandBuilder,
     RemotingRequestFactory,
+)
+from .headers import (
+    CheckTransactionStateRequestHeader,
+    ConsumeMessageDirectlyHeader,
+    ConsumerSendMsgBackRequestHeader,
+    CreateTopicRequestHeader,
+    DeleteTopicRequestHeader,
+    EndTransactionRequestHeader,
+    GetConsumerListRequestHeader,
+    GetConsumerRunningInfoHeader,
+    GetMaxOffsetRequestHeader,
+    GetRouteInfoRequestHeader,
+    PullMessageRequestHeader,
+    QueryConsumerOffsetRequestHeader,
+    QueryMessageRequestHeader,
+    ResetOffsetHeader,
+    SaveOrGetMsgNoHeader,
+    SearchOffsetRequestHeader,
+    SendMessageRequestHeader,
+    SendMessageRequestV2Header,
+    TopicListRequestHeader,
+    UpdateConsumerOffsetRequestHeader,
+    ViewMessageRequestHeader,
 )
 from .heart_beat import HeartbeatData
 from .message import (
@@ -129,6 +154,31 @@ __all__ = [
     "SendMessageResult",
     "PullMessageResult",
     "OffsetResult",
+    # Header数据结构
+    "SendMessageRequestHeader",
+    "SendMessageRequestV2Header",
+    "EndTransactionRequestHeader",
+    "CheckTransactionStateRequestHeader",
+    "ConsumerSendMsgBackRequestHeader",
+    "PullMessageRequestHeader",
+    "GetConsumerListRequestHeader",
+    "GetMaxOffsetRequestHeader",
+    "QueryConsumerOffsetRequestHeader",
+    "SearchOffsetRequestHeader",
+    "UpdateConsumerOffsetRequestHeader",
+    "GetRouteInfoRequestHeader",
+    "GetConsumerRunningInfoHeader",
+    "QueryMessageRequestHeader",
+    "ViewMessageRequestHeader",
+    "CreateTopicRequestHeader",
+    "TopicListRequestHeader",
+    "DeleteTopicRequestHeader",
+    "ResetOffsetHeader",
+    "ConsumeMessageDirectlyHeader",
+    "SaveOrGetMsgNoHeader",
+    # 消费相关数据结构
+    "ConsumeResult",
+    "ConsumeMessageDirectlyResult",
     # 订阅相关数据结构
     "ExpressionType",
     "MessageSelector",

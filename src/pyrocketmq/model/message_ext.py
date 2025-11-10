@@ -280,7 +280,7 @@ class MessageExt(Message):
         Returns:
             MessageExt对象列表
         """
-        messages = []
+        messages: list[MessageExt] = []
         pos = 0
         total_length = len(data)
 

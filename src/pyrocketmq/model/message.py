@@ -6,6 +6,7 @@
 import json
 from dataclasses import dataclass, field
 from typing import Any
+
 from pyrocketmq.model.utils import create_uniq_id
 
 from .message_queue import MessageQueue
@@ -120,7 +121,7 @@ class Message:
         if not self.properties:
             return ""
 
-        parts = []
+        parts: list[str] = []
         for key, value in self.properties.items():
             # 添加键值对，格式为 key + 分隔符 + value + 属性分隔符
             parts.append(f"{key}{NAME_VALUE_SEPARATOR}{value}{PROPERTY_SEPARATOR}")
@@ -379,7 +380,7 @@ class Message:
         if "queue" in data:
             from .message_queue import MessageQueue
 
-            queue_data = data["queue"]
+            queue_data: dict[str, Any] = data["queue"]
             if isinstance(queue_data, dict):
                 queue = MessageQueue.from_dict(queue_data)
 
