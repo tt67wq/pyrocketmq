@@ -468,28 +468,88 @@ class ConcurrentConsumer(BaseConsumer):
         self, topic: str, all_queues: list[MessageQueue]
     ) -> list[MessageQueue]:
         """
-        分配队列（简化版本）
+        为当前消费者分配队列
+
+        根据消息模式和分配策略，从所有可用队列中选择一部分分配给当前消费者实例。
+        这是RocketMQ消费者负载均衡的核心机制，确保多个消费者能够合理地消费同一个Topic下的消息。
+
+        ## 分配策略
+
+        ### 集群模式 (CLUSTERING)
+        - 在集群模式下，同一个消费者组内的多个消费者会分担队列
+        - 每个队列只能被一个消费者消费，避免重复消费
+        - 使用分配策略算法（如平均分配）来决定哪个消费者消费哪些队列
+
+        ### 广播模式 (BROADCASTING)
+        - 在广播模式下，每个消费者都会消费所有队列
+        - 所有消费者都会收到相同的消息，实现广播效果
+        - 不需要进行队列分配，直接返回所有队列
+
+        ## 分配流程
+
+        1. **检查消息模式**：
+           - 集群模式：执行负载均衡分配
+           - 广播模式：返回所有队列
+
+        2. **集群模式分配**：
+           - 获取订阅该Topic的所有消费者ID列表
+           - 如果没有其他消费者，返回空列表（避免重复消费）
+           - 使用配置的分配策略进行队列分配
+
+        3. **分配策略参数**：
+           - consumer_group: 消费者组名
+           - client_id: 当前消费者客户端ID
+           - consumer_ids: 所有消费者ID列表
+           - all_queues: 所有可用队列列表
+           - message_queues: 队列映射表
 
         Args:
-            topic: 主题名称
-            all_queues: 所有可用的队列列表
+            topic: 要分配队列的Topic名称
+            all_queues: 该Topic下所有可用的消息队列列表
 
         Returns:
             list[MessageQueue]: 分配给当前消费者的队列列表
-        """
-        cids = self._find_consumer_list(topic)
-        if not cids:
-            return []
 
-        return self._allocate_strategy.allocate(
-            AllocateContext(
-                self._config.consumer_group,
-                self._config.client_id,
-                cids,
-                all_queues,
-                {},
+        ## 使用场景
+
+        - **消费者启动时**：初次分配队列
+        - **重平衡时**：消费者加入或离开后重新分配
+        - **路由变更时**：Topic路由信息变化后重新分配
+
+        ## 注意事项
+
+        - 集群模式下确保一个队列只被一个消费者消费
+        - 广播模式下每个消费者都能收到所有消息
+        - 分配结果会影响消息的并发度和处理性能
+        - 分配策略的变更可能导致消息顺序性的变化
+
+        ## 示例
+
+        ```python
+        # 假设有3个队列和2个消费者
+        all_queues = [queue1, queue2, queue3]
+
+        # 集群模式下，可能分配给当前消费者：[queue1, queue3]
+        # 广播模式下，分配给当前消费者：[queue1, queue2, queue3]
+        allocated = self._allocate_queues("test_topic", all_queues)
+        ```
+        """
+        if self._config.message_model == MessageModel.CLUSTERING:
+            cids = self._find_consumer_list(topic)
+            if not cids:
+                return []
+
+            return self._allocate_strategy.allocate(
+                AllocateContext(
+                    self._config.consumer_group,
+                    self._config.client_id,
+                    cids,
+                    all_queues,
+                    {},
+                )
             )
-        )
+        else:
+            return all_queues.copy()
 
     def _update_assigned_queues(self, new_queues: list[MessageQueue]) -> None:
         """
