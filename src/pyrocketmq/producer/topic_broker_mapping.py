@@ -20,9 +20,9 @@ import time
 from dataclasses import dataclass, field
 
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model.message_queue import MessageQueue
-from pyrocketmq.model.nameserver_models import (
+from pyrocketmq.model import (
     BrokerData,
+    MessageQueue,
     QueueData,
     TopicRouteData,
 )
@@ -227,7 +227,7 @@ class TopicBrokerMapping:
 
     def get_available_queues(self, topic: str) -> list[tuple[MessageQueue, BrokerData]]:
         """
-        获取Topic的所有可用队列和对应的Broker
+        获取Topic的所有可用队列和对应的Broker（写队列）
 
         Args:
             topic: 主题名称
@@ -246,6 +246,28 @@ class TopicBrokerMapping:
 
             # 直接返回预构建队列列表的副本
             return route_info.available_queues.copy()
+
+    def get_subscribe_queues(self, topic: str) -> list[tuple[MessageQueue, BrokerData]]:
+        """
+        获取Topic的所有可订阅队列和对应的Broker（读队列）
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            list[tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
+        """
+        with self._lock:
+            route_info = self._route_cache.get(topic)
+            if route_info is None:
+                return []
+
+            # 检查路由信息是否过期
+            if route_info.is_expired(self._default_route_timeout):
+                return []
+
+            # 直接返回预构建订阅队列列表的副本
+            return route_info.subscribe_message_queues.copy()
 
     def get_available_brokers(self, topic: str) -> list[BrokerData]:
         """
@@ -344,11 +366,18 @@ class TopicBrokerMapping:
                 len(route.available_queues) for route in self._route_cache.values()
             )
 
+            # 统计订阅队列总数
+            total_subscribe_queues = sum(
+                len(route.subscribe_message_queues)
+                for route in self._route_cache.values()
+            )
+
             return {
                 "total_topics": total_topics,
                 "total_brokers": total_brokers,
                 "total_queue_data": total_queue_data,
                 "total_available_queues": total_available_queues,
+                "total_subscribe_queues": total_subscribe_queues,
                 "topics": list(self._route_cache.keys()),
             }
 
