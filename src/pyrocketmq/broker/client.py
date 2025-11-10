@@ -6,7 +6,7 @@ Broker 客户端实现
 import json
 import logging
 import time
-
+from typing import Any
 
 from pyrocketmq.model.message import MessageProperty
 from pyrocketmq.model.result_data import SendStatus
@@ -239,7 +239,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> SendMessageResult:
         """发送消息
 
@@ -379,7 +379,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """单向发送消息（不等待响应）
 
@@ -467,7 +467,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> SendMessageResult:
         """批量发送消息
 
@@ -601,7 +601,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
         """单向批量发送消息（不等待响应）
 
@@ -690,7 +690,7 @@ class BrokerClient:
         queue_id: int,
         queue_offset: int,
         max_msg_nums: int = 32,
-        **kwargs,
+        **kwargs: Any,
     ) -> PullMessageResult:
         """拉取消息
 
@@ -2268,6 +2268,7 @@ class BrokerClient:
                     try:
                         # RocketMQ返回的消费者列表通常是JSON格式
                         consumer_data = json.loads(response.body.decode("utf-8"))
+                        consumer_list: list[str]
 
                         # 根据RocketMQ协议，消费者列表通常在consumerIdList字段中
                         if (
@@ -2296,7 +2297,6 @@ class BrokerClient:
                             extra={
                                 "client_id": self._client_id,
                                 "consumer_group": consumer_group,
-                                "consumer_count": len(consumer_list),
                                 "execution_time": get_consumers_rt,
                                 "operation_type": "get_consumers_by_group",
                                 "status": "success",
@@ -2450,7 +2450,10 @@ class BrokerClient:
                 if response.body:
                     try:
                         # RocketMQ返回的锁定结果通常是JSON格式
-                        lock_result = json.loads(response.body.decode("utf-8"))
+                        lock_result: dict[str, Any] = json.loads(
+                            response.body.decode("utf-8")
+                        )
+                        locked_mqs: list[dict[str, Any]]
 
                         # 根据RocketMQ协议，锁定成功的队列列表通常在lockOKMQSet字段中
                         if (
@@ -2690,7 +2693,7 @@ class BrokerClient:
 
 
 def create_broker_client(
-    host: str, port: int, timeout: float = 30.0, **kwargs
+    host: str, port: int, timeout: float = 30.0, **kwargs: Any
 ) -> BrokerClient:
     """创建Broker客户端
 

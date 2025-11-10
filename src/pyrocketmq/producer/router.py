@@ -418,7 +418,7 @@ class MessageRouter:
             )
 
             # 选择Broker地址
-            broker_address = self._select_broker_address(broker_data)
+            broker_address: str | None = self._select_broker_address(broker_data)
 
             # Debug: 记录broker地址选择结果
             self._logger.debug(

@@ -52,7 +52,7 @@ class BrokerData:
             # 解码为字符串并使用ast.literal_eval解析
             # 这可以处理Go语言返回的整数key格式
             data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
 
             # 验证必需字段
             required_fields = ["cluster", "brokerName", "brokerAddrs"]
@@ -61,19 +61,18 @@ class BrokerData:
                     raise ValueError(f"Missing required field: {field_name}")
 
             # 确保brokerAddrs是字典格式
-            broker_addrs = parsed_data["brokerAddrs"]
+            broker_addrs: dict[str, Any] = parsed_data["brokerAddrs"]
             if not isinstance(broker_addrs, dict):
                 raise ValueError("brokerAddrs must be a dictionary")
 
             # 将brokerId转换为整数key
-            normalized_addrs = {}
+            normalized_addrs: dict[int, str] = {}
             for broker_id_str, address in broker_addrs.items():
                 try:
                     broker_id = int(broker_id_str)
                     normalized_addrs[broker_id] = str(address)
                 except (ValueError, TypeError):
-                    # 如果无法转换为整数，保持原始字符串key
-                    normalized_addrs[broker_id_str] = str(address)
+                    raise ValueError(f"Invalid brokerId: {broker_id_str}")
 
             return cls(
                 cluster=str(parsed_data["cluster"]),
@@ -190,7 +189,7 @@ class TopicRouteData:
             # 解码为字符串并使用ast.literal_eval解析
             # 这可以处理Go语言返回的整数key格式
             data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
 
             # 验证必需字段
             if not isinstance(parsed_data, dict):
@@ -247,7 +246,7 @@ class BrokerClusterInfo:
             # 解码为字符串并使用ast.literal_eval解析
             # 这可以处理Go语言返回的整数key格式
             data_str = data.decode("utf-8")
-            parsed_data = ast.literal_eval(data_str)
+            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
 
             # 验证必需字段
             if not isinstance(parsed_data, dict):

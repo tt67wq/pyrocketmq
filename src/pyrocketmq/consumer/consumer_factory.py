@@ -25,7 +25,7 @@ def create_consumer(
     consumer_group: str,
     namesrv_addr: str,
     message_listener: Optional[MessageListenerConcurrently] = None,
-    **kwargs: dict[str, Any],
+    **kwargs: Any,
 ) -> ConcurrentConsumer:
     """
     创建并发消费者的便利函数
@@ -167,7 +167,7 @@ def create_concurrent_consumer(
     consumer_group: str,
     namesrv_addr: str,
     message_listener: Optional[MessageListenerConcurrently] = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> ConcurrentConsumer:
     """
     创建并发消费者的别名函数

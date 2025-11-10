@@ -37,8 +37,12 @@ class RouteInfo:
     topic_route_data: TopicRouteData
     last_update_time: float = field(default_factory=time.time)
 
-    # 预构建的队列列表，提升性能
+    # 预构建的队列列表，提升性能，用于写
     available_queues: list[tuple[MessageQueue, BrokerData]] = field(
+        default_factory=list
+    )
+    # 预构建的队列列表，提升性能，用于订阅
+    subscribe_message_queues: list[tuple[MessageQueue, BrokerData]] = field(
         default_factory=list
     )
 
@@ -68,6 +72,7 @@ class RouteInfo:
 
         # 预构建所有可用的队列列表
         available_queues: list[tuple[MessageQueue, BrokerData]] = []
+        subscribe_message_queues: list[tuple[MessageQueue, BrokerData]] = []
 
         # 构建broker名称到broker_data的映射，提升查找性能
         broker_map: dict[str, BrokerData] = {
@@ -91,7 +96,18 @@ class RouteInfo:
                 )
                 available_queues.append((message_queue, broker_data))
 
+            # 为每个订阅队列创建MessageQueue
+            for queue_id in range(queue_data.read_queue_nums):
+                message_queue = MessageQueue(
+                    topic=topic,
+                    broker_name=queue_data.broker_name,
+                    queue_id=queue_id,
+                )
+                subscribe_message_queues.append((message_queue, broker_data))
+
         route_info.available_queues = available_queues
+        route_info.subscribe_message_queues = subscribe_message_queues
+
         return route_info
 
 

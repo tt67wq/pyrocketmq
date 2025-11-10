@@ -5,16 +5,8 @@ RocketMQ远程命令工厂和构建器
 import json
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
-from pyrocketmq.model.message_queue import MessageQueue
-
-from .command import RemotingCommand
-from .enums import (
-    TRANSACTION_PREPARED_TYPE,
-    FlagType,
-    LanguageCode,
-    RequestCode,
-)
 from pyrocketmq.model.headers import (
     CheckTransactionStateRequestHeader,
     ConsumeMessageDirectlyHeader,
@@ -22,6 +14,7 @@ from pyrocketmq.model.headers import (
     CreateTopicRequestHeader,
     DeleteTopicRequestHeader,
     EndTransactionRequestHeader,
+    GetConsumerListRequestHeader,
     GetConsumerRunningInfoHeader,
     GetMaxOffsetRequestHeader,
     GetRouteInfoRequestHeader,
@@ -35,7 +28,15 @@ from pyrocketmq.model.headers import (
     SendMessageRequestV2Header,
     UpdateConsumerOffsetRequestHeader,
     ViewMessageRequestHeader,
-    GetConsumerListRequestHeader,
+)
+from pyrocketmq.model.message_queue import MessageQueue
+
+from .command import RemotingCommand
+from .enums import (
+    TRANSACTION_PREPARED_TYPE,
+    FlagType,
+    LanguageCode,
+    RequestCode,
 )
 from .heart_beat import HeartbeatData
 from .message import Message, MessageProperty
@@ -358,7 +359,7 @@ class RemotingRequestFactory:
         body: bytes,
         queue_id: int = 0,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建发送消息请求
 
@@ -414,7 +415,7 @@ class RemotingRequestFactory:
         body: bytes,
         queue_id: int = 0,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建发送消息V2请求（使用单字母字段名）
 
@@ -470,7 +471,7 @@ class RemotingRequestFactory:
         queue_id: int,
         queue_offset: int,
         max_msg_nums: int,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建拉取消息请求
 
@@ -653,7 +654,7 @@ class RemotingRequestFactory:
             心跳请求命令
         """
         # 将HeartbeatData转换为JSON格式的body
-        heartbeat_dict = heartbeat_data.to_dict()
+        heartbeat_dict: dict[str, Any] = heartbeat_data.to_dict()
         body = json.dumps(heartbeat_dict).encode("utf-8")
 
         return RemotingCommand(
@@ -669,7 +670,7 @@ class RemotingRequestFactory:
         tran_state_table_offset: int,
         commit_log_offset: int,
         commit_or_rollback: int,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建结束事务请求
 
@@ -700,7 +701,7 @@ class RemotingRequestFactory:
 
     @staticmethod
     def create_check_transaction_state_request(
-        tran_state_table_offset: int, commit_log_offset: int, **kwargs
+        tran_state_table_offset: int, commit_log_offset: int, **kwargs: Any
     ) -> RemotingCommand:
         """创建检查事务状态请求
 
@@ -732,7 +733,7 @@ class RemotingRequestFactory:
         delay_level: int,
         origin_msg_id: str,
         origin_topic: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建消费者发送消息回退请求
 
@@ -817,7 +818,7 @@ class RemotingRequestFactory:
         )
 
     @staticmethod
-    def create_create_topic_request(topic: str, **kwargs) -> RemotingCommand:
+    def create_create_topic_request(topic: str, **kwargs: Any) -> RemotingCommand:
         """创建主题请求
 
         Args:
@@ -955,7 +956,7 @@ class RemotingRequestFactory:
         body: bytes,
         queue_id: int = 0,
         properties: dict[str, str] | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> RemotingCommand:
         """创建发送批量消息请求
 

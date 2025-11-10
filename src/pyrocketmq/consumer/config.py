@@ -253,7 +253,7 @@ class ConsumerConfig:
 
 
 def create_consumer_config(
-    consumer_group: str, namesrv_addr: str, **kwargs
+    consumer_group: str, namesrv_addr: str, **kwargs: Any
 ) -> ConsumerConfig:
     """
     创建Consumer配置的便利函数
@@ -295,7 +295,7 @@ def create_consumer_config(
     )
 
 
-def create_config(**kwargs) -> ConsumerConfig:
+def create_config(**kwargs: Any) -> ConsumerConfig:
     """
     创建自定义配置
 

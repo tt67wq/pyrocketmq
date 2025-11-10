@@ -49,7 +49,7 @@ class OffsetStoreFactory:
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
         auto_start: bool = True,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> OffsetStore:
         """创建偏移量存储实例
 
@@ -224,7 +224,7 @@ class OffsetStoreManager:
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
-        **kwargs: dict[str, Any],
+        **kwargs: Any,
     ) -> OffsetStore:
         """获取或创建偏移量存储实例
 
@@ -511,7 +511,7 @@ def create_offset_store(
     store_path: str = "~/.rocketmq/offsets",
     persist_interval: int = 5000,
     persist_batch_size: int = 10,
-    **kwargs: dict[str, Any],
+    **kwargs: Any,
 ) -> OffsetStore:
     """便捷函数：创建偏移量存储实例
 

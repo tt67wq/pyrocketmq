@@ -27,7 +27,7 @@ class MessageQueue:
         """详细字符串表示"""
         return f"MessageQueue(topic='{self.topic}', broker_name='{self.broker_name}', queue_id={self.queue_id})"
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: "MessageQueue") -> bool:
         """相等性比较"""
         if not isinstance(other, MessageQueue):
             return False

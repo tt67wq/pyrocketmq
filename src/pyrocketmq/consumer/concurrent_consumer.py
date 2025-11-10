@@ -17,7 +17,7 @@ ConcurrentConsumer是pyrocketmq的核心消费者实现，支持高并发消息�
 import queue
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 # pyrocketmq导入
 from pyrocketmq.broker import BrokerManager
@@ -34,9 +34,8 @@ from pyrocketmq.consumer.errors import (
 )
 from pyrocketmq.consumer.listener import MessageListenerConcurrently
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
-from pyrocketmq.consumer.subscription_manager import SubscriptionManager
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import ConsumeFromWhere, MessageModel
+from pyrocketmq.model import MessageModel, TopicRouteData
 from pyrocketmq.model.client_data import MessageSelector
 from pyrocketmq.model.message_ext import MessageExt
 from pyrocketmq.model.message_queue import MessageQueue
@@ -97,22 +96,26 @@ class ConcurrentConsumer(BaseConsumer):
             raise ValueError(f"Unsupported message model: {self._config.message_model}")
 
         # 初始化核心组件
-        self._name_server_manager = create_nameserver_manager(self._config.namesrv_addr)
-        self._broker_manager = BrokerManager(DEFAULT_CONFIG)
+        self._name_server_manager: NameServerManager = create_nameserver_manager(
+            self._config.namesrv_addr
+        )
+        self._broker_manager: BrokerManager = BrokerManager(DEFAULT_CONFIG)
 
         # 创建偏移量存储
         self._offset_store = OffsetStoreFactory.create_offset_store(
             consumer_group=self._config.consumer_group,
-            namesrv_addr=self._config.namesrv_addr,
             message_model=self._config.message_model,
+            namesrv_manager=self._name_server_manager,
             broker_manager=self._broker_manager,
         )
 
         # 创建消费起始位置管理器
-        self._consume_from_where_manager = ConsumeFromWhereManager(
-            consume_group=self._config.consumer_group,
-            namesrv_manager=self._name_server_manager,
-            broker_manager=self._broker_manager,
+        self._consume_from_where_manager: ConsumeFromWhereManager = (
+            ConsumeFromWhereManager(
+                consume_group=self._config.consumer_group,
+                namesrv_manager=self._name_server_manager,
+                broker_manager=self._broker_manager,
+            )
         )
 
         # 创建队列分配策略
@@ -200,12 +203,14 @@ class ConcurrentConsumer(BaseConsumer):
                 self._offset_store.start()
 
                 # 创建线程池
+                max_workers: int = self._config.consume_thread_max
+                pull_workers: int = min(self._config.consume_thread_max, 10)
                 self._consume_executor = ThreadPoolExecutor(
-                    max_workers=self._config.consume_thread_max,
+                    max_workers=max_workers,
                     thread_name_prefix=f"consume-{self._config.consumer_group}",
                 )
                 self._pull_executor = ThreadPoolExecutor(
-                    max_workers=min(self._config.consume_thread_max, 10),
+                    max_workers=pull_workers,
                     thread_name_prefix=f"pull-{self._config.consumer_group}",
                 )
 
@@ -366,7 +371,7 @@ class ConcurrentConsumer(BaseConsumer):
             )
 
             # 获取所有订阅的Topic
-            topics = self._subscription_manager.get_topics()
+            topics: list[str] = self._subscription_manager.get_topics()
             if not topics:
                 logger.debug("No topics subscribed, skipping rebalance")
                 return
@@ -375,8 +380,14 @@ class ConcurrentConsumer(BaseConsumer):
             all_queues: list[MessageQueue] = []
             for topic in topics:
                 try:
-                    route_data = self._name_server_manager.get_route_data(topic)
-                    if route_data and route_data.message_queues:
+                    route_data: TopicRouteData | None = (
+                        self._name_server_manager.get_topic_route(topic)
+                    )
+                    if (
+                        route_data
+                        and hasattr(route_data, "message_queues")
+                        and route_data.queue_data_list
+                    ):
                         all_queues.extend(route_data.message_queues)
                 except Exception as e:
                     logger.warning(
@@ -392,7 +403,7 @@ class ConcurrentConsumer(BaseConsumer):
                 return
 
             # 执行队列分配（这里简化处理，实际需要获取所有消费者信息）
-            allocated_queues = self._allocate_queues(all_queues)
+            allocated_queues: list[MessageQueue] = self._allocate_queues(all_queues)
 
             # 更新分配的队列
             self._update_assigned_queues(allocated_queues)
@@ -441,20 +452,20 @@ class ConcurrentConsumer(BaseConsumer):
             new_queues: 新分配的队列列表
         """
         with self._lock:
-            old_queues = set(self._assigned_queues.keys())
-            new_queue_set = set(new_queues)
+            old_queues: set[MessageQueue] = set(self._assigned_queues.keys())
+            new_queue_set: set[MessageQueue] = set(new_queues)
 
             # 停止不再分配的队列的拉取任务
-            removed_queues = old_queues - new_queue_set
+            removed_queues: set[MessageQueue] = old_queues - new_queue_set
             for queue in removed_queues:
                 if queue in self._pull_tasks:
-                    future = self._pull_tasks.pop(queue)
+                    future: Future = self._pull_tasks.pop(queue)
                     if future and not future.done():
                         future.cancel()
                 self._assigned_queues.pop(queue, None)
 
             # 启动新分配队列的拉取任务
-            added_queues = new_queue_set - old_queues
+            added_queues: set[MessageQueue] = new_queue_set - old_queues
             for queue in added_queues:
                 self._assigned_queues[queue] = 0  # 初始化偏移量为0，后续会更新
 
@@ -517,15 +528,17 @@ class ConcurrentConsumer(BaseConsumer):
         while self._is_running:
             try:
                 # 获取当前偏移量
-                current_offset = self._assigned_queues.get(message_queue, 0)
+                current_offset: int = self._assigned_queues.get(message_queue, 0)
 
                 # 拉取消息
-                messages = self._pull_messages(message_queue, current_offset)
+                messages: list[MessageExt] = self._pull_messages(
+                    message_queue, current_offset
+                )
 
                 if messages:
                     # 更新偏移量
-                    last_message = messages[-1]
-                    new_offset = last_message.queue_offset + len(messages)
+                    last_message: MessageExt = messages[-1]
+                    new_offset: int = last_message.queue_offset + len(messages)
                     self._assigned_queues[message_queue] = new_offset
 
                     # 将消息放入处理队列
@@ -538,7 +551,8 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 控制拉取频率
                 if self._config.pull_interval > 0:
-                    time.sleep(self._config.pull_interval / 1000.0)
+                    sleep_time: float = self._config.pull_interval / 1000.0
+                    time.sleep(sleep_time)
 
             except Exception as e:
                 logger.error(
@@ -577,7 +591,9 @@ class ConcurrentConsumer(BaseConsumer):
             with self._broker_manager.connection(
                 message_queue.broker_name
             ) as broker_client:
-                result = broker_client.pull_message(
+                from pyrocketmq.broker.broker_client import PullResult
+
+                result: PullResult | None = broker_client.pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
@@ -633,14 +649,16 @@ class ConcurrentConsumer(BaseConsumer):
             try:
                 # 从处理队列获取消息
                 try:
+                    messages: list[MessageExt]
+                    message_queue: MessageQueue
                     messages, message_queue = self._process_queue.get(timeout=1.0)
                 except queue.Empty:
                     continue
 
                 # 处理消息
-                start_time = time.time()
-                success = self._consume_message(messages, message_queue)
-                duration = time.time() - start_time
+                start_time: float = time.time()
+                success: bool = self._consume_message(messages, message_queue)
+                duration: float = time.time() - start_time
 
                 self._stats["consume_duration_total"] += duration
 
@@ -650,8 +668,8 @@ class ConcurrentConsumer(BaseConsumer):
                 # 更新偏移量
                 if success:
                     try:
-                        last_message = messages[-1]
-                        new_offset = last_message.queue_offset + len(messages)
+                        last_message: MessageExt = messages[-1]
+                        new_offset: int = last_message.queue_offset + len(messages)
                         self._offset_store.update_offset(message_queue, new_offset)
                     except Exception as e:
                         logger.warning(
@@ -686,8 +704,8 @@ class ConcurrentConsumer(BaseConsumer):
             self._consume_executor.shutdown(wait=True)
 
             # 等待处理队列为空
-            timeout = 30  # 30秒超时
-            start_time = time.time()
+            timeout: int = 30  # 30秒超时
+            start_time: float = time.time()
             while (
                 not self._process_queue.empty() and (time.time() - start_time) < timeout
             ):
@@ -831,22 +849,23 @@ class ConcurrentConsumer(BaseConsumer):
         Returns:
             dict: 统计信息字典
         """
-        uptime = time.time() - self._stats.get("start_time", time.time())
+        uptime: float = time.time() - self._stats.get("start_time", time.time())
+        messages_consumed: int = self._stats["messages_consumed"]
+        pull_requests: int = self._stats["pull_requests"]
 
         return {
             **self._stats,
             "uptime_seconds": uptime,
             "assigned_queues": len(self._assigned_queues),
             "avg_consume_duration": (
-                self._stats["consume_duration_total"]
-                / max(self._stats["messages_consumed"], 1)
+                self._stats["consume_duration_total"] / max(messages_consumed, 1)
             ),
             "pull_success_rate": (
-                self._stats["pull_successes"] / max(self._stats["pull_requests"], 1)
+                self._stats["pull_successes"] / max(pull_requests, 1)
             ),
             "consume_success_rate": (
-                (self._stats["messages_consumed"] - self._stats["messages_failed"])
-                / max(self._stats["messages_consumed"], 1)
+                (messages_consumed - self._stats["messages_failed"])
+                / max(messages_consumed, 1)
             ),
         }
 

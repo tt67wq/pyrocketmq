@@ -4,7 +4,7 @@ RocketMQ心跳数据结构定义
 """
 
 from dataclasses import dataclass, field
-
+from typing import Any
 
 from .client_data import ConsumerData, ProducerData
 
@@ -24,7 +24,7 @@ class HeartbeatData:
         default_factory=list
     )  # 消费者数据集合
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典格式，用于JSON序列化"""
         return {
             "clientID": self.client_id,
@@ -37,7 +37,7 @@ class HeartbeatData:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "HeartbeatData":
+    def from_dict(cls, data: dict[str, Any]) -> "HeartbeatData":
         """从字典创建实例"""
         producer_data_set = [
             ProducerData.from_dict(producer_data)

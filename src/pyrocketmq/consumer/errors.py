@@ -70,9 +70,17 @@ class ConsumerStartError(ConsumerError):
     网络连接失败、权限问题等。
     """
 
-    def __init__(self, message: str, cause: Exception | None = None):
+    def __init__(
+        self,
+        message: str,
+        context: dict[str, Any] | None = None,
+        cause: Exception | None = None,
+    ):
         super().__init__(
-            message=message, error_code="CONSUMER_START_ERROR", cause=cause
+            message=message,
+            error_code="CONSUMER_START_ERROR",
+            context=context,
+            cause=cause,
         )
 
 
@@ -84,9 +92,17 @@ class ConsumerShutdownError(ConsumerError):
     网络断开异常等。
     """
 
-    def __init__(self, message: str, cause: Exception | None = None):
+    def __init__(
+        self,
+        message: str,
+        context: dict[str, Any] | None = None,
+        cause: Exception | None = None,
+    ):
         super().__init__(
-            message=message, error_code="CONSUMER_SHUTDOWN_ERROR", cause=cause
+            message=message,
+            error_code="CONSUMER_SHUTDOWN_ERROR",
+            context=context,
+            cause=cause,
         )
 
 

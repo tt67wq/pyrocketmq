@@ -23,6 +23,7 @@ asyncio_mode = "auto"
 typeCheckingMode = "strict"
 reportUnknownVariableType = false
 reportExplicitAny = false
+reportUnnecessaryIsInstance = false
 executionEnvironments = [
     {"root" = ".", "extraPaths" = ["src"]}
 ]
