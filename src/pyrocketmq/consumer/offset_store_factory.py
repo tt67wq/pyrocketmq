@@ -16,6 +16,7 @@ from pyrocketmq.consumer.local_offset_store import LocalOffsetStore
 from pyrocketmq.consumer.offset_store import OffsetStore
 from pyrocketmq.consumer.remote_offset_store import RemoteOffsetStore
 from pyrocketmq.logging import get_logger
+from pyrocketmq.nameserver import NameServerManager
 
 logger = get_logger(__name__)
 
@@ -41,8 +42,8 @@ class OffsetStoreFactory:
     @staticmethod
     def create_offset_store(
         consumer_group: str,
-        namesrv_addr: str,
-        message_model: MessageModel,
+        message_model: str,
+        namesrv_manager: NameServerManager | None = None,
         broker_manager: BrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
@@ -143,6 +144,8 @@ class OffsetStoreFactory:
             # 集群模式：使用远程存储
             if not broker_manager:
                 raise ValueError("Broker manager is required for clustering mode")
+            if not namesrv_manager:
+                raise ValueError("Nameserver manager is required for clustering mode")
 
             logger.info(
                 f"Creating RemoteOffsetStore for consumer group: {consumer_group}"
@@ -150,7 +153,7 @@ class OffsetStoreFactory:
 
             offset_store = RemoteOffsetStore(
                 consumer_group=consumer_group,
-                namesrv_addr=namesrv_addr,
+                nameserver_manager=namesrv_manager,
                 broker_manager=broker_manager,
                 persist_interval=persist_interval,
                 persist_batch_size=persist_batch_size,
@@ -215,13 +218,13 @@ class OffsetStoreManager:
     def get_or_create_offset_store(
         self,
         consumer_group: str,
-        namesrv_addr: str,
-        message_model: MessageModel,
+        message_model: str,
+        namesrv_manager: NameServerManager | None = None,
         broker_manager: BrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
         persist_batch_size: int = 10,
-        **kwargs,
+        **kwargs: dict[str, Any],
     ) -> OffsetStore:
         """获取或创建偏移量存储实例
 
@@ -261,9 +264,9 @@ class OffsetStoreManager:
             if key not in self._offset_stores:
                 # 创建新的OffsetStore实例
                 offset_store = OffsetStoreFactory.create_offset_store(
-                    namesrv_addr=namesrv_addr,
                     consumer_group=consumer_group,
                     message_model=message_model,
+                    namesrv_manager=namesrv_manager,
                     broker_manager=broker_manager,
                     store_path=store_path,
                     persist_interval=persist_interval,
@@ -502,13 +505,13 @@ def get_offset_store_manager() -> OffsetStoreManager:
 
 def create_offset_store(
     consumer_group: str,
-    namesrv_addr: str,
-    message_model: MessageModel,
+    message_model: str,
+    namesrv_manager: NameServerManager | None = None,
     broker_manager: BrokerManager | None = None,
     store_path: str = "~/.rocketmq/offsets",
     persist_interval: int = 5000,
     persist_batch_size: int = 10,
-    **kwargs,
+    **kwargs: dict[str, Any],
 ) -> OffsetStore:
     """便捷函数：创建偏移量存储实例
 
@@ -555,7 +558,7 @@ def create_offset_store(
     manager = get_offset_store_manager()
     return manager.get_or_create_offset_store(
         consumer_group=consumer_group,
-        namesrv_addr=namesrv_addr,
+        namesrv_manager=namesrv_manager,
         message_model=message_model,
         broker_manager=broker_manager,
         store_path=store_path,
@@ -652,7 +655,7 @@ def get_offset_store_metrics() -> dict[str, dict[str, Any]]:
 
 def validate_offset_store_config(
     consumer_group: str,
-    message_model: MessageModel,
+    message_model: str,
     store_path: str = "~/.rocketmq/offsets",
 ) -> bool:
     """验证OffsetStore配置的有效性
@@ -703,7 +706,7 @@ def validate_offset_store_config(
         ...     store = create_offset_store(...)
     """
     # 验证消费者组名称
-    if not consumer_group or not isinstance(consumer_group, str):
+    if not consumer_group:
         logger.error("Consumer group must be a non-empty string")
         return False
 
