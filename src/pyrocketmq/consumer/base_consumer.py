@@ -461,7 +461,9 @@ class BaseConsumer(ABC):
                 },
             )
 
-            # 调用消息监听器处理消息
+            # TODO
+            # 将messages按照config.consume_batch_size切分后，在线程池中并行执行_message_listener.consume_message
+            # 线程池大小需要遵守config中consume_thread_min和consume_thread_max
             result = self._message_listener.consume_message(messages, context)
             success: bool = ConsumeResult.is_success(result)
 

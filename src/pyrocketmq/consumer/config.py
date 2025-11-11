@@ -44,6 +44,7 @@ class ConsumerConfig:
     consume_thread_min: int = 20  # 最小消费线程数
     consume_thread_max: int = 64  # 最大消费线程数
     consume_timeout: int = 15  # 消费超时时间(秒)
+    consume_batch_size: int = 1  # 每次消费处理的批次大小
     pull_batch_size: int = 32  # 批量拉取消息数量
     pull_interval: int = 0  # 拉取间隔(毫秒)，0表示持续拉取
 
@@ -93,8 +94,12 @@ class ConsumerConfig:
             raise ValueError("consume_thread_min 必须大于0")
         if self.consume_thread_max < self.consume_thread_min:
             raise ValueError("consume_thread_max 不能小于 consume_thread_min")
+        if self.consume_batch_size <= 0:
+            raise ValueError("consume_batch_size 必须大于0")
         if self.pull_batch_size <= 0:
             raise ValueError("pull_batch_size 必须大于0")
+        if self.pull_batch_size > 1024:
+            raise ValueError("pull_batch_size 不能超过1024")
         if self.max_reconsume_times < 0:
             raise ValueError("max_reconsume_times 不能为负数")
         if self.consume_timeout <= 0:
@@ -132,8 +137,13 @@ class ConsumerConfig:
             self.consume_thread_min = int(os.getenv("ROCKETMQ_CONSUME_THREAD_MIN", 20))
         if os.getenv("ROCKETMQ_CONSUME_THREAD_MAX"):
             self.consume_thread_max = int(os.getenv("ROCKETMQ_CONSUME_THREAD_MAX", 64))
+        if os.getenv("ROCKETMQ_CONSUME_BATCH_SIZE"):
+            self.consume_batch_size = int(os.getenv("ROCKETMQ_CONSUME_BATCH_SIZE", 1))
         if os.getenv("ROCKETMQ_PULL_BATCH_SIZE"):
-            self.pull_batch_size = int(os.getenv("ROCKETMQ_PULL_BATCH_SIZE", 32))
+            pull_batch_size_env = int(os.getenv("ROCKETMQ_PULL_BATCH_SIZE", 32))
+            if pull_batch_size_env > 1024:
+                raise ValueError("ROCKETMQ_PULL_BATCH_SIZE 环境变量不能超过1024")
+            self.pull_batch_size = pull_batch_size_env
         if os.getenv("ROCKETMQ_CONSUME_TIMEOUT"):
             self.consume_timeout = int(os.getenv("ROCKETMQ_CONSUME_TIMEOUT", 15))
 
@@ -216,6 +226,7 @@ class ConsumerConfig:
             "consume_thread_min": self.consume_thread_min,
             "consume_thread_max": self.consume_thread_max,
             "consume_timeout": self.consume_timeout,
+            "consume_batch_size": self.consume_batch_size,
             "pull_batch_size": self.pull_batch_size,
             "pull_interval": self.pull_interval,
             "pull_threshold_for_all": self.pull_threshold_for_all,
@@ -247,7 +258,8 @@ class ConsumerConfig:
             f"model={self.message_model}, "
             f"strategy={self.allocate_queue_strategy}, "
             f"threads=({self.consume_thread_min}-{self.consume_thread_max}), "
-            f"batch_size={self.pull_batch_size}"
+            f"consume_batch={self.consume_batch_size}, "
+            f"pull_batch={self.pull_batch_size}"
             f"]"
         )
 
