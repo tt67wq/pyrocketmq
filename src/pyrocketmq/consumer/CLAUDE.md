@@ -2,7 +2,13 @@
 
 ## 模块概述
 
-pyrocketmq Consumer 模块是RocketMQ消息队列的Python消费者实现，提供完整、高性能、可靠的消息消费功能。该模块采用分层架构设计，支持集群消费和广播消费两种模式，具备完整的偏移量管理、订阅管理、消息监听等核心功能。
+pyrocketmq Consumer 模块是RocketMQ消息队列的完整Python消费者实现，提供生产级、高性能、可靠的消息消费功能。该模块采用分层架构设计，基于多线程并发处理，支持集群消费和广播消费两种模式，具备完整的偏移量管理、订阅管理、消息监听、自动重平衡等核心功能。
+
+**🎯 生产就绪**: ConcurrentConsumer已完整实现，可直接用于生产环境部署
+**⚡ 高性能**: 多线程并发架构，支持高吞吐量消息消费
+**🔄 智能管理**: 自动重平衡、智能偏移量管理、完善的错误恢复机制
+**📊 全面监控**: 丰富的性能指标和运行状态监控
+**🛡️ 企业级**: 完整的异常体系、资源管理、优雅关闭机制
 
 ### 核心特性
 - **完整的消费模式支持**: 集群消费（多实例协同）和广播消费（独立消费）
@@ -540,7 +546,280 @@ print(f"最早偏移量: {offset2}")
 print(f"时间戳偏移量: {offset3}")
 ```
 
-### 8. 便捷API (全局函数)
+### 8. 并发消费者 (concurrent_consumer.py)
+
+#### ConcurrentConsumer - 完整的并发消息消费者实现
+
+**概述**
+ConcurrentConsumer是Consumer模块的完整实现，提供高性能、可靠的消息消费功能。支持多线程并发拉取和处理消息，具备完整的生命周期管理、队列重平衡、偏移量管理等功能。
+
+**核心特性**
+- **多线程并发**: 每个队列独立的拉取线程 + 消费线程池并行处理
+- **自动重平衡**: 支持消费者组动态扩缩容，自动队列重新分配
+- **智能偏移量管理**: 支持集群模式（Broker存储）和广播模式（本地存储）
+- **完整的监控指标**: 丰富的性能指标和运行状态监控
+- **企业级异常处理**: 完善的错误处理、重试机制和恢复策略
+- **生命周期管理**: 完整的启动、运行、关闭流程管理
+
+**架构设计**
+```
+ConcurrentConsumer
+├── 拉取线程池 (Pull Thread Pool)
+│   ├── 每个队列独立的拉取线程
+│   ├── _pull_messages_loop: 持续拉取消息
+│   └── _get_or_initialize_offset: 智能偏移量初始化
+├── 消费线程池 (Consume Thread Pool)
+│   ├── 并发消息处理
+│   ├── _consume_messages_loop: 消费处理循环
+│   └── MessageListener: 用户消息处理逻辑
+├── 重平衡管理 (Rebalance Manager)
+│   ├── _rebalance_loop: 重平衡检查
+│   ├── _allocate_queues: 队列分配策略
+│   └── 队列分配通知机制
+├── 偏移量管理 (Offset Management)
+│   ├── OffsetStore: 偏移量存储抽象
+│   ├── RemoteOffsetStore: 集群模式
+│   └── LocalOffsetStore: 广播模式
+└── 监控指标 (Metrics)
+    ├── 拉取统计: 成功率、数量、延迟
+    ├── 消费统计: 成功率、数量、并发度
+    ├── 重平衡统计: 次数、耗时、队列变化
+    └── 状态监控: 线程状态、队列状态、连接状态
+```
+
+**主要方法**
+
+##### 生命周期方法
+```python
+def start(self) -> None:
+    """启动消费者实例
+    
+    启动步骤：
+    1. 初始化NameServer和Broker连接
+    2. 加载历史订阅和偏移量信息
+    3. 启动重平衡监控线程
+    4. 启动心跳监控线程
+    5. 为分配的队列启动拉取线程
+    6. 启动消息处理线程池
+    """
+
+def shutdown(self) -> None:
+    """关闭消费者实例
+    
+    优雅关闭步骤：
+    1. 停止接收新消息
+    2. 等待正在处理的消息完成
+    3. 持久化最后偏移量
+    4. 停止所有线程池
+    5. 关闭网络连接
+    6. 清理资源
+    """
+```
+
+##### 订阅管理方法
+```python
+def subscribe(self, topic: str, selector: MessageSelector) -> None:
+    """订阅主题
+    
+    Args:
+        topic: 主题名称
+        selector: 消息选择器（标签选择器或SQL选择器）
+    """
+
+def unsubscribe(self, topic: str) -> None:
+    """取消订阅主题
+    """
+```
+
+##### 核心处理方法
+```python
+def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
+    """消息拉取循环（每个队列独立线程）
+    
+    核心逻辑：
+    1. 获取或初始化消费偏移量
+    2. 从Broker拉取批量消息
+    3. 更新本地偏移量缓存
+    4. 将消息放入处理队列
+    5. 控制拉取频率
+    """
+
+def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
+    """获取或初始化消费偏移量
+    
+    智能偏移量策略：
+    - 如果本地偏移量不为0，直接使用
+    - 如果为0（首次消费），根据consume_from_where策略获取：
+      * CONSUME_FROM_LAST_OFFSET: 从最新偏移量开始
+      * CONSUME_FROM_FIRST_OFFSET: 从最早偏移量开始  
+      * CONSUME_FROM_TIMESTAMP: 从指定时间戳开始
+    """
+```
+
+**使用示例**
+
+##### 基础并发消费
+```python
+from pyrocketmq.consumer import create_consumer, MessageListenerConcurrently, ConsumeResult
+from pyrocketmq.consumer.selector import create_tag_selector
+
+class OrderProcessor(MessageListenerConcurrently):
+    def consume_message_concurrently(self, messages, context):
+        for message in messages:
+            try:
+                order_data = json.loads(message.body.decode())
+                print(f"处理订单: {order_data['order_id']}")
+                # 业务处理逻辑
+                process_order(order_data)
+                return ConsumeResult.SUCCESS
+            except Exception as e:
+                print(f"订单处理失败: {e}")
+                return ConsumeResult.RECONSUME_LATER
+
+# 创建消费者
+consumer = create_consumer(
+    consumer_group="order_processor_group",
+    namesrv_addr="localhost:9876",
+    message_listener=OrderProcessor()
+)
+
+# 订阅主题并启动
+consumer.subscribe("order_topic", create_tag_selector("*"))
+consumer.start()
+
+try:
+    # 保持消费者运行
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print(" shutting down consumer...")
+    consumer.shutdown()
+```
+
+##### 高级配置消费
+```python
+from pyrocketmq.consumer import create_consumer_with_config, ConsumerConfig
+from pyrocketmq.consumer.config import MessageModel, ConsumeFromWhere
+
+# 生产环境配置
+config = ConsumerConfig(
+    consumer_group="prod_consumer_group",
+    namesrv_addr="broker1:9876;broker2:9876",
+    message_model=MessageModel.CLUSTERING,
+    consume_from_where=ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET,
+    
+    # 性能配置
+    consume_thread_max=50,          # 最大消费线程数
+    pull_batch_size=64,             # 批量拉取大小
+    consume_message_batch_max_size=10, # 批量消费大小
+    pull_interval=0,                # 拉取间隔(毫秒)
+    
+    # 流量控制
+    pull_threshold_for_all=50000,   # 总消息拉取阈值
+    pull_threshold_size_for_all=100, # 总消息大小阈值(MB)
+    consume_concurrently_max_span=2000, # 并发消费最大跨度
+    
+    # 超时配置
+    consumer_timeout_millis_when_suspend=1000,
+    consumer_timeout_millis_send_message=3000,
+    consumer_timeout_millis_of_request=20000,
+    
+    # 偏移量管理
+    auto_commit_interval=5000,
+    persist_consumer_offset_interval=10000,
+    offset_store_recovery_threshold=0.8
+)
+
+# 广播模式消费配置（每个消费者独立消费所有消息）
+broadcast_config = ConsumerConfig(
+    consumer_group="notification_group",
+    namesrv_addr="localhost:9876",
+    message_model=MessageModel.BROADCASTING,
+    consume_from_where=ConsumeFromWhere.CONSUME_FROM_FIRST_OFFSET,
+    store_path="/tmp/notification_offsets"
+)
+
+# 创建消费者
+consumer = create_consumer_with_config(config, NotificationListener())
+consumer.subscribe("notification_topic", create_tag_selector("alert_*"))
+consumer.start()
+```
+
+##### 顺序消息消费
+```python
+from pyrocketmq.consumer import MessageListenerOrderly
+
+class UserMessageProcessor(MessageListenerOrderly):
+    def consume_message_orderly(self, messages, context):
+        for message in messages:
+            user_id = message.get_property("user_id")
+            action = json.loads(message.body.decode())
+            
+            # 保证同一用户的消息顺序处理
+            if action['type'] == 'create':
+                create_user_account(action['data'])
+            elif action['type'] == 'update':
+                update_user_profile(action['data'])
+            elif action['type'] == 'delete':
+                delete_user_account(action['data'])
+        
+        return ConsumeResult.SUCCESS
+
+# 使用同一队列选择器确保顺序性
+from pyrocketmq.producer import MessageHashSelector
+# 在Producer端使用相同分片键确保消息在同一队列
+```
+
+**监控和调试**
+```python
+# 获取消费者统计信息
+stats = consumer.get_stats()
+print(f"拉取成功次数: {stats['pull_successes']}")
+print(f"拉取失败次数: {stats['pull_failures']}")
+print(f"消费消息总数: {stats['messages_consumed']}")
+print(f"当前队列数: {stats['assigned_queues_count']}")
+print(f"运行时间(秒): {stats['uptime_seconds']}")
+
+# 检查消费者状态
+if consumer.is_running():
+    print("消费者正在运行")
+else:
+    print("消费者已停止")
+
+# 获取分配的队列信息
+assigned_queues = consumer.get_assigned_queues()
+for queue in assigned_queues:
+    print(f"分配队列: {queue}")
+```
+
+### 9. 便捷API (全局函数)
+
+#### Consumer创建函数
+```python
+from pyrocketmq.consumer import (
+    create_consumer,
+    create_consumer_with_config,
+    create_concurrent_consumer
+)
+
+# 快速创建消费者
+consumer = create_consumer(
+    consumer_group="quick_group",
+    namesrv_addr="localhost:9876",
+    consume_thread_max=20,
+    pull_batch_size=32
+)
+
+# 使用自定义配置创建
+consumer = create_consumer_with_config(custom_config, message_listener)
+
+# 创建并注册监听器
+consumer = create_consumer(
+    consumer_group="my_group", 
+    namesrv_addr="localhost:9876",
+    message_listener=MyListener()
+)
+```
 
 #### 偏移量存储便捷函数
 ```python
@@ -780,6 +1059,56 @@ for store_key, store_metrics in all_metrics.items():
 - **shutil**: 文件操作（本地存储备份）
 
 ## 版本变更记录
+
+### v2.0.0 (2025-01-11) - ConcurrentConsumer完整实现版本
+**重大更新**: Consumer模块核心实现完成，提供完整可用的消息消费者功能
+
+**新增功能**:
+- ✅ **ConcurrentConsumer完整实现**: 高性能并发消息消费者
+  - 多线程架构: 每队列独立拉取线程 + 消费线程池
+  - 智能偏移量管理: `_get_or_initialize_offset()` 支持三种消费起始策略
+  - 自动重平衡机制: 动态队列分配和消费者组管理
+  - 完整生命周期管理: 优雅启动和关闭流程
+  - 丰富监控指标: 拉取、消费、重平衡等全方位监控
+
+- ✅ **消息拉取循环优化**: 
+  - 重构 `_pull_messages_loop()` 方法，抽取偏移量初始化逻辑
+  - 支持CONSUME_FROM_LAST_OFFSET、CONSUME_FROM_FIRST_OFFSET、CONSUME_FROM_TIMESTAMP策略
+  - 完善的异常处理和恢复机制
+  - 拉取频率控制和流量管理
+
+- ✅ **ConsumerFactory便利函数**:
+  - `create_consumer()`: 快速创建并发消费者
+  - `create_consumer_with_config()`: 使用自定义配置创建消费者
+  - `create_concurrent_consumer()`: 明确命名的并发消费者创建函数
+
+- ✅ **完整的监听器支持**:
+  - MessageListenerConcurrently: 并发消息监听器
+  - MessageListenerOrderly: 顺序消息监听器
+  - 完整的ConsumeResult返回值支持
+
+- ✅ **企业级监控和调试**:
+  - `get_stats()`: 详细的运行统计信息
+  - `get_assigned_queues()`: 当前分配的队列信息
+  - `is_running()`: 消费者运行状态检查
+
+**技术改进**:
+- **多线程安全**: 所有核心操作都经过线程安全设计
+- **资源管理**: 完善的资源清理和内存管理
+- **性能优化**: 批量操作、连接池、缓存机制
+- **错误处理**: 分层异常处理和智能重试
+- **配置灵活性**: 支持所有RocketMQ Consumer配置参数
+
+**使用场景支持**:
+- **集群消费**: 多Consumer实例协同消费，支持负载均衡
+- **广播消费**: 每个Consumer独立消费所有消息
+- **顺序消息**: 保证同一队列消息的顺序处理
+- **高吞吐量**: 多线程并发处理，适合大规模消息消费
+
+**向后兼容性**:
+- 完全兼容现有的配置管理、监听器接口、偏移量存储等组件
+- 所有现有的便利函数和工具类保持不变
+- API设计遵循RocketMQ标准，便于迁移和学习
 
 ### v1.1.0 (2025-01-07) - 文档更新版本
 **更新内容**:
