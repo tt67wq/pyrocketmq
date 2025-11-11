@@ -769,7 +769,7 @@ class ConcurrentConsumer(BaseConsumer):
         while self._is_running:
             try:
                 # 获取当前偏移量
-                current_offset: int = self._assigned_queues.get(message_queue, 0)
+                current_offset: int = self._get_or_initialize_offset(message_queue)
 
                 # 拉取消息
                 messages: list[MessageExt] = self._pull_messages(
@@ -811,6 +811,65 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 拉取失败时等待一段时间再重试
                 time.sleep(1.0)
+
+    def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
+        """获取或初始化消费偏移量。
+
+        如果本地缓存的偏移量为0（首次消费），则根据配置的消费策略
+        从ConsumeFromWhereManager获取正确的初始偏移量。
+
+        Args:
+            message_queue (MessageQueue): 要获取偏移量的消息队列
+
+        Returns:
+            int: 消费偏移量
+
+        Note:
+            - 如果偏移量不为0，直接返回缓存的值
+            - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
+            - 获取失败时使用默认偏移量0，确保消费流程不中断
+        """
+        current_offset: int = self._assigned_queues.get(message_queue, 0)
+
+        # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
+        if current_offset == 0:
+            try:
+                current_offset = self._consume_from_where_manager.get_consume_offset(
+                    message_queue,
+                    self._config.consume_from_where,
+                    self._config.consume_timestamp
+                    if hasattr(self._config, "consume_timestamp")
+                    else 0,
+                )
+                # 更新本地缓存的偏移量
+                self._assigned_queues[message_queue] = current_offset
+
+                logger.info(
+                    f"初始化消费偏移量: {current_offset}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "offset": current_offset,
+                    },
+                )
+            except Exception as e:
+                logger.error(
+                    f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 使用默认偏移量0
+                current_offset = 0
+
+        return current_offset
 
     def _pull_messages(
         self, message_queue: MessageQueue, offset: int
