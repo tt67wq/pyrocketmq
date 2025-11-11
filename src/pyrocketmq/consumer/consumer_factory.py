@@ -11,20 +11,20 @@ Consumer便利函数模块
 作者: pyrocketmq开发团队
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from pyrocketmq.consumer import ConcurrentConsumer
 from pyrocketmq.consumer.config import ConsumerConfig, create_consumer_config
-from pyrocketmq.consumer.listener import MessageListenerConcurrently
+from pyrocketmq.consumer.listener import MessageListener
 from pyrocketmq.logging import get_logger
 
-logger = get_logger(__name__)
+logger: Any = get_logger(__name__)
 
 
 def create_consumer(
     consumer_group: str,
     namesrv_addr: str,
-    message_listener: Optional[MessageListenerConcurrently] = None,
+    message_listener: MessageListener | None = None,
     **kwargs: Any,
 ) -> ConcurrentConsumer:
     """
@@ -66,10 +66,12 @@ def create_consumer(
     """
     try:
         # 创建配置
-        config = create_consumer_config(consumer_group, namesrv_addr, **kwargs)
+        config: ConsumerConfig = create_consumer_config(
+            consumer_group, namesrv_addr, **kwargs
+        )
 
         # 创建消费者
-        consumer = ConcurrentConsumer(config)
+        consumer: ConcurrentConsumer = ConcurrentConsumer(config)
 
         # 注册消息监听器（如果提供）
         if message_listener:
@@ -102,7 +104,7 @@ def create_consumer(
 
 def create_consumer_with_config(
     config: ConsumerConfig,
-    message_listener: Optional[MessageListenerConcurrently] = None,
+    message_listener: MessageListener | None = None,
 ) -> ConcurrentConsumer:
     """
     使用现有配置创建消费者
@@ -133,7 +135,7 @@ def create_consumer_with_config(
             raise ValueError("ConsumerConfig cannot be None")
 
         # 创建消费者
-        consumer = ConcurrentConsumer(config)
+        consumer: ConcurrentConsumer = ConcurrentConsumer(config)
 
         # 注册消息监听器（如果提供）
         if message_listener:
@@ -166,7 +168,7 @@ def create_consumer_with_config(
 def create_concurrent_consumer(
     consumer_group: str,
     namesrv_addr: str,
-    message_listener: Optional[MessageListenerConcurrently] = None,
+    message_listener: MessageListener | None = None,
     **kwargs: Any,
 ) -> ConcurrentConsumer:
     """

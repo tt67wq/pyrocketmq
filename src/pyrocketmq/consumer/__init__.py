@@ -16,7 +16,6 @@ Consumer模块 - 消费者组件
 from pyrocketmq.consumer import (
     create_consumer_config,
     create_offset_store,
-    MessageListenerConcurrently,
     ConsumeResult
 )
 from pyrocketmq.model import MessageModel
@@ -35,11 +34,6 @@ store = await create_offset_store(
 )
 
 # 创建消息监听器
-class MyListener(MessageListenerConcurrently):
-    def consume_message_concurrently(self, messages, context):
-        for msg in messages:
-            print(f"Processing: {msg.body.decode()}")
-        return ConsumeResult.SUCCESS
 ```
 """
 
@@ -62,6 +56,13 @@ from .config import ConsumerConfig, create_config, create_consumer_config
 
 # ==================== 消费起始位置管理 ====================
 from .consume_from_where_manager import ConsumeFromWhereManager
+
+# ==================== Consumer便利工厂函数 ====================
+from .consumer_factory import (
+    create_concurrent_consumer,
+    create_consumer,
+    create_consumer_with_config,
+)
 
 # ==================== 异常类 ====================
 from .errors import (
@@ -94,8 +95,6 @@ from .listener import (
     ConsumeContext,
     ConsumeResult,
     MessageListener,
-    MessageListenerConcurrently,
-    MessageListenerOrderly,
     SimpleMessageListener,
     create_message_listener,
 )
@@ -137,6 +136,10 @@ __all__ = [
     "ConsumerConfig",
     "create_consumer_config",
     "create_config",
+    # Consumer便利工厂函数
+    "create_consumer",
+    "create_consumer_with_config",
+    "create_concurrent_consumer",
     # 偏移量存储
     "OffsetStore",
     "ReadOffsetType",
@@ -154,8 +157,6 @@ __all__ = [
     "SubscriptionConflict",
     # 消息监听器
     "MessageListener",
-    "MessageListenerOrderly",
-    "MessageListenerConcurrently",
     "SimpleMessageListener",
     "ConsumeResult",
     "ConsumeContext",
