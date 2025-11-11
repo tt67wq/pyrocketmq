@@ -109,6 +109,44 @@ class TestRemotingRequestFactory:
         assert command.ext_fields["queueOffset"] == str(queue_offset)
         assert command.ext_fields["maxMsgNums"] == str(max_msg_nums)
 
+        # 验证默认值
+        assert command.ext_fields["sysFlag"] == "0"
+        assert command.ext_fields["commitOffset"] == "0"
+
+    def test_create_pull_message_request_with_sys_flag_and_commit_offset(self):
+        """测试创建拉取消息请求，包含sys_flag和commit_offset参数"""
+        consumer_group = "test_consumer"
+        topic = "test_topic"
+        queue_id = 1
+        queue_offset = 100
+        max_msg_nums = 32
+        sys_flag = 1  # 启用压缩
+        commit_offset = 50
+
+        command = RemotingRequestFactory.create_pull_message_request(
+            consumer_group=consumer_group,
+            topic=topic,
+            queue_id=queue_id,
+            queue_offset=queue_offset,
+            max_msg_nums=max_msg_nums,
+            sys_flag=sys_flag,
+            commit_offset=commit_offset,
+        )
+
+        # 验证基本信息
+        assert command.code == RequestCode.PULL_MESSAGE
+        assert command.language == LanguageCode.PYTHON
+        assert command.flag == FlagType.RPC_TYPE
+
+        # 验证扩展字段
+        assert command.ext_fields["consumerGroup"] == consumer_group
+        assert command.ext_fields["topic"] == topic
+        assert command.ext_fields["queueId"] == str(queue_id)
+        assert command.ext_fields["queueOffset"] == str(queue_offset)
+        assert command.ext_fields["maxMsgNums"] == str(max_msg_nums)
+        assert command.ext_fields["sysFlag"] == str(sys_flag)
+        assert command.ext_fields["commitOffset"] == str(commit_offset)
+
     def test_create_get_consumer_list_request(self):
         """测试创建获取消费者列表请求"""
         consumer_group = "test_consumer"
@@ -130,9 +168,7 @@ class TestRemotingRequestFactory:
         topic = "test_topic"
         queue_id = 1
 
-        command = RemotingRequestFactory.create_get_max_offset_request(
-            topic, queue_id
-        )
+        command = RemotingRequestFactory.create_get_max_offset_request(topic, queue_id)
 
         # 验证基本信息
         assert command.code == RequestCode.GET_MAX_OFFSET
@@ -440,10 +476,8 @@ class TestRemotingRequestFactory:
         consumer_group = "test_consumer"
         client_id = "test_client_id"
 
-        command = (
-            RemotingRequestFactory.create_get_consumer_running_info_request(
-                consumer_group=consumer_group, client_id=client_id
-            )
+        command = RemotingRequestFactory.create_get_consumer_running_info_request(
+            consumer_group=consumer_group, client_id=client_id
         )
 
         # 验证基本信息
@@ -462,13 +496,11 @@ class TestRemotingRequestFactory:
         msg_id = "test_msg_id"
         broker_name = "test_broker"
 
-        command = (
-            RemotingRequestFactory.create_consume_message_directly_request(
-                consumer_group=consumer_group,
-                client_id=client_id,
-                msg_id=msg_id,
-                broker_name=broker_name,
-            )
+        command = RemotingRequestFactory.create_consume_message_directly_request(
+            consumer_group=consumer_group,
+            client_id=client_id,
+            msg_id=msg_id,
+            broker_name=broker_name,
         )
 
         # 验证基本信息

@@ -719,7 +719,9 @@ class AsyncBrokerClient:
         topic: str,
         queue_id: int,
         queue_offset: int,
-        max_msg_nums: int = 32,
+        max_msg_nums: int,
+        sys_flag: int = 0,
+        commit_offset: int = 0,
         **kwargs: Any,
     ) -> PullMessageResult:
         """异步拉取消息
@@ -730,7 +732,9 @@ class AsyncBrokerClient:
             queue_id: 队列ID
             queue_offset: 队列偏移量
             max_msg_nums: 最大拉取消息数量，默认32
-            **kwargs: 其他参数（如sub_expression、sys_flag等）
+            sys_flag: 系统标志位，默认0
+            commit_offset: 提交偏移量，默认0
+            **kwargs: 其他参数（如sub_expression等）
 
         Returns:
             PullMessageResult: 拉取消息结果
@@ -769,6 +773,8 @@ class AsyncBrokerClient:
                 queue_id=queue_id,
                 queue_offset=queue_offset,
                 max_msg_nums=max_msg_nums,
+                sys_flag=sys_flag,
+                commit_offset=commit_offset,
                 **kwargs,
             )
 

@@ -471,6 +471,8 @@ class RemotingRequestFactory:
         queue_id: int,
         queue_offset: int,
         max_msg_nums: int,
+        sys_flag: int,
+        commit_offset: int,
         **kwargs: Any,
     ) -> RemotingCommand:
         """创建拉取消息请求
@@ -481,6 +483,8 @@ class RemotingRequestFactory:
             queue_id: 队列ID
             queue_offset: 队列偏移量
             max_msg_nums: 最大消息数量
+            sys_flag: 系统标志位，默认0
+            commit_offset: 提交偏移量，默认0
             **kwargs: 其他参数
 
         Returns:
@@ -492,6 +496,9 @@ class RemotingRequestFactory:
             queue_id=queue_id,
             queue_offset=queue_offset,
             max_msg_nums=max_msg_nums,
+            sys_flag=sys_flag,
+            commit_offset=commit_offset,
+            suspend_timeout_millis=20 * 1000,
             **kwargs,
         )
 

@@ -912,12 +912,14 @@ class ConcurrentConsumer(BaseConsumer):
             # 使用BrokerManager拉取消息
             with self._broker_manager.connection(broker_address) as conn:
                 self._prepare_consumer_remote(conn)
+                # TODO: build sysflag
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
                     queue_offset=offset,
                     max_num=self._config.pull_batch_size,
+                    sys_flag=0,
                 )
 
                 if result.messages:
