@@ -35,6 +35,7 @@ from pyrocketmq.consumer.errors import (
     ConsumerStartError,
     MessageConsumeError,
 )
+from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
@@ -909,17 +910,21 @@ class ConcurrentConsumer(BaseConsumer):
                     f"Broker address not found for {message_queue.broker_name}"
                 )
 
+            commit_offset: int = self._offset_store.read_offset(
+                message_queue, ReadOffsetType.READ_FROM_MEMORY
+            )
+
             # 使用BrokerManager拉取消息
             with self._broker_manager.connection(broker_address) as conn:
                 self._prepare_consumer_remote(conn)
-                # TODO: build sysflag
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
                     queue_offset=offset,
                     max_num=self._config.pull_batch_size,
-                    sys_flag=0,
+                    sys_flag=self._build_sys_flag(commit_offset=commit_offset > 0),
+                    commit_offset=commit_offset,
                 )
 
                 if result.messages:
@@ -944,6 +949,37 @@ class ConcurrentConsumer(BaseConsumer):
                 offset,
                 cause=e,
             ) from e
+
+    def _build_sys_flag(self, commit_offset: bool):
+        """构建系统标志位
+
+        根据Go语言实现：
+        - bit 0 (0x1): commitOffset 标志
+        - bit 1 (0x2): suspend 标志
+        - bit 2 (0x4): subscription 标志
+        - bit 3 (0x8): classFilter 标志
+
+        Args:
+            commit_offset (bool): 是否提交偏移量
+
+        Returns:
+            int: 系统标志位
+        """
+        flag = 0
+
+        if commit_offset:
+            flag |= 0x1 << 0  # bit 0: 0x1
+
+        # suspend: always true
+        flag |= 0x1 << 1  # bit 1: 0x2
+
+        # subscription: always true
+        flag |= 0x1 << 2  # bit 2: 0x4
+
+        # class_filter: always false
+        # flag |= 0x1 << 3  # bit 3: 0x8
+
+        return flag
 
     # ==================== 内部方法：消息处理 ====================
 

@@ -59,9 +59,6 @@ class MessageSelector:
 
     def __post_init__(self) -> None:
         """后处理，验证选择器参数"""
-        if not self.expression:
-            self.expression = "*"
-
         # 如果表达式为空或"*"，默认为TAG类型
         if self.expression == "*" or self.expression == "":
             self.type = ExpressionType.TAG
@@ -714,7 +711,7 @@ class ConsumerRunningInfo:
         """
         # 解析subscription_data
         subscription_data: dict[SubscriptionData, bool] = {}
-        sub_data_raw: dict[str, Any] = data.get("subscriptionData", {})
+        sub_data_raw: dict[str, dict[str, Any]] = data.get("subscriptionData", {})
         if isinstance(sub_data_raw, dict):
             for _sub_key, sub_value in sub_data_raw.items():
                 if isinstance(sub_value, dict) and "subscriptionData" in sub_value:
