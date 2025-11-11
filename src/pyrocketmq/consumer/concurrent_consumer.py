@@ -765,21 +765,41 @@ class ConcurrentConsumer(BaseConsumer):
                 current_offset: int = self._get_or_initialize_offset(message_queue)
 
                 # 拉取消息
-                messages: list[MessageExt] = self._pull_messages(
+                messages, next_begin_offset = self._pull_messages(
                     message_queue, current_offset
                 )
 
                 if messages:
                     # 更新偏移量
-                    last_message: MessageExt = messages[-1]
-                    new_offset: int = (last_message.queue_offset or 0) + len(messages)
-                    self._assigned_queues[message_queue] = new_offset
+                    self._assigned_queues[message_queue] = next_begin_offset
 
-                    # 将消息放入处理队列
-                    self._process_queue.put((messages, message_queue))
+                    # 按照config.consume_batch_size分割消息批次
+                    batch_size = self._config.consume_batch_size
+                    message_count = len(messages)
+
+                    # 计算批次数量
+                    batch_count = (message_count + batch_size - 1) // batch_size
+
+                    logger.debug(
+                        f"Splitting {message_count} messages into {batch_count} batches",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "message_count": message_count,
+                            "batch_size": batch_size,
+                            "batch_count": batch_count,
+                        },
+                    )
+
+                    # 将消息按批次放入处理队列
+                    for i in range(0, message_count, batch_size):
+                        batch_messages = messages[i : i + batch_size]
+                        self._process_queue.put((batch_messages, message_queue))
 
                     self._stats["pull_successes"] += 1
-                    self._stats["messages_consumed"] += len(messages)
+                    self._stats["messages_consumed"] += message_count
+                    self._stats["pull_requests"] += 1
                 else:
                     self._stats["pull_requests"] += 1
 
@@ -866,7 +886,7 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _pull_messages(
         self, message_queue: MessageQueue, offset: int
-    ) -> list[MessageExt]:
+    ) -> tuple[list[MessageExt], int]:
         """
         从指定队列拉取消息
 
@@ -876,6 +896,7 @@ class ConcurrentConsumer(BaseConsumer):
 
         Returns:
             list[MessageExt]: 拉取到的消息列表
+            next_begin_offset: 下一次拉取的起始偏移量
         """
         try:
             self._stats["pull_requests"] += 1
@@ -899,14 +920,14 @@ class ConcurrentConsumer(BaseConsumer):
                     max_num=self._config.pull_batch_size,
                 )
 
-                if result and result.messages:
-                    return result.messages
+                if result.messages:
+                    return result.messages, result.next_begin_offset
 
-                return []
+                return [], offset
 
         except Exception as e:
             logger.warning(
-                f"Failed to pull messages from {message_queue}: {e}",
+                "Failed to pull messages",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "topic": message_queue.topic,
@@ -963,9 +984,7 @@ class ConcurrentConsumer(BaseConsumer):
                 if success:
                     try:
                         last_message: MessageExt = messages[-1]
-                        new_offset: int = (last_message.queue_offset or 0) + len(
-                            messages
-                        )
+                        new_offset: int = last_message.queue_offset or 0
                         self._offset_store.update_offset(message_queue, new_offset)
                     except Exception as e:
                         logger.warning(
