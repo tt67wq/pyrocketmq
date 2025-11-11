@@ -462,7 +462,21 @@ class BaseConsumer(ABC):
             )
 
             result = self._message_listener.consume_message(messages, context)
-            success: bool = ConsumeResult.is_success(result)
+            if result in [
+                ConsumeResult.COMMIT,
+                ConsumeResult.ROLLBACK,
+                ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT,
+            ]:
+                logger.error(
+                    "Invalid result for concurrent consumer",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": context.topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                    },
+                )
+                return False
 
             logger.info(
                 "Message processing completed",
@@ -472,12 +486,11 @@ class BaseConsumer(ABC):
                     "topic": context.topic,
                     "queue_id": context.queue_id,
                     "result": result.value,
-                    "success": success,
                     "duration": context.get_consume_duration(),
                 },
             )
 
-            return success
+            return result == ConsumeResult.SUCCESS
 
         except Exception as e:
             logger.error(

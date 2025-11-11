@@ -39,6 +39,7 @@ class ConsumerConfig:
     consume_timestamp: int = 0  # 时间戳消费的起始时间(毫秒)
     allocate_queue_strategy: str = AllocateQueueStrategy.AVERAGE  # 队列分配策略
     max_reconsume_times: int = 16  # 最大重试次数
+    suspend_current_queue_time_millis: int = 1000  # 消费失败时挂起队列的时间(毫秒)
 
     # === 性能配置 ===
     consume_thread_min: int = 20  # 最小消费线程数
@@ -72,7 +73,6 @@ class ConsumerConfig:
 
     # === 高级配置 ===
     enable_auto_commit: bool = True  # 是否自动提交偏移量
-    auto_commit_interval: int = 5000  # 自动提交间隔(毫秒)
     enable_message_trace: bool = False  # 是否启用消息追踪
 
     # === 内部配置 ===
@@ -102,6 +102,8 @@ class ConsumerConfig:
             raise ValueError("pull_batch_size 不能超过1024")
         if self.max_reconsume_times < 0:
             raise ValueError("max_reconsume_times 不能为负数")
+        if self.suspend_current_queue_time_millis < 0:
+            raise ValueError("suspend_current_queue_time_millis 不能为负数")
         if self.consume_timeout <= 0:
             raise ValueError("consume_timeout 必须大于0")
 
@@ -114,8 +116,6 @@ class ConsumerConfig:
             raise ValueError("max_cache_size 必须大于0")
         if self.max_retry_times < 0:
             raise ValueError("max_retry_times 不能为负数")
-        if self.auto_commit_interval <= 0:
-            raise ValueError("auto_commit_interval 必须大于0")
 
         # 验证路径配置
         if not self.offset_store_path:
@@ -190,6 +190,10 @@ class ConsumerConfig:
             )
         if os.getenv("ROCKETMQ_MAX_RETRY_TIMES"):
             self.max_retry_times = int(os.getenv("ROCKETMQ_MAX_RETRY_TIMES", 3))
+        if os.getenv("ROCKETMQ_SUSPEND_CURRENT_QUEUE_TIME_MILLIS"):
+            self.suspend_current_queue_time_millis = int(
+                os.getenv("ROCKETMQ_SUSPEND_CURRENT_QUEUE_TIME_MILLIS", 1000)
+            )
 
     @property
     def client_id(self) -> str:
@@ -223,6 +227,7 @@ class ConsumerConfig:
             "consume_timestamp": self.consume_timestamp,
             "allocate_queue_strategy": self.allocate_queue_strategy,
             "max_reconsume_times": self.max_reconsume_times,
+            "suspend_current_queue_time_millis": self.suspend_current_queue_time_millis,
             "consume_thread_min": self.consume_thread_min,
             "consume_thread_max": self.consume_thread_max,
             "consume_timeout": self.consume_timeout,
@@ -243,7 +248,6 @@ class ConsumerConfig:
             "max_retry_times": self.max_retry_times,
             # 高级配置
             "enable_auto_commit": self.enable_auto_commit,
-            "auto_commit_interval": self.auto_commit_interval,
             "enable_message_trace": self.enable_message_trace,
             "client_id": self.client_id,
             "instance_name": self.instance_name,

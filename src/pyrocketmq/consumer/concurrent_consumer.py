@@ -977,6 +977,9 @@ class ConcurrentConsumer(BaseConsumer):
                                 "error": str(e),
                             },
                         )
+                else:
+                    # TODO: send msg back
+                    pass
 
             except Exception as e:
                 logger.error(
