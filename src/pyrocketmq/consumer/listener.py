@@ -28,8 +28,8 @@ class ConsumeResult(Enum):
 
     SUCCESS = "CONSUME_SUCCESS"  # 消费成功，消息确认
     RECONSUME_LATER = "RECONSUME_LATER"  # 稍后重试消费
-    COMMIT = "COMMIT"  # 提交消费(事务消息专用)
-    ROLLBACK = "ROLLBACK"  # 回滚消费(事务消息专用)
+    COMMIT = "COMMIT"  # 提交消费
+    ROLLBACK = "ROLLBACK"  # 回滚消费
     SUSPEND_CURRENT_QUEUE_A_MOMENT = (
         "SUSPEND_CURRENT_QUEUE_A_MOMENT"  # 挂起当前队列片刻
     )

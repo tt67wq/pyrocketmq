@@ -152,7 +152,6 @@ class ConcurrentConsumer(BaseConsumer):
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
-        self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
         self._last_rebalance_time: float = 0.0
 
         # 心跳任务管理
@@ -161,6 +160,10 @@ class ConcurrentConsumer(BaseConsumer):
         )  # 心跳间隔(秒)
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
+
+        # 重平衡任务管理
+        self._rebalance_thread: threading.Thread | None = None
+        self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
 
         # 线程同步事件
         self._rebalance_event: threading.Event = (
@@ -1019,8 +1022,12 @@ class ConcurrentConsumer(BaseConsumer):
         """
         启动定期重平衡任务
         """
-        if self._pull_executor:
-            self._pull_executor.submit(self._rebalance_loop)
+        self._rebalance_thread = threading.Thread(
+            target=self._rebalance_loop,
+            name=f"{self._config.consumer_group}-rebalance-thread",
+            daemon=True,
+        )
+        self._rebalance_thread.start()
 
     def _rebalance_loop(self) -> None:
         """
@@ -1079,8 +1086,12 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _start_heartbeat_task(self) -> None:
         """启动心跳任务"""
-        if self._pull_executor:
-            self._pull_executor.submit(self._heartbeat_loop)
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"{self._config.consumer_group}-heartbeat-thread",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
 
     def _heartbeat_loop(self) -> None:
         """消费者心跳发送循环。
@@ -1295,9 +1306,10 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _shutdown_thread_pools(self) -> None:
         """
-        关闭线程池
+        关闭线程池和专用线程
         """
         try:
+            # 关闭线程池
             if self._pull_executor:
                 self._pull_executor.shutdown(wait=False)
                 self._pull_executor = None
@@ -1306,9 +1318,31 @@ class ConcurrentConsumer(BaseConsumer):
                 self._consume_executor.shutdown(wait=False)
                 self._consume_executor = None
 
+            # 等待专用线程结束
+            self._rebalance_event.set()  # 唤醒重平衡线程
+            self._heartbeat_event.set()  # 唤醒心跳线程
+
+            if self._rebalance_thread and self._rebalance_thread.is_alive():
+                self._rebalance_thread.join(timeout=5.0)
+                if self._rebalance_thread.is_alive():
+                    logger.warning(
+                        "Rebalance thread did not exit gracefully within timeout",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
+                self._rebalance_thread = None
+
+            if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+                self._heartbeat_thread.join(timeout=5.0)
+                if self._heartbeat_thread.is_alive():
+                    logger.warning(
+                        "Heartbeat thread did not exit gracefully within timeout",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
+                self._heartbeat_thread = None
+
         except Exception as e:
             logger.warning(
-                f"Error shutting down thread pools: {e}",
+                f"Error shutting down thread pools and threads: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "error": str(e),
