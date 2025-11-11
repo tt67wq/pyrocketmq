@@ -1860,6 +1860,7 @@ class AsyncBrokerClient:
                 consumer_group=consumer_group,
                 delay_level=delay_level,
                 max_consume_retry_times=max_consume_retry_times,
+                body=message.body,
                 **kwargs,
             )
 

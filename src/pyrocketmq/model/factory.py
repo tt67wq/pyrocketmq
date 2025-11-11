@@ -733,6 +733,7 @@ class RemotingRequestFactory:
         delay_level: int,
         origin_msg_id: str,
         origin_topic: str,
+        body: bytes,
         **kwargs: Any,
     ) -> RemotingCommand:
         """创建消费者发送消息回退请求
@@ -743,6 +744,7 @@ class RemotingRequestFactory:
             delay_level: 延迟级别
             origin_msg_id: 原始消息ID
             origin_topic: 原始主题
+            body: 消息体
             **kwargs: 其他参数
 
         Returns:
@@ -760,6 +762,7 @@ class RemotingRequestFactory:
         return RemotingCommand(
             code=RequestCode.CONSUMER_SEND_MSG_BACK,
             language=LanguageCode.PYTHON,
+            body=body,
             flag=FlagType.RPC_TYPE,
             ext_fields=header.encode(),
         )

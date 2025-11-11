@@ -1923,6 +1923,7 @@ class BrokerClient:
         delay_level: int,
         consumer_group: str,
         max_reconsume_times: int = 16,
+        body: bytes | None = None,
     ) -> None:
         """消费者发送消息回退请求
 
@@ -1931,6 +1932,7 @@ class BrokerClient:
             delay_level: 延迟级别
             consumer_group: 消费者组
             max_reconsume_times: 最大重新消费次数
+            body: 消息体(可选)，如果不提供则使用原消息的body
 
         Raises:
             BrokerConnectionError: 连接错误
@@ -1961,6 +1963,7 @@ class BrokerClient:
                 delay_level=delay_level,
                 origin_msg_id=message_ext.msg_id or "",
                 origin_topic=message_ext.topic,
+                body=message_ext.body,
                 max_reconsume_times=max_reconsume_times,
             )
 
