@@ -472,14 +472,6 @@ class MessageListener(ABC):
     def consume_message(self, messages: List[MessageExt]) -> ConsumeResult:
         """消费消息"""
         pass
-
-class MessageListenerConcurrently(MessageListener):
-    """并发消息监听器"""
-    pass
-
-class MessageListenerOrderly(MessageListener):
-    """顺序消息监听器"""
-    pass
 ```
 
 ### 3. BaseConsumer - 抽象基类

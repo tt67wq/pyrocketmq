@@ -35,7 +35,6 @@ from pyrocketmq.consumer.errors import (
     ConsumerStartError,
     MessageConsumeError,
 )
-from pyrocketmq.consumer.listener import MessageListenerConcurrently
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
@@ -78,10 +77,10 @@ class ConcurrentConsumer(BaseConsumer):
 
     使用示例:
         >>> from pyrocketmq.consumer import ConcurrentConsumer, ConsumerConfig
-        >>> from pyrocketmq.consumer.listener import MessageListenerConcurrently, ConsumeResult
+        >>> from pyrocketmq.consumer.listener import MessageListener, ConsumeResult
         >>>
-        >>> class MyListener(MessageListenerConcurrently):
-        ...     def consume_message_concurrently(self, messages, context):
+        >>> class MyListener(MessageListener):
+        ...     def consume_message(self, messages, context):
         ...         for msg in messages:
         ...             print(f"Processing: {msg.body.decode()}")
         ...         return ConsumeResult.SUCCESS
@@ -206,7 +205,7 @@ class ConcurrentConsumer(BaseConsumer):
         Raises:
             ConsumerStartError: 当以下情况发生时抛出：
                 - 未注册消息监听器
-                - 消息监听器类型不匹配（需要MessageListenerConcurrently）
+                - 消息监听器类型不匹配（需要MessageListener）
                 - 网络连接失败
                 - 线程池创建失败
                 - 其他初始化错误
@@ -234,15 +233,6 @@ class ConcurrentConsumer(BaseConsumer):
                     raise ConsumerStartError(
                         "No message listener registered",
                         context={"consumer_group": self._config.consumer_group},
-                    )
-
-                if not isinstance(self._message_listener, MessageListenerConcurrently):
-                    raise ConsumerStartError(
-                        "ConcurrentConsumer requires MessageListenerConcurrently",
-                        context={
-                            "consumer_group": self._config.consumer_group,
-                            "listener_type": type(self._message_listener).__name__,
-                        },
                     )
 
                 # 启动核心组件

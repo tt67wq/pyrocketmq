@@ -163,6 +163,38 @@ class MessageListener(ABC):
         """
         pass
 
+    def on_success(self, _messages: list[MessageExt], _context: ConsumeContext) -> None:
+        """
+        消息处理成功回调(可选实现)
+
+        当消息成功处理并被确认后调用，可以用于记录成功日志或
+        执行其他后续操作。
+
+        Args:
+            messages: 成功处理的消息列表
+            context: 消费上下文
+        """
+        pass
+
+    def on_exception(
+        self,
+        _messages: list[MessageExt],
+        _context: ConsumeContext,
+        _exception: Exception,
+    ) -> None:
+        """
+        消息处理异常回调(可选实现)
+
+        当消息处理过程中发生异常时调用，可以用于记录错误日志或
+        执行异常恢复操作。
+
+        Args:
+            messages: 处理失败的消息列表
+            context: 消费上下文
+            exception: 发生的异常
+        """
+        pass
+
 
 class SimpleMessageListener(MessageListener):
     """

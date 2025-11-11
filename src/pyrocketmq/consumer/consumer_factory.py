@@ -43,9 +43,9 @@ def create_consumer(
 
     Examples:
         >>> # 基本使用
-        >>> from pyrocketmq.consumer import create_consumer, MessageListenerConcurrently, ConsumeResult
+        >>> from pyrocketmq.consumer import create_consumer, MessageListener, ConsumeResult
         >>>
-        >>> class MyListener(MessageListenerConcurrently):
+        >>> class MyListener(MessageListener):
         ...     def consume_message(self, messages, context):
         ...         for msg in messages:
         ...             print(f"Processing: {msg.body.decode()}")
