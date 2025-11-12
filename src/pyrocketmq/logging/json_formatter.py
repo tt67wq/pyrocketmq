@@ -22,7 +22,7 @@ class JsonFormatter(logging.Formatter):
         include_extra: bool = True,
         include_timestamp: bool = True,
         include_level: bool = True,
-        include_logger: bool = True,
+        include_logger: bool = False,
         include_module: bool = True,
         include_function: bool = True,
         include_line: bool = True,
@@ -74,16 +74,16 @@ class JsonFormatter(logging.Formatter):
 
         # 添加时间戳
         if self.include_timestamp:
-            log_entry["timestamp"] = record.created
+            # log_entry["timestamp"] = record.created
             log_entry["asctime"] = time.strftime(
                 "%Y-%m-%d %H:%M:%S", time.localtime(record.created)
             )
-            log_entry["msecs"] = record.msecs
+            # log_entry["msecs"] = record.msecs
 
         # 添加日志级别
         if self.include_level:
             log_entry["level"] = record.levelname
-            log_entry["levelno"] = record.levelno
+            # log_entry["levelno"] = record.levelno
 
         # 添加logger信息
         if self.include_logger:

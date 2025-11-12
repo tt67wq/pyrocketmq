@@ -2365,7 +2365,8 @@ class BrokerClient:
                         "timestamp": time.time(),
                     },
                 )
-                raise BrokerResponseError(error_msg)
+                # raise BrokerResponseError(error_msg)
+                return []
 
         except Exception as e:
             if isinstance(

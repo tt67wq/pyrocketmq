@@ -471,7 +471,9 @@ class ConsumerData:
             "consumeType": self.consume_type,
             "messageModel": self.message_model,
             "consumeFromWhere": self.consume_from_where,
-            "subscriptionData": self.subscription_data,
+            "subscriptionData": [
+                subscription.to_dict() for subscription in self.subscription_data or []
+            ],
         }
 
     @classmethod

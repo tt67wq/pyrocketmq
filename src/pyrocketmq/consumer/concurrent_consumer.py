@@ -279,10 +279,10 @@ class ConcurrentConsumer(BaseConsumer):
                 self._do_rebalance()
 
                 # 启动消息拉取任务
-                self._start_pull_tasks()
+                # self._start_pull_tasks()
 
                 # 启动消息处理任务
-                self._start_consume_tasks()
+                # self._start_consume_tasks()
 
                 # 启动重平衡任务
                 self._start_rebalance_task()
@@ -524,11 +524,7 @@ class ConcurrentConsumer(BaseConsumer):
 
             allocated_queues: list[MessageQueue] = []
             for topic in topics:
-                route_data: TopicRouteData | None = (
-                    self._name_server_manager.get_topic_route(topic)
-                )
-                if route_data:
-                    _ = self._topic_broker_mapping.update_route_info(topic, route_data)
+                _ = self._update_route_info(topic)
                 all_queues: list[MessageQueue] = [
                     x
                     for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)

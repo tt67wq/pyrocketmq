@@ -16,7 +16,9 @@ def message_listener(messages: list[MessageExt]) -> ConsumeResult:
 
 
 def main():
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
+    pyrocketmq.logging.setup_logging(
+        LoggingConfig(level="INFO", json_output=True, file_path="consumer.log")
+    )
     consumer = create_concurrent_consumer(
         "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
     )
