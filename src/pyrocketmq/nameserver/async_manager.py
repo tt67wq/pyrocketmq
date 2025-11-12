@@ -455,7 +455,7 @@ class AsyncNameServerManager:
             return master_addr
 
         # 选择第一个可用地址
-        for broker_id, address in broker_data.broker_addresses.items():
+        for _broker_id, address in broker_data.broker_addresses.items():
             if address:
                 return address
 
@@ -464,7 +464,7 @@ class AsyncNameServerManager:
 
 # 便利函数
 def create_async_nameserver_manager(
-    nameserver_addrs: str, **kwargs
+    nameserver_addrs: str, **kwargs: Any
 ) -> AsyncNameServerManager:
     """创建异步NameServer管理器.
 

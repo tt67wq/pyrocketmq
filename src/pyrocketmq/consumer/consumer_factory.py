@@ -6,6 +6,7 @@ Consumer便利函数模块
 主要功能:
 - create_consumer: 创建并发消费者
 - create_consumer_with_config: 使用自定义配置创建消费者
+- create_message_selector: 创建消息选择器
 - 便利函数用于快速创建常见配置的消费者
 
 作者: pyrocketmq开发团队

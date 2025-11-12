@@ -16,14 +16,12 @@ from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model.client_data import MessageSelector
-from pyrocketmq.model.message_ext import MessageExt
-from pyrocketmq.model.message_queue import MessageQueue
+from pyrocketmq.model import ConsumeResult, MessageExt, MessageQueue, MessageSelector
 
 # 本地模块导入
 from .config import ConsumerConfig
 from .errors import ConsumerError, SubscribeError
-from .listener import ConsumeContext, ConsumeResult, MessageListener
+from .listener import ConsumeContext, MessageListener
 from .subscription_manager import SubscriptionManager
 
 logger = get_logger(__name__)
@@ -461,7 +459,9 @@ class BaseConsumer(ABC):
                 },
             )
 
-            result = self._message_listener.consume_message(messages, context)
+            result: ConsumeResult = self._message_listener.consume_message(
+                messages, context
+            )
             if result in [
                 ConsumeResult.COMMIT,
                 ConsumeResult.ROLLBACK,

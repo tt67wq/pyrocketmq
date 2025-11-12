@@ -40,7 +40,7 @@ class Message:
     def __post_init__(self):
         """后处理，确保数据类型正确"""
         # 确保properties是字典
-        if self.properties is None:
+        if not self.properties:
             self.properties = {}
 
         # 设置unique_id

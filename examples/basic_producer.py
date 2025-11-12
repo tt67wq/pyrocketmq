@@ -35,10 +35,14 @@ def main():
     pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
     producer = create_producer("GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110")
     producer.start()
+    index = 0
     while True:
         try:
-            message = Message(topic="test_im_015", body=b"Hello, RocketMQ From Python!")
-            message.set_tags("TAG!||TAG2")
+            message = Message(
+                topic="test_im_015",
+                body=f"Hello, This Is Single Msg From Python {index}".encode(),
+            )
+            message.set_tags("TAG1||TAG2")
             message.set_keys("KEY1 KEY2")
             ret = producer.send(message)
             print("Message sent ret:", ret)
@@ -46,11 +50,13 @@ def main():
             messages: list[Message] = []
             for _ in range(10):
                 message = Message(
-                    topic="test_im_015", body=b"Hello, RocketMQ From Python in Batch!"
+                    topic="test_im_015",
+                    body=f"Hello, This Is Batch Msg From Python {index}".encode(),
                 )
                 messages.append(message)
             ret = producer.send_batch(*messages)
             print("Batch message sent ret:", ret)
+            index += 1
         except ProducerError as e:
             print(f"Failed to send message: {e}")
             time.sleep(5)

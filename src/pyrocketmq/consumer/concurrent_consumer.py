@@ -46,6 +46,7 @@ from pyrocketmq.model import (
     ConsumeMessageDirectlyHeader,
     ConsumeMessageDirectlyResult,
     ConsumerData,
+    ConsumeResult,
     HeartbeatData,
     MessageExt,
     MessageModel,
@@ -1348,12 +1349,15 @@ class ConcurrentConsumer(BaseConsumer):
         Returns:
             消费者列表
         """
-        broker_addr = self._name_server_manager.get_broker_address(topic)
-        if not broker_addr:
-            logger.error("Broker address not found for topic", extra={"topic": topic})
+
+        addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
+        if not addresses:
+            logger.warning(
+                "No broker addresses found for topic", extra={"topic": topic}
+            )
             return []
 
-        with self._broker_manager.connection(broker_addr) as conn:
+        with self._broker_manager.connection(addresses[0]) as conn:
             return BrokerClient(conn).get_consumers_by_group(
                 self._config.consumer_group
             )
@@ -1799,7 +1803,7 @@ class ConcurrentConsumer(BaseConsumer):
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
                 order=False,
                 auto_commit=True,
-                consume_result="SUCCESS",
+                consume_result=ConsumeResult.SUCCESS,
                 remark="Message consumed",
                 spent_time_mills=int((datetime.now() - now).total_seconds() * 1000),
             )

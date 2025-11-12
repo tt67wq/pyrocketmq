@@ -3,18 +3,23 @@
 
 import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 
-# 消费结果枚举
-class ConsumeResult:
-    """消费结果状态"""
+class ConsumeResult(Enum):
+    """消息消费结果
 
-    SUCCESS: str = "SUCCESS"  # 消费成功
-    FAIL: str = "FAIL"  # 消费失败
-    RETURN: str = "RETURN"  # 消费返回，后续重试
-    SUSPEND_CURRENT_QUEUE_A_MOMENT: str = (
-        "SUSPEND_CURRENT_QUEUE_A_MOMENT"  # 暂停消费队列一段时间
+    定义消息处理后的返回状态，Consumer会根据这个状态决定
+    如何处理这条消息以及后续的消费行为。
+    """
+
+    SUCCESS = "CONSUME_SUCCESS"  # 消费成功，消息确认
+    RECONSUME_LATER = "RECONSUME_LATER"  # 稍后重试消费
+    COMMIT = "COMMIT"  # 提交消费
+    ROLLBACK = "ROLLBACK"  # 回滚消费
+    SUSPEND_CURRENT_QUEUE_A_MOMENT = (
+        "SUSPEND_CURRENT_QUEUE_A_MOMENT"  # 挂起当前队列片刻
     )
 
 
@@ -65,7 +70,7 @@ class ConsumeMessageDirectlyResult:
 
     order: bool
     auto_commit: bool
-    consume_result: str
+    consume_result: ConsumeResult
     remark: str
     spent_time_mills: int
 
@@ -108,7 +113,6 @@ class ConsumeMessageDirectlyResult:
             error_dict = {
                 "order": False,
                 "autoCommit": False,
-                "consumeResult": ConsumeResult.FAIL,
                 "remark": f"Encoding error: {str(e)}",
                 "spentTimeMills": 0,
             }
@@ -203,7 +207,7 @@ class ConsumeMessageDirectlyResult:
         return cls(
             order=False,
             auto_commit=False,
-            consume_result=ConsumeResult.FAIL,
+            consume_result=ConsumeResult.ROLLBACK,
             remark=remark,
             spent_time_mills=spent_time_mills,
         )
@@ -224,7 +228,7 @@ class ConsumeMessageDirectlyResult:
         return cls(
             order=False,
             auto_commit=False,
-            consume_result=ConsumeResult.RETURN,
+            consume_result=ConsumeResult.ROLLBACK,
             remark=remark,
             spent_time_mills=spent_time_mills,
         )

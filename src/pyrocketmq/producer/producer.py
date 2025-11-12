@@ -23,6 +23,7 @@ MVP版本功能:
 
 import threading
 import time
+from typing import Any
 
 # Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
@@ -1047,7 +1048,7 @@ class Producer:
 def create_producer(
     producer_group: str = "DEFAULT_PRODUCER",
     namesrv_addr: str = "localhost:9876",
-    **kwargs,
+    **kwargs: Any,
 ) -> Producer:
     """创建Producer实例的便捷函数
 

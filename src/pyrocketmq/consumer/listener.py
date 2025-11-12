@@ -9,30 +9,14 @@ MVP版本专注于核心功能，后续版本会扩展更多监听器类型。
 
 import time
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Callable, override
 
 from ..logging import get_logger
+from ..model import ConsumeResult
 from ..model.message_ext import MessageExt
 from ..model.message_queue import MessageQueue
 
 logger = get_logger(__name__)
-
-
-class ConsumeResult(Enum):
-    """消息消费结果
-
-    定义消息处理后的返回状态，Consumer会根据这个状态决定
-    如何处理这条消息以及后续的消费行为。
-    """
-
-    SUCCESS = "CONSUME_SUCCESS"  # 消费成功，消息确认
-    RECONSUME_LATER = "RECONSUME_LATER"  # 稍后重试消费
-    COMMIT = "COMMIT"  # 提交消费
-    ROLLBACK = "ROLLBACK"  # 回滚消费
-    SUSPEND_CURRENT_QUEUE_A_MOMENT = (
-        "SUSPEND_CURRENT_QUEUE_A_MOMENT"  # 挂起当前队列片刻
-    )
 
 
 class ConsumeContext:
@@ -254,14 +238,13 @@ class SimpleMessageListener(MessageListener):
 
 
 def create_message_listener(
-    handler: Callable[[list[MessageExt]], ConsumeResult], orderly: bool = False
+    handler: Callable[[list[MessageExt]], ConsumeResult],
 ) -> MessageListener:
     """
     创建消息监听器的便利函数
 
     Args:
         handler: 消息处理函数
-        orderly: 是否为顺序消费
 
     Returns:
         消息监听器实例
@@ -276,14 +259,13 @@ def create_message_listener(
         >>> listener = create_message_listener(handle_messages)
         >>>
         >>> # 创建顺序监听器
-        >>> def handle_orderly_messages(messages):
+        >>> def handle_messages(messages):
         ...     for msg in messages:
         ...         print(f"顺序处理: {msg.body}")
         ...     return ConsumeResult.SUCCESS
         >>>
-        >>> orderly_listener = create_message_listener(
-        ...     handle_orderly_messages,
-        ...     orderly=True
+        >>> listener = create_message_listener(
+        ...     handle_messages,
         ... )
     """
     return SimpleMessageListener(handler)
