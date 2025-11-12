@@ -170,6 +170,7 @@ class ConcurrentConsumer(BaseConsumer):
         )  # 心跳间隔(秒)
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_event: threading.Event = threading.Event()  # 用于心跳循环的事件
 
         # 重平衡任务管理
         self._rebalance_thread: threading.Thread | None = None
@@ -179,7 +180,13 @@ class ConcurrentConsumer(BaseConsumer):
         self._rebalance_event: threading.Event = (
             threading.Event()
         )  # 用于重平衡循环的事件
-        self._heartbeat_event: threading.Event = threading.Event()  # 用于心跳循环的事件
+
+        # 路由刷新定时任务
+        self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
+        self._route_refresh_event: threading.Event = (
+            threading.Event()
+        )  # 用于路由刷新循环的事件
+        self._route_refresh_thread: threading.Thread | None = None  # 路由刷新线程
 
         # 统计信息
         self._stats: dict[str, Any] = {
@@ -192,6 +199,9 @@ class ConcurrentConsumer(BaseConsumer):
             "start_time": 0.0,
             "heartbeat_success_count": 0,
             "heartbeat_failure_count": 0,
+            "route_refresh_count": 0,  # 路由刷新次数统计
+            "route_refresh_success_count": 0,  # 路由刷新成功次数
+            "route_refresh_failure_count": 0,  # 路由刷新失败次数
         }
 
         logger.info(
@@ -279,6 +289,9 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 启动心跳任务
                 self._start_heartbeat_task()
+
+                # 启动路由刷新任务
+                self._start_route_refresh_task()
 
                 self._is_running = True
                 self._stats["start_time"] = time.time()
@@ -1403,7 +1416,7 @@ class ConcurrentConsumer(BaseConsumer):
         """
         logger.info("Heartbeat loop started")
 
-        while self._is_running:
+        while not self._heartbeat_event.is_set():
             try:
                 current_time = time.time()
 
@@ -1542,6 +1555,168 @@ class ConcurrentConsumer(BaseConsumer):
                 exc_info=True,
             )
 
+    # ==================== 内部方法：路由刷新 ====================
+
+    def _start_route_refresh_task(self) -> None:
+        """启动路由刷新任务"""
+        self._route_refresh_thread = threading.Thread(
+            target=self._route_refresh_loop,
+            name=f"{self._config.consumer_group}-route-refresh-thread",
+            daemon=True,
+        )
+        self._route_refresh_thread.start()
+
+    def _route_refresh_loop(self) -> None:
+        """路由刷新循环
+
+        定期刷新所有订阅Topic的路由信息，确保消费者能够感知到集群拓扑的变化。
+        """
+        logger.info(
+            "Route refresh loop started",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "refresh_interval": self._route_refresh_interval,
+            },
+        )
+
+        while not self._route_refresh_event.is_set():
+            try:
+                # 等待指定间隔或关闭事件
+                if self._route_refresh_event.wait(
+                    timeout=self._route_refresh_interval / 1000
+                ):
+                    # 收到事件信号，退出循环
+                    break
+
+                # 检查是否正在关闭
+                if self._route_refresh_event.is_set():
+                    break
+
+                # 执行路由刷新
+                self._refresh_all_routes()
+
+                # 更新统计信息
+                self._stats["route_refresh_count"] += 1
+                self._stats["route_refresh_success_count"] += 1
+
+                logger.debug(
+                    "Route refresh completed",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "refresh_count": self._stats["route_refresh_count"],
+                        "topics_count": len(
+                            self._topic_broker_mapping.get_all_topics()
+                        ),
+                    },
+                )
+
+            except Exception as e:
+                self._stats["route_refresh_failure_count"] += 1
+                logger.warning(
+                    f"Error in route refresh loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                        "refresh_count": self._stats["route_refresh_count"],
+                        "failure_count": self._stats["route_refresh_failure_count"],
+                    },
+                    exc_info=True,
+                )
+
+                # 发生异常时，等待较短时间后重试
+                self._route_refresh_event.wait(timeout=5.0)
+
+        logger.info(
+            "Route refresh loop stopped",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "total_refreshes": self._stats["route_refresh_count"],
+                "success_count": self._stats["route_refresh_success_count"],
+                "failure_count": self._stats["route_refresh_failure_count"],
+            },
+        )
+
+    def _refresh_all_routes(self) -> None:
+        """刷新所有Topic的路由信息"""
+        topics = list(self._topic_broker_mapping.get_all_topics())
+
+        for topic in topics:
+            try:
+                if self._topic_broker_mapping.get_route_info(topic) is None:
+                    _ = self._update_route_info(topic)
+            except Exception as e:
+                logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
+
+    def _update_route_info(self, topic: str) -> bool:
+        """更新Topic路由信息
+
+        手动触发Topic路由信息的更新。通常情况下，路由信息会自动更新，
+        但在某些特殊场景下可能需要手动触发更新。
+
+        Args:
+            topic: 要更新的Topic名称
+
+        Returns:
+            bool: 更新是否成功
+        """
+        logger.info(
+            "Updating route info for topic",
+            extra={
+                "topic": topic,
+            },
+        )
+        topic_route_data = self._name_server_manager.get_topic_route(topic)
+        if not topic_route_data:
+            logger.error(
+                "Failed to get topic route data",
+                extra={
+                    "topic": topic,
+                },
+            )
+            return False
+
+        # 维护broker连接
+        for broker_data in topic_route_data.broker_data_list:
+            for idx, broker_addr in broker_data.broker_addresses.items():
+                logger.info(
+                    "Adding broker",
+                    extra={
+                        "broker_id": idx,
+                        "broker_address": broker_addr,
+                        "broker_name": broker_data.broker_name,
+                    },
+                )
+                self._broker_manager.add_broker(
+                    broker_addr,
+                    broker_data.broker_name,
+                )
+
+        # 更新本地缓存
+        success = self._topic_broker_mapping.update_route_info(topic, topic_route_data)
+        if success:
+            logger.info(
+                "Route info updated for topic",
+                extra={
+                    "topic": topic,
+                    "brokers_count": len(topic_route_data.broker_data_list),
+                },
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to update route cache for topic",
+                extra={"topic": topic},
+            )
+
+        # 如果所有NameServer都失败，强制刷新缓存
+        return self._topic_broker_mapping.force_refresh(topic)
+
     # ==================== 内部方法：资源清理 ====================
 
     def _cleanup_on_start_failure(self) -> None:
@@ -1601,24 +1776,38 @@ class ConcurrentConsumer(BaseConsumer):
             # 等待专用线程结束
             self._rebalance_event.set()  # 唤醒重平衡线程
             self._heartbeat_event.set()  # 唤醒心跳线程
+            self._route_refresh_event.set()  # 唤醒路由刷新线程
 
+            # 等待线程结束
+            threads_to_join: list[threading.Thread] = []
             if self._rebalance_thread and self._rebalance_thread.is_alive():
-                self._rebalance_thread.join(timeout=5.0)
-                if self._rebalance_thread.is_alive():
-                    logger.warning(
-                        "Rebalance thread did not exit gracefully within timeout",
-                        extra={"consumer_group": self._config.consumer_group},
-                    )
-                self._rebalance_thread = None
-
+                threads_to_join.append(self._rebalance_thread)
             if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-                self._heartbeat_thread.join(timeout=5.0)
-                if self._heartbeat_thread.is_alive():
-                    logger.warning(
-                        "Heartbeat thread did not exit gracefully within timeout",
-                        extra={"consumer_group": self._config.consumer_group},
+                threads_to_join.append(self._heartbeat_thread)
+            if self._route_refresh_thread and self._route_refresh_thread.is_alive():
+                threads_to_join.append(self._route_refresh_thread)
+
+            # 并发等待所有线程结束
+            for thread in threads_to_join:
+                try:
+                    thread.join(timeout=5.0)
+                    if thread.is_alive():
+                        logger.warning(
+                            f"Thread did not stop gracefully: {thread.name}",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "thread_name": thread.name,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error joining thread {thread.name}: {e}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "thread_name": thread.name,
+                            "error": str(e),
+                        },
                     )
-                self._heartbeat_thread = None
 
         except Exception as e:
             logger.warning(
@@ -1690,6 +1879,14 @@ class ConcurrentConsumer(BaseConsumer):
         uptime: float = time.time() - self._stats.get("start_time", time.time())
         messages_consumed: int = self._stats["messages_consumed"]
         pull_requests: int = self._stats["pull_requests"]
+        route_refresh_count: int = self._stats.get("route_refresh_count", 0)
+
+        # 计算路由刷新成功率
+        route_refresh_success_rate: float = 0.0
+        if route_refresh_count > 0:
+            route_refresh_success_rate = (
+                self._stats.get("route_refresh_success_count", 0) / route_refresh_count
+            )
 
         return {
             **self._stats,
@@ -1705,6 +1902,11 @@ class ConcurrentConsumer(BaseConsumer):
                 (messages_consumed - self._stats["messages_failed"])
                 / max(messages_consumed, 1)
             ),
+            # 路由刷新相关统计
+            "route_refresh_success_rate": route_refresh_success_rate,
+            "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
+            if route_refresh_count > 0
+            else 0.0,
         }
 
     def get_stats(self) -> dict[str, Any]:

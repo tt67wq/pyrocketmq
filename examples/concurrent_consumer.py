@@ -1,6 +1,5 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
-from imaplib import Commands
 
 import pyrocketmq.logging
 from pyrocketmq.consumer import create_concurrent_consumer, create_message_listener
@@ -17,7 +16,7 @@ def message_listener(messages: list[MessageExt]) -> ConsumeResult:
 
 
 def main():
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO", json_output=True))
+    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
     consumer = create_concurrent_consumer(
         "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
     )
