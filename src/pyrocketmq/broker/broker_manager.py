@@ -613,14 +613,14 @@ class BrokerManager:
             broker_addr: Broker地址，格式为"host:port"
             broker_name: Broker名称，为None时从地址提取
         """
-        self._logger.info(
-            "开始添加同步Broker",
-            extra={
-                "broker_addr": broker_addr,
-                "broker_name": broker_name,
-                "timestamp": time.time(),
-            },
-        )
+        # self._logger.info(
+        #     "开始添加同步Broker",
+        #     extra={
+        #         "broker_addr": broker_addr,
+        #         "broker_name": broker_name,
+        #         "timestamp": time.time(),
+        #     },
+        # )
 
         # 验证broker_addr格式
         if not broker_addr or ":" not in broker_addr:
@@ -673,14 +673,14 @@ class BrokerManager:
 
         with self._lock:
             if broker_addr in self._brokers:
-                self._logger.warning(
-                    "同步Broker已存在，跳过添加",
-                    extra={
-                        "broker_addr": broker_addr,
-                        "broker_name": broker_name,
-                        "timestamp": time.time(),
-                    },
-                )
+                # self._logger.warning(
+                #     "同步Broker已存在，跳过添加",
+                #     extra={
+                #         "broker_addr": broker_addr,
+                #         "broker_name": broker_name,
+                #         "timestamp": time.time(),
+                #     },
+                # )
                 return
 
             try:
