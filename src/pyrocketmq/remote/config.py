@@ -3,6 +3,7 @@
 """
 
 import os
+import random
 from dataclasses import dataclass
 
 
@@ -12,7 +13,7 @@ class RemoteConfig:
 
     # RPC相关配置
     rpc_timeout: float = 30.0  # RPC调用超时时间（秒）
-    opaque_start: int = 0  # opaque起始值
+    opaque_start: int = 0  # opaque起始值，使用随机数确保唯一性
     max_waiters: int = 10000  # 最大并发请求数
 
     # 清理相关配置
@@ -31,6 +32,11 @@ class RemoteConfig:
 
     def __post_init__(self) -> None:
         """后初始化处理"""
+        # 为opaque_start设置随机值，确保每个实例的起始值唯一
+        if self.opaque_start == 0:
+            # 使用32位随机数，避免溢出
+            self.opaque_start = random.randint(1, 0x7FFFFFFF)
+
         # 验证配置值
         if self.rpc_timeout <= 0:
             raise ValueError("rpc_timeout must be greater than 0")

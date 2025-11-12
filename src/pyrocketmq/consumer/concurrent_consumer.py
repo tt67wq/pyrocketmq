@@ -57,7 +57,6 @@ from pyrocketmq.model import (
     RemotingCommandBuilder,
     RequestCode,
     ResponseCode,
-    TopicRouteData,
 )
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 from pyrocketmq.remote import DEFAULT_CONFIG, Remote
@@ -188,6 +187,9 @@ class ConcurrentConsumer(BaseConsumer):
         )  # 用于路由刷新循环的事件
         self._route_refresh_thread: threading.Thread | None = None  # 路由刷新线程
 
+        # 重平衡重入保护
+        self._rebalance_lock: threading.RLock = threading.RLock()  # 重平衡锁，防止重入
+
         # 统计信息
         self._stats: dict[str, Any] = {
             "messages_consumed": 0,
@@ -202,6 +204,10 @@ class ConcurrentConsumer(BaseConsumer):
             "route_refresh_count": 0,  # 路由刷新次数统计
             "route_refresh_success_count": 0,  # 路由刷新成功次数
             "route_refresh_failure_count": 0,  # 路由刷新失败次数
+            "rebalance_count": 0,  # 重平衡次数统计
+            "rebalance_success_count": 0,  # 重平衡成功次数
+            "rebalance_failure_count": 0,  # 重平衡失败次数
+            "rebalance_skipped_count": 0,  # 跳过重平衡次数统计
         }
 
         logger.info(
@@ -275,17 +281,16 @@ class ConcurrentConsumer(BaseConsumer):
                     thread_name_prefix=f"pull-{self._config.consumer_group}",
                 )
 
-                # 执行初始重平衡
-                self._do_rebalance()
+                # self._do_rebalance()
 
-                # 启动消息拉取任务
-                # self._start_pull_tasks()
+                # 启动重平衡任务
+                # self._start_rebalance_task()
 
                 # 启动消息处理任务
                 # self._start_consume_tasks()
 
-                # 启动重平衡任务
-                self._start_rebalance_task()
+                # 启动消息拉取任务
+                # self._start_pull_tasks()
 
                 # 启动心跳任务
                 self._start_heartbeat_task()
@@ -510,11 +515,28 @@ class ConcurrentConsumer(BaseConsumer):
             - 被回收的队列会停止拉取并等待当前消息处理完成
             - 重平衡失败不会影响已运行的队列，会在下次重试
         """
+        # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
+        # 使用可重入锁保护重平衡操作
+        if not self._rebalance_lock.acquire(blocking=False):
+            # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
+            self._stats["rebalance_skipped_count"] += 1
+            logger.debug(
+                "Rebalance already in progress, skipping",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "skipped_count": self._stats["rebalance_skipped_count"],
+                },
+            )
+            return
+
         try:
             logger.debug(
                 "Starting rebalance",
                 extra={"consumer_group": self._config.consumer_group},
             )
+
+            # 更新统计信息
+            self._stats["rebalance_count"] += 1
 
             # 获取所有订阅的Topic
             topics: list[str] = self._subscription_manager.get_topics()
@@ -546,12 +568,16 @@ class ConcurrentConsumer(BaseConsumer):
 
             self._last_rebalance_time = time.time()
 
+            # 更新成功统计
+            self._stats["rebalance_success_count"] += 1
+
             logger.info(
                 "Rebalance completed",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "total_topics": len(topics),
                     "assigned_queues": len(allocated_queues),
+                    "success_count": self._stats["rebalance_success_count"],
                 },
             )
 
@@ -563,6 +589,19 @@ class ConcurrentConsumer(BaseConsumer):
                     "error": str(e),
                 },
                 exc_info=True,
+            )
+            # 更新失败统计
+            self._stats["rebalance_failure_count"] += 1
+
+        finally:
+            # 释放重平衡锁
+            self._rebalance_lock.release()
+            logger.debug(
+                "Rebalance lock released",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "rebalance_count": self._stats["rebalance_count"],
+                },
             )
 
     def _allocate_queues(
@@ -1412,6 +1451,7 @@ class ConcurrentConsumer(BaseConsumer):
         """
         logger.info("Heartbeat loop started")
 
+        self._send_heartbeat_to_all_brokers()
         while not self._heartbeat_event.is_set():
             try:
                 current_time = time.time()
@@ -1575,6 +1615,8 @@ class ConcurrentConsumer(BaseConsumer):
             },
         )
 
+        self._refresh_all_routes()
+
         while not self._route_refresh_event.is_set():
             try:
                 # 等待指定间隔或关闭事件
@@ -1590,6 +1632,7 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 执行路由刷新
                 self._refresh_all_routes()
+                _ = self._topic_broker_mapping.clear_expired_routes()
 
                 # 更新统计信息
                 self._stats["route_refresh_count"] += 1
@@ -1903,6 +1946,24 @@ class ConcurrentConsumer(BaseConsumer):
             "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
             if route_refresh_count > 0
             else 0.0,
+            # 重平衡相关统计
+            "rebalance_success_rate": (
+                self._stats.get("rebalance_success_count", 0)
+                / max(self._stats.get("rebalance_count", 1), 1)
+            ),
+            "rebalance_avg_interval": (
+                uptime / max(self._stats.get("rebalance_count", 1), 1)
+            )
+            if self._stats.get("rebalance_count", 0) > 0
+            else 0.0,
+            "rebalance_skipped_rate": (
+                self._stats.get("rebalance_skipped_count", 0)
+                / max(
+                    self._stats.get("rebalance_count", 1)
+                    + self._stats.get("rebalance_skipped_count", 1),
+                    1,
+                )
+            ),
         }
 
     def get_stats(self) -> dict[str, Any]:

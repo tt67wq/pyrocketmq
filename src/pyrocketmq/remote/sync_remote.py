@@ -62,6 +62,9 @@ class Remote:
 
     def connect(self) -> None:
         """建立连接"""
+        if self.is_connected:
+            return
+
         try:
             self.transport.start()
             # 启动清理线程

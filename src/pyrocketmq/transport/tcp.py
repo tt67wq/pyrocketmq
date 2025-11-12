@@ -2,9 +2,9 @@
 
 import asyncio
 import dis
+import logging
 import socket
 import time
-import logging
 from typing import Any
 
 from statemachine import State, StateMachine
@@ -37,6 +37,17 @@ class ConnectionStateMachine(StateMachine):
 
     def start(self) -> None:
         """启动连接过程"""
+        # 如果已经处于连接状态，不用重复connect
+        if self.is_connected:
+            self._logger.debug(
+                "Already connected, skipping connection establishment",
+                extra={
+                    "current_state": self.current_state_name,
+                    "local_address": f"{self.host}:{self.port}",
+                },
+            )
+            return
+
         self.connect(self.disconnected)
 
     def stop(self) -> None:

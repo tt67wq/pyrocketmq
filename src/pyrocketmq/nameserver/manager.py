@@ -129,6 +129,9 @@ class NameServerManager:
         # NameServer连接池
         self._sync_connections: dict[str, Remote] = {}
 
+        # 状态管理
+        self._started: bool = False
+
         self._logger.info(
             "NameServer管理器初始化完成",
             extra={
@@ -148,6 +151,17 @@ class NameServerManager:
             此方法会尝试连接配置中的所有NameServer地址，
             至少需要一个连接成功才能启动成功。
         """
+        # 如果已经started，直接返回
+        if self._started:
+            self._logger.debug(
+                "NameServer管理器已经启动，跳过重复启动",
+                extra={
+                    "nameserver_addrs": self._nameserver_addrs,
+                    "connected_count": len(self._sync_connections),
+                },
+            )
+            return
+
         self._logger.info("启动NameServer管理器")
 
         # 建立同步连接
@@ -168,6 +182,9 @@ class NameServerManager:
 
         if not self._sync_connections:
             raise NameServerError("", "无法建立任何NameServer连接")
+
+        # 设置启动状态
+        self._started = True
 
         self._logger.info("NameServer管理器启动完成")
 
@@ -196,6 +213,9 @@ class NameServerManager:
         with self._cache_lock:
             self._broker_addr_cache.clear()
             self._route_cache.clear()
+
+        # 重置启动状态
+        self._started = False
 
         self._logger.info("NameServer管理器停止完成")
 
