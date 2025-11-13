@@ -5,13 +5,13 @@
 
 import ast
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from pyrocketmq.model.command import RemotingCommand
 
 from .errors import DeserializationError
+from .message_ext import MessageExt
 from .message_queue import MessageQueue
-
-if TYPE_CHECKING:
-    from .message_ext import MessageExt
 
 
 # 消费类型枚举
@@ -246,28 +246,22 @@ class PullMessageResult:
         )
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "PullMessageResult":
-        """从字节数据创建实例
+    def decode_from_cmd(cls, cmd: RemotingCommand) -> "PullMessageResult":
+        max_offset = int(cmd.ext_fields.get("maxOffset", "0"))
+        min_offset = int(cmd.ext_fields.get("minOffset", "0"))
+        next_begin_offset = int(cmd.ext_fields.get("nextBeginOffset", "0"))
+        suggest_which_broker_id = int(cmd.ext_fields.get("suggestWhichBrokerId", "0"))
+        body = cmd.body
 
-        Args:
-            data: 原始响应体字节数据
-
-        Returns:
-            PullMessageResult: PullMessageResult实例
-
-        Raises:
-            DeserializationError: 数据格式无效时抛出异常
-        """
-        try:
-            data_str: str = data.decode("utf-8")
-            parsed_data: dict[str, Any] = ast.literal_eval(data_str)
-            return cls.from_dict(parsed_data)
-        except (UnicodeDecodeError, SyntaxError) as e:
-            raise DeserializationError(
-                f"Failed to parse PullMessageResult from bytes: {e}"
-            )
-        except Exception as e:
-            raise DeserializationError(f"Invalid PullMessageResult format: {e}")
+        return cls(
+            messages=MessageExt.decode_messages(body) if body else [],
+            next_begin_offset=next_begin_offset,
+            min_offset=min_offset,
+            max_offset=max_offset,
+            suggest_which_broker_id=suggest_which_broker_id,
+            pull_rt=None,
+            body=body,
+        )
 
     def __str__(self) -> str:
         """字符串表示"""

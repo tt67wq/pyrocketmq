@@ -10,7 +10,12 @@ from pyrocketmq.model import SUBSCRIBE_ALL, ConsumeResult, MessageExt
 def message_listener(messages: list[MessageExt]) -> ConsumeResult:
     for message in messages:
         print(
-            str(message.body), "tags:", message.get_tags(), "keys:", message.get_keys()
+            "!!!!!!!!!!!!!!!",
+            str(message.body),
+            "tags:",
+            message.get_tags(),
+            "keys:",
+            message.get_keys(),
         )
     return ConsumeResult.SUCCESS
 

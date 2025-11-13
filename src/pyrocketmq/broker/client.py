@@ -768,7 +768,7 @@ class BrokerClient:
             if response.code == ResponseCode.SUCCESS:
                 # 成功拉取到消息
                 if response.body:
-                    result = PullMessageResult.from_bytes(response.body)
+                    result = PullMessageResult.decode_from_cmd(response)
                     result.pull_rt = pull_rt
                     self._logger.info(
                         "Successfully pulled messages",
