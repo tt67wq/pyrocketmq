@@ -40,12 +40,9 @@ from pyrocketmq.consumer.errors import (
 from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
-    BrokerData,
     ConsumeMessageDirectlyHeader,
     ConsumeMessageDirectlyResult,
-    ConsumerData,
     ConsumeResult,
-    HeartbeatData,
     MessageExt,
     MessageModel,
     MessageQueue,
@@ -143,14 +140,6 @@ class ConcurrentConsumer(BaseConsumer):
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
         self._last_rebalance_time: float = 0.0
 
-        # 心跳任务管理
-        self._heartbeat_interval: float = getattr(
-            config, "heartbeat_interval", 30.0
-        )  # 心跳间隔(秒)
-        self._last_heartbeat_time: float = 0.0
-        self._heartbeat_thread: threading.Thread | None = None
-        self._heartbeat_event: threading.Event = threading.Event()  # 用于心跳循环的事件
-
         # 重平衡任务管理
         self._rebalance_thread: threading.Thread | None = None
         self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
@@ -243,9 +232,6 @@ class ConcurrentConsumer(BaseConsumer):
                 # 启动消息拉取任务
                 # self._start_pull_tasks()
 
-                # 启动心跳任务
-                self._start_heartbeat_task()
-
                 self._is_running = True
                 self._stats["start_time"] = time.time()
 
@@ -315,11 +301,10 @@ class ConcurrentConsumer(BaseConsumer):
                     extra={"consumer_group": self._config.consumer_group},
                 )
 
+                self._is_running = False
+
                 # 先设置Event以唤醒可能阻塞的线程
                 self._rebalance_event.set()
-                self._heartbeat_event.set()
-
-                self._is_running = False
 
                 # 停止拉取任务
                 self._stop_pull_tasks()
@@ -1357,187 +1342,6 @@ class ConcurrentConsumer(BaseConsumer):
                 self._config.consumer_group
             )
 
-    # ==================== 内部方法：心跳 ====================
-
-    def _start_heartbeat_task(self) -> None:
-        """启动心跳任务"""
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop,
-            name=f"{self._config.consumer_group}-heartbeat-thread",
-            daemon=True,
-        )
-        self._heartbeat_thread.start()
-
-    def _heartbeat_loop(self) -> None:
-        """消费者心跳发送循环。
-
-        定期向所有相关的Broker发送心跳包，维持消费者与Broker的连接状态。
-        心跳机制确保Broker能够感知消费者的在线状态，及时进行重平衡操作。
-
-        执行流程：
-        1. 计算距离下次心跳的等待时间
-        2. 使用事件等待机制，支持优雅停止
-        3. 到达心跳时间时，向所有Broker发送心跳
-        4. 记录心跳统计信息
-
-        Args:
-            None
-
-        Returns:
-            None
-
-        Raises:
-            None: 此方法会捕获所有异常并记录日志
-
-        Note:
-            - 默认心跳间隔为30秒，可通过配置调整
-            - 使用Event.wait()替代time.sleep()，支持快速响应停止请求
-            - 心跳失败不会影响消费者的正常运行
-            - 统计心跳成功/失败次数用于监控连接健康状态
-            - 消费者停止时会立即退出心跳循环
-        """
-        logger.info("Heartbeat loop started")
-
-        self._send_heartbeat_to_all_brokers()
-        while self._is_running:
-            try:
-                current_time = time.time()
-
-                # 计算到下一次心跳的等待时间
-                time_until_next_heartbeat: float = self._heartbeat_interval - (
-                    current_time - self._last_heartbeat_time
-                )
-
-                # 如果还没到心跳时间，等待一小段时间或直到被唤醒
-                if time_until_next_heartbeat > 0:
-                    # 使用Event.wait()替代time.sleep()
-                    wait_timeout: float = min(
-                        time_until_next_heartbeat, 1.0
-                    )  # 最多等待1秒
-                    if self._heartbeat_event.wait(timeout=wait_timeout):
-                        # Event被触发，检查是否需要退出
-                        if not self._is_running:
-                            break
-                        # 重置事件状态
-                        self._heartbeat_event.clear()
-                        continue  # 重新计算等待时间
-
-                # 检查是否需要发送心跳
-                current_time = time.time()  # 重新获取当前时间
-                if current_time - self._last_heartbeat_time >= self._heartbeat_interval:
-                    self._send_heartbeat_to_all_brokers()
-                    self._last_heartbeat_time = current_time
-
-            except Exception as e:
-                logger.error(
-                    f"Error in heartbeat loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
-                # 等待一段时间再重试，使用Event.wait()
-                if self._heartbeat_event.wait(timeout=5.0):
-                    if not self._is_running:
-                        break
-                    self._heartbeat_event.clear()
-
-        logger.info("Heartbeat loop stopped")
-
-    def _send_heartbeat_to_all_brokers(self) -> None:
-        """向所有Broker发送心跳"""
-        logger.debug("Sending heartbeat to all brokers...")
-
-        try:
-            # 获取所有已知的Broker地址
-            broker_addrs: set[str] = set()
-            all_topics: set[str] = self._topic_broker_mapping.get_all_topics()
-
-            for topic in all_topics:
-                brokers: list[BrokerData] = (
-                    self._topic_broker_mapping.get_available_brokers(topic)
-                )
-                for broker_data in brokers:
-                    # 获取主从地址
-                    if broker_data.broker_addresses:
-                        for addr in broker_data.broker_addresses.values():
-                            if addr:  # 过滤空地址
-                                broker_addrs.add(addr)
-
-            if not broker_addrs:
-                logger.debug("No broker addresses found for heartbeat")
-                return
-
-            heartbeat_data = HeartbeatData(
-                client_id=self._config.client_id,
-                consumer_data_set=[
-                    ConsumerData(
-                        group_name=self._config.consumer_group,
-                        consume_type="CONSUME_PASSIVELY",
-                        message_model=self._config.message_model,
-                        consume_from_where=self._config.consume_from_where,
-                        subscription_data=[
-                            e.subscription_data
-                            for e in self._subscription_manager.get_all_subscriptions()
-                        ],
-                    )
-                ],
-            )
-
-            # 向每个Broker发送心跳
-            heartbeat_success_count: int = 0
-            heartbeat_failure_count: int = 0
-
-            for broker_addr in broker_addrs:
-                try:
-                    # 创建Broker客户端连接
-                    with self._broker_manager.connection(broker_addr) as conn:
-                        self._prepare_consumer_remote(conn)
-                        # 发送心跳请求
-                        BrokerClient(conn).send_heartbeat(heartbeat_data)
-
-                except Exception as e:
-                    heartbeat_failure_count += 1
-                    logger.warning(
-                        f"Failed to send heartbeat to broker {broker_addr}: {e}",
-                        extra={
-                            "broker_addr": broker_addr,
-                            "consumer_group": self._config.consumer_group,
-                            "error": str(e),
-                        },
-                    )
-
-            # 更新统计信息
-            self._stats["heartbeat_success_count"] = (
-                self._stats.get("heartbeat_success_count", 0) + heartbeat_success_count
-            )
-            self._stats["heartbeat_failure_count"] = (
-                self._stats.get("heartbeat_failure_count", 0) + heartbeat_failure_count
-            )
-
-            if heartbeat_success_count > 0 or heartbeat_failure_count > 0:
-                logger.info(
-                    f"Heartbeat summary: {heartbeat_success_count} success, "
-                    f"{heartbeat_failure_count} failure",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "heartbeat_success_count": heartbeat_success_count,
-                        "heartbeat_failure_count": heartbeat_failure_count,
-                        "total_brokers": len(broker_addrs),
-                    },
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Error sending heartbeat to brokers: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
     # ==================== 内部方法：资源清理 ====================
 
     def _cleanup_on_start_failure(self) -> None:
@@ -1595,16 +1399,11 @@ class ConcurrentConsumer(BaseConsumer):
 
             # 等待专用线程结束
             self._rebalance_event.set()  # 唤醒重平衡线程
-            self._heartbeat_event.set()  # 唤醒心跳线程
 
             # 等待线程结束
             threads_to_join: list[threading.Thread] = []
             if self._rebalance_thread and self._rebalance_thread.is_alive():
                 threads_to_join.append(self._rebalance_thread)
-            if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-                threads_to_join.append(self._heartbeat_thread)
-            if self._route_refresh_thread and self._route_refresh_thread.is_alive():
-                threads_to_join.append(self._route_refresh_thread)
 
             # 并发等待所有线程结束
             for thread in threads_to_join:
