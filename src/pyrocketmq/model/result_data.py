@@ -185,6 +185,7 @@ class PullMessageResult:
     max_offset: int  # 最大偏移量
     suggest_which_broker_id: int | None = None  # 建议的broker ID
     pull_rt: float | None = None  # 拉取耗时
+    body: bytes | None = None  # 原始响应体数据
 
     @property
     def is_found(self) -> bool:
@@ -211,6 +212,8 @@ class PullMessageResult:
             result["suggestWhichBrokerId"] = self.suggest_which_broker_id
         if self.pull_rt is not None:
             result["pullRT"] = self.pull_rt
+        if self.body is not None:
+            result["body"] = self.body.hex()  # 将bytes转换为hex字符串以便序列化
 
         return result
 
@@ -224,6 +227,14 @@ class PullMessageResult:
             MessageExt.from_dict(msg_data) for msg_data in data.get("messages", [])
         ]
 
+        # 处理body字段，如果存在则从hex字符串转换回bytes
+        body: bytes | None = None
+        if "body" in data and data["body"] is not None:
+            if isinstance(data["body"], str):
+                body = bytes.fromhex(data["body"])
+            elif isinstance(data["body"], bytes):
+                body = data["body"]
+
         return cls(
             messages=messages,
             next_begin_offset=data["nextBeginOffset"],
@@ -231,6 +242,7 @@ class PullMessageResult:
             max_offset=data["maxOffset"],
             suggest_which_broker_id=data.get("suggestWhichBrokerId"),
             pull_rt=data.get("pullRT"),
+            body=body,
         )
 
     @classmethod

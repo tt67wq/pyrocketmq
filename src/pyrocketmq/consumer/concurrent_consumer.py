@@ -1060,7 +1060,7 @@ class ConcurrentConsumer(BaseConsumer):
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
                     queue_offset=offset,
-                    max_num=self._config.pull_batch_size,
+                    max_msg_nums=self._config.pull_batch_size,
                     sys_flag=self._build_sys_flag(commit_offset=commit_offset > 0),
                     commit_offset=commit_offset,
                 )

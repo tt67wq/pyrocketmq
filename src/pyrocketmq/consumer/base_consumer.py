@@ -1132,7 +1132,6 @@ class BaseConsumer(ABC):
             heartbeat_failure_count: int = 0
 
             for broker_addr in broker_addrs:
-                print(f"send heartbeat to {broker_addr}!!!!!!!!!!!!!")
                 try:
                     # 创建Broker客户端连接
                     with self._broker_manager.connection(broker_addr) as conn:
