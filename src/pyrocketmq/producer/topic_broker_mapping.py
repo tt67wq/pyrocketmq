@@ -408,29 +408,6 @@ class TopicBrokerMapping:
         """
         return self.remove_route_info(topic)
 
-    async def start_background_cleanup(self, interval: float = 60.0):
-        """
-        启动后台清理任务
-
-        Args:
-            interval: 清理间隔（秒）
-        """
-        logger.info(f"Starting background cleanup task with interval {interval}s")
-
-        while True:
-            try:
-                await asyncio.sleep(interval)
-                cleared_count = self.clear_expired_routes()
-                if cleared_count > 0:
-                    logger.debug(
-                        f"Background cleanup cleared {cleared_count} expired routes"
-                    )
-            except asyncio.CancelledError:
-                logger.info("Background cleanup task cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Background cleanup error: {e}")
-
     def __str__(self) -> str:
         """字符串表示"""
         stats = self.get_cache_stats()

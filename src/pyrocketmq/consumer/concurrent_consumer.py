@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import Any
 
 # pyrocketmq导入
-from pyrocketmq.broker import BrokerClient, BrokerManager
+from pyrocketmq.broker import BrokerClient
 from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateContext,
     AllocateQueueStrategyFactory,
@@ -38,8 +38,6 @@ from pyrocketmq.consumer.errors import (
     MessageConsumeError,
 )
 from pyrocketmq.consumer.offset_store import ReadOffsetType
-from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
-from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
@@ -58,8 +56,7 @@ from pyrocketmq.model import (
     RequestCode,
     ResponseCode,
 )
-from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
-from pyrocketmq.remote import DEFAULT_CONFIG, Remote
+from pyrocketmq.remote import Remote
 
 logger = get_logger(__name__)
 
@@ -113,23 +110,6 @@ class ConcurrentConsumer(BaseConsumer):
             MessageModel.BROADCASTING,
         ]:
             raise ValueError(f"Unsupported message model: {self._config.message_model}")
-
-        # 初始化核心组件
-        self._name_server_manager: NameServerManager = create_nameserver_manager(
-            self._config.namesrv_addr
-        )
-        self._broker_manager: BrokerManager = BrokerManager(DEFAULT_CONFIG)
-        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
-            ConsumerTopicBrokerMapping()
-        )
-
-        # 创建偏移量存储
-        self._offset_store = OffsetStoreFactory.create_offset_store(
-            consumer_group=self._config.consumer_group,
-            message_model=self._config.message_model,
-            namesrv_manager=self._name_server_manager,
-            broker_manager=self._broker_manager,
-        )
 
         # 创建消费起始位置管理器
         self._consume_from_where_manager: ConsumeFromWhereManager = (
@@ -264,10 +244,8 @@ class ConcurrentConsumer(BaseConsumer):
                         context={"consumer_group": self._config.consumer_group},
                     )
 
-                # 启动核心组件
-                self._name_server_manager.start()
-                self._broker_manager.start()
-                self._offset_store.start()
+                # 启动BaseConsumer
+                super().start()
 
                 # 创建线程池
                 max_workers: int = self._config.consume_thread_max
@@ -394,9 +372,6 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 停止线程池
                 self._shutdown_thread_pools()
-
-                # 停止核心组件
-                self._shutdown_core_components()
 
                 # 清理资源
                 self._cleanup_resources()
@@ -1692,70 +1667,6 @@ class ConcurrentConsumer(BaseConsumer):
                     },
                 )
 
-    def _update_route_info(self, topic: str) -> bool:
-        """更新Topic路由信息
-
-        手动触发Topic路由信息的更新。通常情况下，路由信息会自动更新，
-        但在某些特殊场景下可能需要手动触发更新。
-
-        Args:
-            topic: 要更新的Topic名称
-
-        Returns:
-            bool: 更新是否成功
-        """
-        logger.info(
-            "Updating route info for topic",
-            extra={
-                "topic": topic,
-            },
-        )
-        topic_route_data = self._name_server_manager.get_topic_route(topic)
-        if not topic_route_data:
-            logger.error(
-                "Failed to get topic route data",
-                extra={
-                    "topic": topic,
-                },
-            )
-            return False
-
-        # 维护broker连接
-        for broker_data in topic_route_data.broker_data_list:
-            for idx, broker_addr in broker_data.broker_addresses.items():
-                logger.info(
-                    "Adding broker",
-                    extra={
-                        "broker_id": idx,
-                        "broker_address": broker_addr,
-                        "broker_name": broker_data.broker_name,
-                    },
-                )
-                self._broker_manager.add_broker(
-                    broker_addr,
-                    broker_data.broker_name,
-                )
-
-        # 更新本地缓存
-        success = self._topic_broker_mapping.update_route_info(topic, topic_route_data)
-        if success:
-            logger.info(
-                "Route info updated for topic",
-                extra={
-                    "topic": topic,
-                    "brokers_count": len(topic_route_data.broker_data_list),
-                },
-            )
-            return True
-        else:
-            logger.warning(
-                "Failed to update route cache for topic",
-                extra={"topic": topic},
-            )
-
-        # 如果所有NameServer都失败，强制刷新缓存
-        return self._topic_broker_mapping.force_refresh(topic)
-
     # ==================== 内部方法：资源清理 ====================
 
     def _cleanup_on_start_failure(self) -> None:
@@ -1786,7 +1697,6 @@ class ConcurrentConsumer(BaseConsumer):
         """
         try:
             self._shutdown_thread_pools()
-            self._shutdown_core_components()
             self._cleanup_resources()
         except Exception as e:
             logger.error(
@@ -1851,29 +1761,6 @@ class ConcurrentConsumer(BaseConsumer):
         except Exception as e:
             logger.warning(
                 f"Error shutting down thread pools and threads: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "error": str(e),
-                },
-            )
-
-    def _shutdown_core_components(self) -> None:
-        """
-        关闭核心组件
-        """
-        try:
-            if hasattr(self, "_offset_store") and self._offset_store:
-                self._offset_store.stop()
-
-            if hasattr(self, "_broker_manager") and self._broker_manager:
-                self._broker_manager.shutdown()
-
-            if hasattr(self, "_name_server_manager") and self._name_server_manager:
-                self._name_server_manager.stop()
-
-        except Exception as e:
-            logger.warning(
-                f"Error shutting down core components: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "error": str(e),

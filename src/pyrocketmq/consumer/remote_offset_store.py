@@ -121,7 +121,6 @@ class RemoteOffsetStore(OffsetStore):
             target=self._periodic_persist, daemon=True
         )
         self._persist_thread.start()
-        self._nameserver_manager.start()
         logger.info(
             "remote offset store started", extra={"consumer_group": self.consumer_group}
         )
@@ -146,9 +145,6 @@ class RemoteOffsetStore(OffsetStore):
 
         # 持久化所有缓存的偏移量
         self.persist_all()
-
-        # 停止名称服务器管理器
-        self._nameserver_manager.stop()
 
         logger.info(
             "remote offset store stopped", extra={"consumer_group": self.consumer_group}

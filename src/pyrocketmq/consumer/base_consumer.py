@@ -15,8 +15,14 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 # pyrocketmq导入
+from pyrocketmq.broker import BrokerManager
+from pyrocketmq.consumer.offset_store import OffsetStore
+from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
+from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import ConsumeResult, MessageExt, MessageQueue, MessageSelector
+from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
+from pyrocketmq.remote import DEFAULT_CONFIG
 
 # 本地模块导入
 from .config import ConsumerConfig
@@ -91,6 +97,23 @@ class BaseConsumer(ABC):
         self._config: ConsumerConfig = config
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
         self._message_listener: MessageListener | None = None
+        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
+            ConsumerTopicBrokerMapping()
+        )
+
+        # 初始化核心组件
+        self._name_server_manager: NameServerManager = create_nameserver_manager(
+            self._config.namesrv_addr
+        )
+        self._broker_manager: BrokerManager = BrokerManager(DEFAULT_CONFIG)
+        # 创建偏移量存储
+        self._offset_store: OffsetStore = OffsetStoreFactory.create_offset_store(
+            consumer_group=self._config.consumer_group,
+            message_model=self._config.message_model,
+            namesrv_manager=self._name_server_manager,
+            broker_manager=self._broker_manager,
+        )
+
         self._is_running: bool = False
         self._lock: threading.RLock = threading.RLock()
 
@@ -123,7 +146,9 @@ class BaseConsumer(ABC):
         Note:
             启动前需要确保已注册消息监听器和订阅了必要的Topic。
         """
-        pass
+        self._name_server_manager.start()
+        self._broker_manager.start()
+        self._offset_store.start()
 
     @abstractmethod
     def shutdown(self) -> None:
@@ -144,7 +169,7 @@ class BaseConsumer(ABC):
         Note:
             这是一个阻塞操作，会等待所有正在处理的消息完成。
         """
-        pass
+        self._cleanup_resources()
 
     # ==================== 订阅管理方法 ====================
 
@@ -609,13 +634,71 @@ class BaseConsumer(ABC):
                 },
             )
 
-            # 清理订阅管理器
-            if hasattr(self, "_subscription_manager") and self._subscription_manager:
-                # 可以在这里保存订阅状态或其他清理操作
-                pass
+            # 清理核心组件
+            try:
+                # 1. 清理偏移量存储 - 优先清理，确保持久化完成
+                if hasattr(self, "_offset_store") and self._offset_store:
+                    try:
+                        # 尝试持久化未提交的偏移量
+                        if hasattr(self._offset_store, "persist_all"):
+                            self._offset_store.persist_all()
+                        # 关闭偏移量存储
+                        if hasattr(self._offset_store, "stop"):
+                            self._offset_store.stop()
 
-            # 清理消息监听器引用
-            self._message_listener = None
+                        logger.info("OffsetStore cleaned up successfully")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up offset_store: {e}")
+
+                # 2. 清理订阅管理器 - 在偏移量存储之后清理
+                if (
+                    hasattr(self, "_subscription_manager")
+                    and self._subscription_manager
+                ):
+                    try:
+                        # 保存订阅状态和清理非活跃订阅
+                        if hasattr(
+                            self._subscription_manager, "cleanup_inactive_subscriptions"
+                        ):
+                            self._subscription_manager.cleanup_inactive_subscriptions()
+
+                        # 清理订阅数据
+                        if hasattr(self._subscription_manager, "clear_all"):
+                            self._subscription_manager.clear_all()
+
+                        logger.info("SubscriptionManager cleaned up successfully")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up subscription_manager: {e}")
+
+                # 3. 清理Topic到Broker的映射(Need not to)
+
+                # 4. 清理Broker管理器 - 在依赖组件之后清理
+                if hasattr(self, "_broker_manager") and self._broker_manager:
+                    try:
+                        self._broker_manager.shutdown()
+                        logger.info("BrokerManager shutdown successfully")
+                    except Exception as e:
+                        logger.warning(f"Error shutting down broker_manager: {e}")
+
+                # 5. 清理NameServer管理器 - 最后清理网络连接
+                if hasattr(self, "_name_server_manager") and self._name_server_manager:
+                    try:
+                        self._name_server_manager.stop()
+                        logger.info("NameServerManager stopped successfully")
+                    except Exception as e:
+                        logger.warning(f"Error stopping name_server_manager: {e}")
+
+                # 6. 清理消息监听器引用
+                self._message_listener = None
+
+                # 7. 重置运行状态
+                self._is_running = False
+
+                logger.info("All core components cleaned up successfully")
+
+            except Exception as cleanup_error:
+                logger.error(f"Error during core components cleanup: {cleanup_error}")
+                raise
 
             logger.info(
                 "BaseConsumer resources cleaned up successfully",
@@ -634,6 +717,70 @@ class BaseConsumer(ABC):
                 },
                 exc_info=True,
             )
+
+    def _update_route_info(self, topic: str) -> bool:
+        """更新Topic路由信息
+
+        手动触发Topic路由信息的更新。通常情况下，路由信息会自动更新，
+        但在某些特殊场景下可能需要手动触发更新。
+
+        Args:
+            topic: 要更新的Topic名称
+
+        Returns:
+            bool: 更新是否成功
+        """
+        logger.info(
+            "Updating route info for topic",
+            extra={
+                "topic": topic,
+            },
+        )
+        topic_route_data = self._name_server_manager.get_topic_route(topic)
+        if not topic_route_data:
+            logger.error(
+                "Failed to get topic route data",
+                extra={
+                    "topic": topic,
+                },
+            )
+            return False
+
+        # 维护broker连接
+        for broker_data in topic_route_data.broker_data_list:
+            for idx, broker_addr in broker_data.broker_addresses.items():
+                logger.info(
+                    "Adding broker",
+                    extra={
+                        "broker_id": idx,
+                        "broker_address": broker_addr,
+                        "broker_name": broker_data.broker_name,
+                    },
+                )
+                self._broker_manager.add_broker(
+                    broker_addr,
+                    broker_data.broker_name,
+                )
+
+        # 更新本地缓存
+        success = self._topic_broker_mapping.update_route_info(topic, topic_route_data)
+        if success:
+            logger.info(
+                "Route info updated for topic",
+                extra={
+                    "topic": topic,
+                    "brokers_count": len(topic_route_data.broker_data_list),
+                },
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to update route cache for topic",
+                extra={"topic": topic},
+            )
+
+        # 如果所有NameServer都失败，强制刷新缓存
+        return self._topic_broker_mapping.force_refresh(topic)
 
     # ==================== 字符串表示方法 ====================
 

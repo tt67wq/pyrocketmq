@@ -139,22 +139,6 @@ class ConsumerTopicBrokerMapping(ProducerTopicBrokerMapping):
         """
         return super().clear_expired_routes(timeout)
 
-    async def start_background_cleanup(self, interval: float = 60.0):
-        """
-        启动后台清理任务
-
-        重写父类方法，添加Consumer特定的日志
-
-        Args:
-            interval: 清理间隔（秒）
-        """
-        logger.info(
-            f"Starting consumer background cleanup task with interval {interval}s"
-        )
-
-        # 使用父类的后台清理方法
-        await super().start_background_cleanup(interval)
-
     def __str__(self) -> str:
         """字符串表示"""
         stats = self.get_cache_stats()
