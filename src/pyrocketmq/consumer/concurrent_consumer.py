@@ -160,35 +160,8 @@ class ConcurrentConsumer(BaseConsumer):
             threading.Event()
         )  # 用于重平衡循环的事件
 
-        # 路由刷新定时任务
-        self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
-        self._route_refresh_event: threading.Event = (
-            threading.Event()
-        )  # 用于路由刷新循环的事件
-        self._route_refresh_thread: threading.Thread | None = None  # 路由刷新线程
-
         # 重平衡重入保护
         self._rebalance_lock: threading.RLock = threading.RLock()  # 重平衡锁，防止重入
-
-        # 统计信息
-        self._stats: dict[str, Any] = {
-            "messages_consumed": 0,
-            "messages_failed": 0,
-            "pull_requests": 0,
-            "pull_successes": 0,
-            "pull_failures": 0,
-            "consume_duration_total": 0.0,
-            "start_time": 0.0,
-            "heartbeat_success_count": 0,
-            "heartbeat_failure_count": 0,
-            "route_refresh_count": 0,  # 路由刷新次数统计
-            "route_refresh_success_count": 0,  # 路由刷新成功次数
-            "route_refresh_failure_count": 0,  # 路由刷新失败次数
-            "rebalance_count": 0,  # 重平衡次数统计
-            "rebalance_success_count": 0,  # 重平衡成功次数
-            "rebalance_failure_count": 0,  # 重平衡失败次数
-            "rebalance_skipped_count": 0,  # 跳过重平衡次数统计
-        }
 
         logger.info(
             "ConcurrentConsumer initialized",
@@ -272,9 +245,6 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 启动心跳任务
                 self._start_heartbeat_task()
-
-                # 启动路由刷新任务
-                self._start_route_refresh_task()
 
                 self._is_running = True
                 self._stats["start_time"] = time.time()
@@ -375,6 +345,8 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 清理资源
                 self._cleanup_resources()
+
+                super().shutdown()
 
                 logger.info(
                     "ConcurrentConsumer shutdown completed",
@@ -1427,7 +1399,7 @@ class ConcurrentConsumer(BaseConsumer):
         logger.info("Heartbeat loop started")
 
         self._send_heartbeat_to_all_brokers()
-        while not self._heartbeat_event.is_set():
+        while self._is_running:
             try:
                 current_time = time.time()
 
@@ -1566,107 +1538,6 @@ class ConcurrentConsumer(BaseConsumer):
                 exc_info=True,
             )
 
-    # ==================== 内部方法：路由刷新 ====================
-
-    def _start_route_refresh_task(self) -> None:
-        """启动路由刷新任务"""
-        self._route_refresh_thread = threading.Thread(
-            target=self._route_refresh_loop,
-            name=f"{self._config.consumer_group}-route-refresh-thread",
-            daemon=True,
-        )
-        self._route_refresh_thread.start()
-
-    def _route_refresh_loop(self) -> None:
-        """路由刷新循环
-
-        定期刷新所有订阅Topic的路由信息，确保消费者能够感知到集群拓扑的变化。
-        """
-        logger.info(
-            "Route refresh loop started",
-            extra={
-                "consumer_group": self._config.consumer_group,
-                "refresh_interval": self._route_refresh_interval,
-            },
-        )
-
-        self._refresh_all_routes()
-
-        while not self._route_refresh_event.is_set():
-            try:
-                # 等待指定间隔或关闭事件
-                if self._route_refresh_event.wait(
-                    timeout=self._route_refresh_interval / 1000
-                ):
-                    # 收到事件信号，退出循环
-                    break
-
-                # 检查是否正在关闭
-                if self._route_refresh_event.is_set():
-                    break
-
-                # 执行路由刷新
-                self._refresh_all_routes()
-                _ = self._topic_broker_mapping.clear_expired_routes()
-
-                # 更新统计信息
-                self._stats["route_refresh_count"] += 1
-                self._stats["route_refresh_success_count"] += 1
-
-                logger.debug(
-                    "Route refresh completed",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "refresh_count": self._stats["route_refresh_count"],
-                        "topics_count": len(
-                            self._topic_broker_mapping.get_all_topics()
-                        ),
-                    },
-                )
-
-            except Exception as e:
-                self._stats["route_refresh_failure_count"] += 1
-                logger.warning(
-                    f"Error in route refresh loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                        "refresh_count": self._stats["route_refresh_count"],
-                        "failure_count": self._stats["route_refresh_failure_count"],
-                    },
-                    exc_info=True,
-                )
-
-                # 发生异常时，等待较短时间后重试
-                self._route_refresh_event.wait(timeout=5.0)
-
-        logger.info(
-            "Route refresh loop stopped",
-            extra={
-                "consumer_group": self._config.consumer_group,
-                "total_refreshes": self._stats["route_refresh_count"],
-                "success_count": self._stats["route_refresh_success_count"],
-                "failure_count": self._stats["route_refresh_failure_count"],
-            },
-        )
-
-    def _refresh_all_routes(self) -> None:
-        """刷新所有Topic的路由信息"""
-        topics = list(self._topic_broker_mapping.get_all_topics())
-
-        for topic in topics:
-            try:
-                if self._topic_broker_mapping.get_route_info(topic) is None:
-                    _ = self._update_route_info(topic)
-            except Exception as e:
-                logger.debug(
-                    "Failed to refresh route",
-                    extra={
-                        "topic": topic,
-                        "error": str(e),
-                    },
-                )
-
     # ==================== 内部方法：资源清理 ====================
 
     def _cleanup_on_start_failure(self) -> None:
@@ -1725,7 +1596,6 @@ class ConcurrentConsumer(BaseConsumer):
             # 等待专用线程结束
             self._rebalance_event.set()  # 唤醒重平衡线程
             self._heartbeat_event.set()  # 唤醒心跳线程
-            self._route_refresh_event.set()  # 唤醒路由刷新线程
 
             # 等待线程结束
             threads_to_join: list[threading.Thread] = []
@@ -1771,7 +1641,6 @@ class ConcurrentConsumer(BaseConsumer):
         """
         清理资源
         """
-        super()._cleanup_resources()
 
         # 清理处理队列
         if hasattr(self, "_process_queue"):
