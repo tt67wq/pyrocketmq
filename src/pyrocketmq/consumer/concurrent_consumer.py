@@ -748,15 +748,19 @@ class ConcurrentConsumer(BaseConsumer):
             - 消费者停止时此循环会自动退出
             - 支持通过配置控制拉取频率
         """
+        suggest_broker_id = 0
         while self._is_running:
             try:
                 # 获取当前偏移量
                 current_offset: int = self._get_or_initialize_offset(message_queue)
 
                 # 拉取消息
-                messages, next_begin_offset = self._pull_messages(
-                    message_queue, current_offset
+                messages, next_begin_offset, next_suggest_id = self._pull_messages(
+                    message_queue,
+                    current_offset,
+                    suggest_broker_id,
                 )
+                suggest_broker_id = next_suggest_id
 
                 if messages:
                     # 更新偏移量
@@ -1024,26 +1028,82 @@ class ConcurrentConsumer(BaseConsumer):
         return current_offset
 
     def _pull_messages(
-        self, message_queue: MessageQueue, offset: int
-    ) -> tuple[list[MessageExt], int]:
-        """
-        从指定队列拉取消息
+        self, message_queue: MessageQueue, offset: int, suggest_id: int
+    ) -> tuple[list[MessageExt], int, int]:
+        """从指定队列拉取消息，支持偏移量管理和Broker选择。
+
+        该方法是并发消费者的核心拉取逻辑，负责从RocketMQ Broker拉取消息，
+        并处理相关的系统标志位和偏移量管理。支持主备Broker的智能选择
+        和故障转移机制。
+
+        核心功能:
+        - 通过NameServerManager获取最优Broker地址
+        - 构建拉取请求的系统标志位
+        - 处理commit offset的提交逻辑
+        - 支持批量消息拉取以提高效率
+        - 完善的错误处理和重试机制
+
+        拉取策略:
+        1. 获取目标Broker地址，优先连接master
+        2. 读取当前commit offset（如果有）
+        3. 构建包含commit标志的系统标志位
+        4. 发送PULL_MESSAGE请求到Broker
+        5. 解析响应并返回消息列表和下次拉取位置
+
+        返回值说明:
+        - list[MessageExt]: 拉取到的消息列表，可能为空
+        - int: 下一次拉取的起始偏移量
+        - int: 建议下次连接的Broker ID（0=master, 其他=slave）
 
         Args:
-            message_queue: 消息队列
-            offset: 起始偏移量
+            message_queue (MessageQueue): 目标消息队列，包含topic、broker名称、队列ID等信息
+            offset (int): 本次拉取的起始偏移量，从该位置开始拉取消息
+            suggest_id (int): 建议的Broker ID，用于连接选择优化，
+                            通常为上次拉取时返回的建议ID
 
         Returns:
-            list[MessageExt]: 拉取到的消息列表
-            next_begin_offset: 下一次拉取的起始偏移量
+            tuple[list[MessageExt], int, int]: 三元组包含：
+                                            - 消息列表（可能为空）
+                                            - 下次拉取的起始偏移量
+                                            - 建议的下次Broker ID
+
+        Raises:
+            MessageConsumeError: 当拉取过程中发生错误时抛出，包含详细的错误信息
+            ValueError: 当无法找到指定broker的地址时抛出
+
+        Example:
+            ```python
+            # 拉取消息示例
+            messages, next_offset, suggested_broker = consumer._pull_messages(
+                message_queue=MessageQueue("test_topic", "broker-a", 0),
+                offset=100,
+                suggest_id=0
+            )
+
+            if messages:
+                for msg in messages:
+                    print(f"消息内容: {msg.body.decode()}")
+                print(f"下次拉取偏移量: {next_offset}")
+                if suggested_broker != 0:
+                    print(f"建议下次连接slave broker: {suggested_broker}")
+            ```
+
+        Note:
+            - 该方法会被_pull_messages_loop循环调用，实现持续的消息拉取
+            - suggest_id参数用于Broker选择的优化，通常来自上次拉取响应
+            - commit_offset只在连接master broker且存在已提交偏移量时使用
+            - 拉取失败时会记录详细的错误信息，便于问题诊断
+            - 返回的empty消息列表并不意味着队列中没有消息，可能是由于网络延迟
         """
         try:
             self._stats["pull_requests"] += 1
 
-            broker_address: str | None = self._name_server_manager.get_broker_address(
-                message_queue.broker_name
+            broker_info: tuple[str, bool] | None = (
+                self._name_server_manager.get_broker_address_in_subscription(
+                    message_queue.broker_name, suggest_id
+                )
             )
-            if not broker_address:
+            if not broker_info:
                 raise ValueError(
                     f"Broker address not found for {message_queue.broker_name}"
                 )
@@ -1051,6 +1111,8 @@ class ConcurrentConsumer(BaseConsumer):
             commit_offset: int = self._offset_store.read_offset(
                 message_queue, ReadOffsetType.READ_FROM_MEMORY
             )
+
+            broker_address, is_master = broker_info
 
             # 使用BrokerManager拉取消息
             with self._broker_manager.connection(broker_address) as conn:
@@ -1061,14 +1123,20 @@ class ConcurrentConsumer(BaseConsumer):
                     queue_id=message_queue.queue_id,
                     queue_offset=offset,
                     max_msg_nums=self._config.pull_batch_size,
-                    sys_flag=self._build_sys_flag(commit_offset=commit_offset > 0),
+                    sys_flag=self._build_sys_flag(
+                        commit_offset=commit_offset > 0 and is_master
+                    ),
                     commit_offset=commit_offset,
                 )
 
                 if result.messages:
-                    return result.messages, result.next_begin_offset
+                    return (
+                        result.messages,
+                        result.next_begin_offset,
+                        result.suggest_which_broker_id or 0,
+                    )
 
-                return [], offset
+                return [], offset, 0
 
         except Exception as e:
             logger.warning(
