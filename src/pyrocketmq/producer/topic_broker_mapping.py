@@ -14,7 +14,6 @@ MVP版本功能:
 版本: MVP 1.0
 """
 
-import asyncio
 import threading
 import time
 from dataclasses import dataclass, field
@@ -68,7 +67,7 @@ class RouteInfo:
         Returns:
             RouteInfo: 包含预构建队列列表的RouteInfo实例
         """
-        route_info = cls(topic_route_data=topic_route_data)
+        route_info: RouteInfo = cls(topic_route_data=topic_route_data)
 
         # 预构建所有可用的队列列表
         available_queues: list[tuple[MessageQueue, BrokerData]] = []
@@ -80,7 +79,7 @@ class RouteInfo:
         }
 
         for queue_data in topic_route_data.queue_data_list:
-            broker_data = broker_map.get(queue_data.broker_name)
+            broker_data: BrokerData | None = broker_map.get(queue_data.broker_name)
             if broker_data is None:
                 logger.warning(
                     f"Broker {queue_data.broker_name} not found in broker list"
@@ -89,21 +88,29 @@ class RouteInfo:
 
             # 为每个写队列创建MessageQueue
             for queue_id in range(queue_data.write_queue_nums):
-                message_queue = MessageQueue(
-                    topic=topic,
-                    broker_name=queue_data.broker_name,
-                    queue_id=queue_id,
+                available_queues.append(
+                    (
+                        MessageQueue(
+                            topic=topic,
+                            broker_name=queue_data.broker_name,
+                            queue_id=queue_id,
+                        ),
+                        broker_data,
+                    )
                 )
-                available_queues.append((message_queue, broker_data))
 
             # 为每个订阅队列创建MessageQueue
             for queue_id in range(queue_data.read_queue_nums):
-                message_queue = MessageQueue(
-                    topic=topic,
-                    broker_name=queue_data.broker_name,
-                    queue_id=queue_id,
+                subscribe_message_queues.append(
+                    (
+                        MessageQueue(
+                            topic=topic,
+                            broker_name=queue_data.broker_name,
+                            queue_id=queue_id,
+                        ),
+                        broker_data,
+                    )
                 )
-                subscribe_message_queues.append((message_queue, broker_data))
 
         route_info.available_queues = available_queues
         route_info.subscribe_message_queues = subscribe_message_queues
@@ -124,7 +131,7 @@ class TopicBrokerMapping:
     4. 提供可用队列列表（不涉及选择逻辑）
     """
 
-    def __init__(self, route_timeout: float = 30.0):
+    def __init__(self, route_timeout: float = 30.0) -> None:
         # 路由信息缓存: topic -> RouteInfo
         self._route_cache: dict[str, RouteInfo] = {}
 
@@ -152,7 +159,7 @@ class TopicBrokerMapping:
             TopicRouteData: 路由信息，如果不存在则返回None
         """
         with self._lock:
-            route_info = self._route_cache.get(topic)
+            route_info: RouteInfo | None = self._route_cache.get(topic)
 
             if route_info is None:
                 logger.debug(f"No route info found for topic: {topic}")
@@ -183,7 +190,9 @@ class TopicBrokerMapping:
         with self._lock:
             try:
                 # 创建新的路由信息并预先构建队列列表
-                new_route_info = RouteInfo.create_with_queues(topic_route_data, topic)
+                new_route_info: RouteInfo = RouteInfo.create_with_queues(
+                    topic_route_data, topic
+                )
 
                 # 更新缓存
                 self._route_cache[topic] = new_route_info
@@ -214,7 +223,7 @@ class TopicBrokerMapping:
             bool: 移除是否成功
         """
         with self._lock:
-            removed = False
+            removed: bool = False
 
             if topic in self._route_cache:
                 del self._route_cache[topic]
@@ -236,7 +245,7 @@ class TopicBrokerMapping:
             list[tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
         """
         with self._lock:
-            route_info = self._route_cache.get(topic)
+            route_info: RouteInfo | None = self._route_cache.get(topic)
             if route_info is None:
                 return []
 
@@ -258,7 +267,7 @@ class TopicBrokerMapping:
             list[tuple[MessageQueue, BrokerData]]: 队列和Broker对列表
         """
         with self._lock:
-            route_info = self._route_cache.get(topic)
+            route_info: RouteInfo | None = self._route_cache.get(topic)
             if route_info is None:
                 return []
 
@@ -279,7 +288,7 @@ class TopicBrokerMapping:
         Returns:
             list[BrokerData]: Broker列表
         """
-        route_info = self.get_route_info(topic)
+        route_info: TopicRouteData | None = self.get_route_info(topic)
         if not route_info:
             return []
 
@@ -295,7 +304,7 @@ class TopicBrokerMapping:
         Returns:
             list[QueueData]: 队列数据列表
         """
-        route_info = self.get_route_info(topic)
+        route_info: TopicRouteData | None = self.get_route_info(topic)
         if not route_info:
             return []
 
@@ -324,7 +333,7 @@ class TopicBrokerMapping:
         if timeout is None:
             timeout = self._default_route_timeout
 
-        current_time = time.time()
+        current_time: float = time.time()
         expired_topics: list[str] = []
 
         with self._lock:
@@ -348,26 +357,26 @@ class TopicBrokerMapping:
         获取缓存统计信息
 
         Returns:
-            dict[str, any]: 统计信息
+            dict[str, int | list[str] | float]: 统计信息
         """
         with self._lock:
-            total_topics = len(self._route_cache)
-            total_brokers = sum(
+            total_topics: int = len(self._route_cache)
+            total_brokers: int = sum(
                 len(route.topic_route_data.broker_data_list)
                 for route in self._route_cache.values()
             )
-            total_queue_data = sum(
+            total_queue_data: int = sum(
                 len(route.topic_route_data.queue_data_list)
                 for route in self._route_cache.values()
             )
 
             # 使用预构建的队列列表统计实际可用的写队列总数
-            total_available_queues = sum(
+            total_available_queues: int = sum(
                 len(route.available_queues) for route in self._route_cache.values()
             )
 
             # 统计订阅队列总数
-            total_subscribe_queues = sum(
+            total_subscribe_queues: int = sum(
                 len(route.subscribe_message_queues)
                 for route in self._route_cache.values()
             )
@@ -381,7 +390,7 @@ class TopicBrokerMapping:
                 "topics": list(self._route_cache.keys()),
             }
 
-    def set_route_timeout(self, timeout: float):
+    def set_route_timeout(self, timeout: float) -> None:
         """
         设置路由过期时间
 
@@ -410,7 +419,7 @@ class TopicBrokerMapping:
 
     def __str__(self) -> str:
         """字符串表示"""
-        stats = self.get_cache_stats()
+        stats: dict[str, int | list[str] | float] = self.get_cache_stats()
         return (
             f"TopicBrokerMapping(topics={stats['total_topics']}, "
             f"brokers={stats['total_brokers']}, "
