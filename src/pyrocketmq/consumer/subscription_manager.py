@@ -249,14 +249,14 @@ class SubscriptionManager:
         with self._lock:
             return len(self._subscriptions)
 
-    def get_topics(self) -> list[str]:
+    def get_topics(self) -> set[str]:
         """获取所有订阅的Topic列表
 
         Returns:
-            List[str]: Topic名称列表
+            Set[str]: Topic名称列表
         """
         with self._lock:
-            return list(self._subscriptions.keys())
+            return set(self._subscriptions.keys())
 
     # ==================== 数据转换操作 ====================
 

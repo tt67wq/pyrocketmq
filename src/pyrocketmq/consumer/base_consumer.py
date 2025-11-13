@@ -135,7 +135,7 @@ class BaseConsumer(ABC):
 
         # 心跳任务管理
         self._heartbeat_interval: float = getattr(
-            config, "heartbeat_interval", 30.0
+            config, "heartbeat_interval", 10.0
         )  # 心跳间隔(秒)
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
@@ -190,6 +190,10 @@ class BaseConsumer(ABC):
         Note:
             启动前需要确保已注册消息监听器和订阅了必要的Topic。
         """
+
+        self._is_running = True
+
+        # 启动background任务
         self._name_server_manager.start()
         self._broker_manager.start()
         self._offset_store.start()
@@ -379,7 +383,7 @@ class BaseConsumer(ABC):
                 },
             ) from e
 
-    def get_subscribed_topics(self) -> list[str]:
+    def get_subscribed_topics(self) -> set[str]:
         """
         获取已订阅的Topic列表.
 
@@ -907,7 +911,9 @@ class BaseConsumer(ABC):
 
     def _refresh_all_routes(self) -> None:
         """刷新所有Topic的路由信息"""
-        topics = list(self._topic_broker_mapping.get_all_topics())
+        topics: set[str] = self._topic_broker_mapping.get_all_topics().union(
+            self._subscription_manager.get_topics()
+        )
 
         for topic in topics:
             try:
@@ -1028,6 +1034,7 @@ class BaseConsumer(ABC):
         logger.info("Heartbeat loop started")
 
         self._send_heartbeat_to_all_brokers()
+        self._last_heartbeat_time = time.time()
         while self._is_running:
             try:
                 current_time = time.time()
@@ -1081,7 +1088,13 @@ class BaseConsumer(ABC):
         try:
             # 获取所有已知的Broker地址
             broker_addrs: set[str] = set()
-            all_topics: set[str] = self._topic_broker_mapping.get_all_topics()
+            all_topics: set[str] = self._topic_broker_mapping.get_all_topics().union(
+                self._subscription_manager.get_topics()
+            )
+
+            if not all_topics:
+                logger.warning("No topics found for heartbeat")
+                return
 
             for topic in all_topics:
                 brokers: list[BrokerData] = (
@@ -1095,7 +1108,7 @@ class BaseConsumer(ABC):
                                 broker_addrs.add(addr)
 
             if not broker_addrs:
-                logger.debug("No broker addresses found for heartbeat")
+                logger.warning("No broker addresses found for heartbeat")
                 return
 
             heartbeat_data = HeartbeatData(
@@ -1119,6 +1132,7 @@ class BaseConsumer(ABC):
             heartbeat_failure_count: int = 0
 
             for broker_addr in broker_addrs:
+                print(f"send heartbeat to {broker_addr}!!!!!!!!!!!!!")
                 try:
                     # 创建Broker客户端连接
                     with self._broker_manager.connection(broker_addr) as conn:

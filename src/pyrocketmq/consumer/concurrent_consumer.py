@@ -232,7 +232,6 @@ class ConcurrentConsumer(BaseConsumer):
                 # 启动消息拉取任务
                 # self._start_pull_tasks()
 
-                self._is_running = True
                 self._stats["start_time"] = time.time()
 
                 logger.info(
@@ -471,7 +470,7 @@ class ConcurrentConsumer(BaseConsumer):
             self._stats["rebalance_count"] += 1
 
             # 获取所有订阅的Topic
-            topics: list[str] = self._subscription_manager.get_topics()
+            topics: set[str] = self._subscription_manager.get_topics()
             if not topics:
                 logger.debug("No topics subscribed, skipping rebalance")
                 return
