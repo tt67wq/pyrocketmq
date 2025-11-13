@@ -221,10 +221,10 @@ class ConcurrentConsumer(BaseConsumer):
                     thread_name_prefix=f"pull-{self._config.consumer_group}",
                 )
 
-                # self._do_rebalance()
+                self._do_rebalance()
 
                 # 启动重平衡任务
-                # self._start_rebalance_task()
+                self._start_rebalance_task()
 
                 # 启动消息处理任务
                 # self._start_consume_tasks()
@@ -677,8 +677,8 @@ class ConcurrentConsumer(BaseConsumer):
             self._rebalance_event.set()
 
             # 同时在后台线程中执行重平衡（确保立即响应）
-            if self._pull_executor:
-                self._pull_executor.submit(self._do_rebalance)
+            # if self._pull_executor:
+            #     self._pull_executor.submit(self._do_rebalance)
 
     # ==================== 内部方法：消息拉取 ====================
 
