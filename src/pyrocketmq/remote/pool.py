@@ -99,7 +99,7 @@ class ConnectionPool:
 
         try:
             # 获取连接超时时间
-            get_timeout = timeout or self.remote_config.connection_pool_timeout
+            get_timeout: float = timeout or self.remote_config.connection_pool_timeout
 
             while True:
                 with self._pool_lock:
@@ -125,6 +125,10 @@ class ConnectionPool:
             if connection and connection.is_connected:
                 self._return_connection(connection)
             raise
+        finally:
+            # 正常完成时归还连接
+            if connection and connection.is_connected:
+                self._return_connection(connection)
 
     def _return_connection(self, connection: Remote) -> None:
         """归还连接到池中"""
@@ -214,10 +218,19 @@ class AsyncConnectionPool:
 
         # 创建连接池
         self._initialize_task: asyncio.Task[None] | None = None
+        self._is_initialized: bool = False
 
     async def _initialize_pool(self) -> None:
         """初始化连接池"""
+        # 防止重复初始化
+        if self._is_initialized:
+            return
+
         async with self._pool_lock:
+            # 双重检查，防止在等待锁的过程中已经被其他任务初始化
+            if self._is_initialized:
+                return
+
             for i in range(self.pool_size):
                 try:
                     # 这里需要导入工厂函数，避免循环导入
@@ -242,6 +255,8 @@ class AsyncConnectionPool:
                     )
                     raise ConnectionError(f"初始化连接池失败: {e}") from e
 
+            # 标记为已初始化
+            self._is_initialized = True
             self._logger.info(
                 "异步连接池初始化完成",
                 extra={"pool_size": self.pool_size},
@@ -276,8 +291,8 @@ class AsyncConnectionPool:
         if self._initialize_task is None or self._initialize_task.done():
             await self.initialize()
 
-        connection = None
-        start_time = time.time()
+        connection: AsyncRemote | None = None
+        start_time: float = time.time()
 
         try:
             # 获取连接超时时间
@@ -307,6 +322,10 @@ class AsyncConnectionPool:
             if connection and connection.is_connected:
                 await self._return_connection(connection)
             raise
+        finally:
+            # 正常完成时归还连接
+            if connection and connection.is_connected:
+                await self._return_connection(connection)
 
     async def _return_connection(self, connection: AsyncRemote) -> None:
         """归还连接到池中"""
@@ -349,6 +368,10 @@ class AsyncConnectionPool:
                 await self._initialize_task
             except asyncio.CancelledError:
                 pass
+
+        # 重置初始化状态，允许重新初始化
+        self._is_initialized = False
+        self._initialize_task = None
 
         self._logger.info("异步连接池已关闭")
 

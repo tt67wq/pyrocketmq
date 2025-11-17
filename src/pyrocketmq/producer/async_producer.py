@@ -23,6 +23,7 @@ MVP版本功能:
 
 import asyncio
 import time
+from typing import Any
 
 # Local imports - broker
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
@@ -61,6 +62,7 @@ from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
+from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
 
@@ -801,7 +803,10 @@ class AsyncProducer:
             SendResult: 发送结果
         """
 
-        async with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+            broker_addr
+        )
+        async with pool.get_connection() as broker_remote:
             return await AsyncBrokerClient(broker_remote).async_send_message(
                 self._config.producer_group,
                 message.body,
@@ -822,7 +827,10 @@ class AsyncProducer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        async with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+            broker_addr
+        )
+        async with pool.get_connection() as broker_remote:
             await AsyncBrokerClient(broker_remote).async_oneway_message(
                 self._config.producer_group,
                 message.body,
@@ -847,7 +855,10 @@ class AsyncProducer:
         Returns:
             SendMessageResult: 发送结果
         """
-        async with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+            broker_addr
+        )
+        async with pool.get_connection() as broker_remote:
             return await AsyncBrokerClient(broker_remote).async_batch_send_message(
                 self._config.producer_group,
                 batch_message.body,
@@ -871,7 +882,10 @@ class AsyncProducer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        async with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+            broker_addr
+        )
+        async with pool.get_connection() as broker_remote:
             await AsyncBrokerClient(broker_remote).async_batch_oneway_message(
                 self._config.producer_group,
                 batch_message.body,
@@ -952,9 +966,10 @@ class AsyncProducer:
             for broker_addr in broker_addrs:
                 try:
                     # 获取或创建Broker连接
-                    async with self._broker_manager.connection(
-                        broker_addr
-                    ) as broker_remote:
+                    pool: AsyncConnectionPool = (
+                        await self._broker_manager.must_connection_pool(broker_addr)
+                    )
+                    async with pool.get_connection() as broker_remote:
                         await AsyncBrokerClient(broker_remote).send_heartbeat(
                             heartbeat_data
                         )
@@ -1112,7 +1127,7 @@ class AsyncProducer:
 def create_async_producer(
     producer_group: str = "DEFAULT_PRODUCER",
     namesrv_addr: str = "localhost:9876",
-    **kwargs,
+    **kwargs: Any,
 ) -> AsyncProducer:
     """创建AsyncProducer实例的便捷函数
 

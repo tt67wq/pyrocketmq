@@ -32,7 +32,9 @@ from pyrocketmq.producer.errors import ProducerError
 
 def main():
     """主函数"""
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
+    pyrocketmq.logging.setup_logging(
+        LoggingConfig(level="INFO", json_output=False, file_path="producer.log")
+    )
     producer = create_producer("GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110")
     producer.start()
     index = 0
