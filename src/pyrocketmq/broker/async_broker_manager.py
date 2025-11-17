@@ -261,3 +261,19 @@ class AsyncBrokerManager:
         if self._broker_pools.get(broker_addr):
             return self._broker_pools[broker_addr]
         return None
+
+    async def must_connection_pool(self, broker_addr: str) -> AsyncConnectionPool:
+        """获取Broker连接池，如果不存在则创建
+
+        Args:
+            broker_addr: Broker地址
+
+        Returns:
+            AsyncConnectionPool: 连接池实例
+        """
+        async with self._lock:
+            if self._broker_pools.get(broker_addr):
+                return self._broker_pools[broker_addr]
+        await self.add_broker(broker_addr)
+        async with self._lock:
+            return self._broker_pools[broker_addr]

@@ -253,6 +253,27 @@ class BrokerManager:
         Returns:
             ConnectionPool | None: 连接池实例，如果不存在则返回None
         """
-        if self._broker_pools.get(broker_addr):
+        with self._lock:
+            if self._broker_pools.get(broker_addr):
+                return self._broker_pools[broker_addr]
+            return None
+
+    def must_connection_pool(self, broker_addr: str) -> ConnectionPool:
+        """获取Broker连接池，如果不存在则创建
+
+        Args:
+            broker_addr: Broker地址
+
+        Returns:
+            ConnectionPool: 连接池实例
+        """
+        with self._lock:
+            if self._broker_pools.get(broker_addr):
+                return self._broker_pools[broker_addr]
+
+        # 在锁外调用add_broker，因为add_broker内部有自己的锁
+        self.add_broker(broker_addr)
+
+        # 再次获取，确保返回正确的连接池
+        with self._lock:
             return self._broker_pools[broker_addr]
-        return None

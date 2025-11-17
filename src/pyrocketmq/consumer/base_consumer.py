@@ -1134,7 +1134,8 @@ class BaseConsumer(ABC):
             for broker_addr in broker_addrs:
                 try:
                     # 创建Broker客户端连接
-                    with self._broker_manager.connection(broker_addr) as conn:
+                    pool = self._broker_manager.must_connection_pool(broker_addr)
+                    with pool.get_connection() as conn:
                         # 发送心跳请求
                         BrokerClient(conn).send_heartbeat(heartbeat_data)
 
