@@ -53,7 +53,7 @@ from pyrocketmq.model import (
     RequestCode,
     ResponseCode,
 )
-from pyrocketmq.remote import Remote
+from pyrocketmq.remote import ConnectionPool, Remote
 
 logger = get_logger(__name__)
 
@@ -1115,7 +1115,10 @@ class ConcurrentConsumer(BaseConsumer):
             broker_address, is_master = broker_info
 
             # 使用BrokerManager拉取消息
-            with self._broker_manager.connection(broker_address) as conn:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_address
+            )
+            with pool.get_connection() as conn:
                 self._prepare_consumer_remote(conn)
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
@@ -1332,7 +1335,8 @@ class ConcurrentConsumer(BaseConsumer):
                 },
             )
             return
-        with self._broker_manager.connection(broker_addr) as conn:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as conn:
             BrokerClient(conn).consumer_send_msg_back(
                 message,
                 0,
@@ -1404,7 +1408,8 @@ class ConcurrentConsumer(BaseConsumer):
             )
             return []
 
-        with self._broker_manager.connection(addresses[0]) as conn:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
+        with pool.get_connection() as conn:
             return BrokerClient(conn).get_consumers_by_group(
                 self._config.consumer_group
             )

@@ -60,6 +60,169 @@ class BrokerManager:
             },
         )
 
+    def _validate_broker_address(self, broker_addr: str) -> None:
+        """验证Broker地址格式
+
+        Args:
+            broker_addr: Broker地址，格式为"host:port"
+
+        Raises:
+            ValueError: 当地址格式无效时
+        """
+        if not broker_addr or ":" not in broker_addr:
+            self._logger.error(
+                "无效的Broker地址格式",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error_reason": "missing_colon_or_empty",
+                    "timestamp": time.time(),
+                },
+            )
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}")
+
+    def _parse_broker_address(self, broker_addr: str) -> tuple[str, int]:
+        """解析Broker地址，返回主机和端口
+
+        Args:
+            broker_addr: Broker地址，格式为"host:port"
+
+        Returns:
+            tuple[str, int]: (主机, 端口)
+
+        Raises:
+            ValueError: 当地址格式无效时
+        """
+        try:
+            host, port_str = broker_addr.split(":")
+            port = int(port_str)
+            if not host or port <= 0 or port > 65535:
+                raise ValueError("无效的主机或端口")
+
+            self._logger.debug(
+                "同步Broker地址解析成功",
+                extra={
+                    "broker_addr": broker_addr,
+                    "host": host,
+                    "port": port,
+                    "timestamp": time.time(),
+                },
+            )
+            return host, port
+        except ValueError as e:
+            self._logger.error(
+                "同步Broker地址解析失败",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error_message": str(e),
+                    "timestamp": time.time(),
+                },
+            )
+            raise ValueError(f"无效的Broker地址格式: {broker_addr}") from e
+
+    def _extract_broker_name(
+        self, broker_addr: str, broker_name: str | None = None
+    ) -> str:
+        """提取Broker名称
+
+        Args:
+            broker_addr: Broker地址
+            broker_name: 提供的Broker名称，为None时从地址提取
+
+        Returns:
+            str: Broker名称
+        """
+        if not broker_name:
+            broker_name = broker_addr.split(":")[0]
+            self._logger.debug(
+                "从地址提取同步Broker名称",
+                extra={
+                    "broker_addr": broker_addr,
+                    "extracted_broker_name": broker_name,
+                    "timestamp": time.time(),
+                },
+            )
+        return broker_name
+
+    def _create_transport_config(self, broker_addr: str) -> TransportConfig:
+        """为指定Broker创建传输配置
+
+        Args:
+            broker_addr: Broker地址
+
+        Returns:
+            TransportConfig: 传输配置实例
+        """
+        host, port = self._parse_broker_address(broker_addr)
+
+        if self.transport_config:
+            # 移除基础配置中的host和port，避免重复
+            transport_config_dict = {
+                k: v
+                for k, v in self.transport_config.__dict__.items()
+                if k not in ("host", "port")
+            }
+            transport_config = TransportConfig(
+                host=host,
+                port=port,
+                **transport_config_dict,
+            )
+        else:
+            transport_config = TransportConfig(
+                host=host,
+                port=port,
+            )
+
+        self._logger.debug(
+            "同步传输配置创建成功",
+            extra={
+                "broker_addr": broker_addr,
+                "transport_host": transport_config.host,
+                "transport_port": transport_config.port,
+                "timeout": transport_config.timeout,
+                "timestamp": time.time(),
+            },
+        )
+
+        return transport_config
+
+    def _create_connection_pool(
+        self, broker_addr: str, transport_config: TransportConfig
+    ) -> ConnectionPool:
+        """创建Broker连接池
+
+        Args:
+            broker_addr: Broker地址
+            transport_config: 传输配置
+
+        Returns:
+            ConnectionPool: 连接池实例
+        """
+        self._logger.debug(
+            "创建同步连接池",
+            extra={
+                "broker_addr": broker_addr,
+                "max_connections": self.connection_pool_size,
+                "timestamp": time.time(),
+            },
+        )
+
+        pool = ConnectionPool(
+            address=broker_addr,
+            pool_size=self.connection_pool_size,
+            remote_config=self.remote_config,
+            transport_config=transport_config,
+        )
+
+        self._logger.debug(
+            "同步连接池创建成功",
+            extra={
+                "broker_addr": broker_addr,
+                "timestamp": time.time(),
+            },
+        )
+
+        return pool
+
     def start(self) -> None:
         pass
 
@@ -92,116 +255,37 @@ class BrokerManager:
             broker_addr: Broker地址，格式为"host:port"
             broker_name: Broker名称，为None时从地址提取
         """
+        # 1. 验证地址格式
+        self._validate_broker_address(broker_addr)
 
-        # 验证broker_addr格式
-        if not broker_addr or ":" not in broker_addr:
-            self._logger.error(
-                "无效的Broker地址格式",
-                extra={
-                    "broker_addr": broker_addr,
-                    "error_reason": "missing_colon_or_empty",
-                    "timestamp": time.time(),
-                },
-            )
-            raise ValueError(f"无效的Broker地址格式: {broker_addr}")
-
-        # 解析主机和端口
-        try:
-            host, port_str = broker_addr.split(":")
-            port = int(port_str)
-            if not host or port <= 0 or port > 65535:
-                raise ValueError("无效的主机或端口")
-            self._logger.debug(
-                "同步Broker地址解析成功",
-                extra={
-                    "broker_addr": broker_addr,
-                    "host": host,
-                    "port": port,
-                    "timestamp": time.time(),
-                },
-            )
-        except ValueError as e:
-            self._logger.error(
-                "同步Broker地址解析失败",
-                extra={
-                    "broker_addr": broker_addr,
-                    "error_message": str(e),
-                    "timestamp": time.time(),
-                },
-            )
-            raise ValueError(f"无效的Broker地址格式: {broker_addr}") from e
-
-        if not broker_name:
-            broker_name = broker_addr.split(":")[0]
-            self._logger.debug(
-                "从地址提取同步Broker名称",
-                extra={
-                    "broker_addr": broker_addr,
-                    "extracted_broker_name": broker_name,
-                    "timestamp": time.time(),
-                },
-            )
+        # 2. 提取Broker名称
+        broker_name = self._extract_broker_name(broker_addr, broker_name)
 
         with self._lock:
             try:
-                # 创建连接信息
+                # 检查broker是否已经存在，避免重复添加
+                if broker_addr in self._broker_pools:
+                    self._logger.debug(
+                        "Broker已存在，跳过添加",
+                        extra={
+                            "broker_addr": broker_addr,
+                            "broker_name": broker_name,
+                            "timestamp": time.time(),
+                        },
+                    )
+                    return
+
+                # 3. 创建传输配置
+                transport_config = self._create_transport_config(broker_addr)
+
+                # 4. 创建连接池
+                pool = self._create_connection_pool(broker_addr, transport_config)
+
+                # 5. 保存到映射表
+                self._broker_pools[broker_addr] = pool
+
                 self._logger.debug(
                     "同步Broker连接信息创建成功",
-                    extra={
-                        "broker_addr": broker_addr,
-                        "broker_name": broker_name,
-                        "timestamp": time.time(),
-                    },
-                )
-
-                if self.transport_config:
-                    # Remove host and port from transport_config dict to avoid duplication
-                    transport_config_dict = {
-                        k: v
-                        for k, v in self.transport_config.__dict__.items()
-                        if k not in ("host", "port")
-                    }
-                    transport_config = TransportConfig(
-                        host=broker_addr.split(":")[0],
-                        port=int(broker_addr.split(":")[1]),
-                        **transport_config_dict,
-                    )
-                else:
-                    transport_config = TransportConfig(
-                        host=broker_addr.split(":")[0],
-                        port=int(broker_addr.split(":")[1]),
-                    )
-                self._logger.debug(
-                    "同步传输配置创建成功",
-                    extra={
-                        "broker_addr": broker_addr,
-                        "transport_host": transport_config.host,
-                        "transport_port": transport_config.port,
-                        "timeout": transport_config.timeout,
-                        "timestamp": time.time(),
-                    },
-                )
-
-                # 创建同步连接池
-                self._logger.debug(
-                    "创建同步连接池",
-                    extra={
-                        "broker_addr": broker_addr,
-                        "broker_name": broker_name,
-                        "max_connections": self.connection_pool_size,
-                        "timestamp": time.time(),
-                    },
-                )
-
-                pool = ConnectionPool(
-                    address=broker_addr,
-                    pool_size=self.connection_pool_size,
-                    remote_config=self.remote_config,
-                    transport_config=transport_config,
-                )
-                self._broker_pools[broker_addr] = pool
-                self._logger.debug(
-                    "同步连接池创建成功",
                     extra={
                         "broker_addr": broker_addr,
                         "broker_name": broker_name,
