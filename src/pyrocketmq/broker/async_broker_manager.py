@@ -4,7 +4,6 @@
 提供异步版本的Broker连接管理功能，适用于高并发异步应用场景。
 """
 
-import asyncio
 import logging
 import time
 
@@ -12,6 +11,7 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.pool import AsyncConnectionPool
 from pyrocketmq.transport.config import TransportConfig
+from pyrocketmq.utils import AsyncReadWriteContext, AsyncReadWriteLock
 
 
 class AsyncBrokerManager:
@@ -29,7 +29,7 @@ class AsyncBrokerManager:
     connection_pool_size: int
     _logger: logging.Logger
     _broker_pools: dict[str, AsyncConnectionPool]
-    _lock: asyncio.Lock
+    _rwlock: AsyncReadWriteLock
 
     def __init__(
         self,
@@ -52,7 +52,7 @@ class AsyncBrokerManager:
 
         # Broker连接池映射
         self._broker_pools = {}
-        self._lock = asyncio.Lock()
+        self._rwlock = AsyncReadWriteLock()
 
         self._logger.info(
             "异步Broker管理器初始化完成",
@@ -220,7 +220,8 @@ class AsyncBrokerManager:
 
         关闭所有连接池。
         """
-        async with self._lock:
+        # 关闭所有连接池 - 使用写锁
+        async with AsyncReadWriteContext(self._rwlock, write=True):
             # 关闭所有连接池
             broker_pools = list(self._broker_pools.values())
             self._broker_pools.clear()
@@ -265,7 +266,7 @@ class AsyncBrokerManager:
         transport_config = self._create_transport_config_for_broker(host, port)
 
         # 步骤4: 创建连接池
-        async with self._lock:
+        async with AsyncReadWriteContext(self._rwlock, write=True):
             try:
                 # 检查_broker_pools中是否已经存在的pool，如果有就跳过当前的添加逻辑
                 if broker_addr in self._broker_pools:
@@ -315,7 +316,7 @@ class AsyncBrokerManager:
         Args:
             broker_addr: Broker地址
         """
-        async with self._lock:
+        async with AsyncReadWriteContext(self._rwlock, write=True):
             # 关闭连接池
             if broker_addr in self._broker_pools:
                 pool = self._broker_pools.pop(broker_addr)
@@ -338,9 +339,11 @@ class AsyncBrokerManager:
         Returns:
             AsyncConnectionPool | None: 连接池实例，如果不存在则返回None
         """
-        if self._broker_pools.get(broker_addr):
-            return self._broker_pools[broker_addr]
-        return None
+        # 使用读锁进行读取操作
+        async with AsyncReadWriteContext(self._rwlock, write=False):
+            if self._broker_pools.get(broker_addr):
+                return self._broker_pools[broker_addr]
+            return None
 
     async def must_connection_pool(self, broker_addr: str) -> AsyncConnectionPool:
         """获取Broker连接池，如果不存在则创建
@@ -351,9 +354,14 @@ class AsyncBrokerManager:
         Returns:
             AsyncConnectionPool: 连接池实例
         """
-        async with self._lock:
+        # 先使用读锁检查是否存在
+        async with AsyncReadWriteContext(self._rwlock, write=False):
             if self._broker_pools.get(broker_addr):
                 return self._broker_pools[broker_addr]
+
+        # 不存在时调用add_broker（内部使用写锁）
         await self.add_broker(broker_addr)
-        async with self._lock:
+
+        # 再次使用读锁获取
+        async with AsyncReadWriteContext(self._rwlock, write=False):
             return self._broker_pools[broker_addr]

@@ -1,11 +1,11 @@
 import logging
-import threading
 import time
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.pool import ConnectionPool
 from pyrocketmq.transport.config import TransportConfig
+from pyrocketmq.utils import ReadWriteContext, ReadWriteLock
 
 
 class BrokerManager:
@@ -25,7 +25,7 @@ class BrokerManager:
     connection_pool_size: int
     _logger: logging.Logger
     _broker_pools: dict[str, ConnectionPool]
-    _lock: threading.Lock
+    _rwlock: ReadWriteLock
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class BrokerManager:
 
         # Broker连接信息映射
         self._broker_pools = {}
-        self._lock = threading.Lock()
+        self._rwlock = ReadWriteLock()
 
         self._logger.info(
             "同步Broker管理器初始化完成",
@@ -232,8 +232,8 @@ class BrokerManager:
         停止所有后台线程并关闭所有连接池。
         """
 
-        # 关闭所有连接池
-        with self._lock:
+        # 关闭所有连接池 - 使用写锁
+        with ReadWriteContext(self._rwlock, write=True):
             broker_pools = list(self._broker_pools.values())
             self._broker_pools.clear()
 
@@ -261,7 +261,7 @@ class BrokerManager:
         # 2. 提取Broker名称
         broker_name = self._extract_broker_name(broker_addr, broker_name)
 
-        with self._lock:
+        with ReadWriteContext(self._rwlock, write=True):
             try:
                 # 检查broker是否已经存在，避免重复添加
                 if broker_addr in self._broker_pools:
@@ -314,7 +314,7 @@ class BrokerManager:
         Args:
             broker_addr: Broker地址
         """
-        with self._lock:
+        with ReadWriteContext(self._rwlock, write=True):
             # 关闭连接池
             if broker_addr in self._broker_pools:
                 pool = self._broker_pools.pop(broker_addr)
@@ -337,7 +337,7 @@ class BrokerManager:
         Returns:
             ConnectionPool | None: 连接池实例，如果不存在则返回None
         """
-        with self._lock:
+        with ReadWriteContext(self._rwlock, write=False):
             if self._broker_pools.get(broker_addr):
                 return self._broker_pools[broker_addr]
             return None
@@ -351,7 +351,7 @@ class BrokerManager:
         Returns:
             ConnectionPool: 连接池实例
         """
-        with self._lock:
+        with ReadWriteContext(self._rwlock, write=True):
             if self._broker_pools.get(broker_addr):
                 return self._broker_pools[broker_addr]
 
@@ -359,5 +359,5 @@ class BrokerManager:
         self.add_broker(broker_addr)
 
         # 再次获取，确保返回正确的连接池
-        with self._lock:
+        with ReadWriteContext(self._rwlock, write=True):
             return self._broker_pools[broker_addr]
