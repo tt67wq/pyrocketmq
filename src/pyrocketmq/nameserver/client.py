@@ -3,6 +3,8 @@ NameServer 客户端实现
 提供同步和异步两种方式与 RocketMQ NameServer 进行通信
 """
 
+from typing import Any
+
 from pyrocketmq.model.factory import RemotingCommandBuilder
 
 from ..logging import LoggerFactory
@@ -36,9 +38,7 @@ class SyncNameServerClient:
 
     def connect(self) -> None:
         """建立连接"""
-        logger.info("Connecting to NameServer...")
         self.remote.connect()
-        logger.info("Connected to NameServer successfully")
 
     def disconnect(self) -> None:
         """断开连接"""
@@ -343,7 +343,7 @@ class AsyncNameServerClient:
 
 
 def create_sync_client(
-    host: str, port: int, timeout: float = 30.0, **kwargs
+    host: str, port: int, timeout: float = 30.0, **kwargs: Any
 ) -> SyncNameServerClient:
     """创建同步 NameServer 客户端
 
@@ -361,7 +361,7 @@ def create_sync_client(
 
 
 async def create_async_client(
-    host: str, port: int, timeout: float = 30.0, **kwargs
+    host: str, port: int, timeout: float = 30.0, **kwargs: Any
 ) -> AsyncNameServerClient:
     """创建异步 NameServer 客户端
 

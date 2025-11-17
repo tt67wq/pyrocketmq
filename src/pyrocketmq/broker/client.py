@@ -69,6 +69,7 @@ class BrokerClient:
                     "timestamp": time.time(),
                 },
             )
+
             self.remote.connect()
             self._logger.info(
                 "Connected to Broker successfully",

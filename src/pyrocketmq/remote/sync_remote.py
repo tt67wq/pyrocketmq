@@ -496,7 +496,8 @@ class Remote:
 
         if processor_func is None:
             self._logger.warning(
-                "收到服务器请求，但没有对应的处理器", extra={"code": request.code}
+                "收到服务器请求，但没有对应的处理器，可能是oneway请求",
+                extra={"code": request.code},
             )
             return
 

@@ -3,13 +3,12 @@
 """
 
 import asyncio
-from collections.abc import AsyncGenerator
+import logging
 import threading
 import time
-import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, contextmanager
 from typing import Any
-
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig

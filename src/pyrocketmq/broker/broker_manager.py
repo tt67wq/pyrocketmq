@@ -352,6 +352,7 @@ class BrokerConnectionPool:
             connection = Remote(self.transport_config, self.remote_config)
 
             # 建立连接
+            print("建立连接 from broker_manager!!!!!!!!!!!!!!!!!!!")
             connection.connect()
 
             # 添加到连接列表
