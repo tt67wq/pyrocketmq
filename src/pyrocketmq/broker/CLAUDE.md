@@ -1,235 +1,559 @@
-# pyrocketmq Broker Manager 技术文档
+# pyrocketmq Broker 模块技术文档
 
 ## 概述
 
-`BrokerManager` 是 pyrocketmq 项目中用于管理多个 RocketMQ Broker 连接的核心组件，采用同步编程模式实现。该模块基于重构后的连接池架构，提供了高效、可靠的 Broker 连接管理功能，支持连接池复用、健康检查和故障恢复机制。
+`pyrocketmq.broker` 模块是 pyrocketmq 项目中与 RocketMQ Broker 通信的核心组件，提供完整的 Broker 客户端功能和连接管理。该模块采用分层架构设计，支持同步和异步两种编程模式，提供高效、可靠的 Broker 通信能力，完全兼容 RocketMQ TCP 协议规范。
 
 ## 核心功能
 
-### 🔗 连接池管理
-- **多 Broker 支持**：同时管理多个 Broker 实例的连接池
-- **连接复用**：基于 `ConnectionPool` 实现连接的高效复用
-- **动态配置**：支持运行时添加和移除 Broker
-- **线程安全**：使用锁机制确保多线程环境下的安全性
+### 🔗 连接管理
+- **多 Broker 支持**：同时管理多个 Broker 实例的连接
+- **连接池管理**：基于 `ConnectionPool`/`AsyncConnectionPool` 实现连接的高效复用
+- **健康检查**：实时监控 Broker 连接的健康状态
+- **故障恢复**：自动检测连接异常和故障恢复机制
 
-### 🏥 健康检查
-- **连接状态监控**：实时监控 Broker 连接的健康状态
-- **故障检测**：自动检测连接异常和故障
-- **恢复机制**：支持故障后的自动恢复
+### 📡 消息通信
+- **消息发送**：支持同步/异步、单向/响应、普通/批量消息发送
+- **消息拉取**：完整的消息拉取功能，支持批量拉取和偏移量管理
+- **心跳机制**：定期向 Broker 发送心跳，维持连接活跃状态
+- **事务消息**：支持事务消息的完整生命周期管理
 
-### ⚙️ 配置管理
-- **灵活配置**：支持传输层和远程通信的独立配置
-- **参数优化**：提供连接池大小、超时时间等可调参数
+### 🏷️ 偏移量管理
+- **消费者偏移量查询**：查询指定消费者组的消费偏移量
+- **偏移量更新**：支持同步和异步偏移量更新
+- **时间戳查询**：根据时间戳搜索对应的偏移量
+- **最大偏移量查询**：获取队列的最大偏移量信息
 
-## 类设计
+### ⚡ 双模式支持
+- **同步模式**：适用于简单同步应用场景
+- **异步模式**：基于 asyncio 实现，适用于高并发异步应用场景
 
-### BrokerManager
+## 模块架构
 
-```python
-class BrokerManager:
-    """同步版本的Broker连接管理器"""
+### 分层架构设计
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    应用层 (Application)                        │
+├─────────────────────────────────────────────────────────────┤
+│              客户端层 (Broker Client)                          │
+│  ┌─────────────────┐              ┌─────────────────┐         │
+│  │  BrokerClient   │              │ AsyncBrokerClient│         │
+│  │   (同步客户端)     │              │   (异步客户端)     │         │
+│  └─────────────────┘              └─────────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│              管理层 (Broker Manager)                          │
+│  ┌─────────────────┐              ┌─────────────────┐         │
+│  │  BrokerManager  │              │AsyncBrokerManager│         │
+│  │   (同步管理器)     │              │   (异步管理器)     │         │
+│  └─────────────────┘              └─────────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│                  异常层 (Exceptions)                           │
+│              20+种专用异常类型，精确处理各种错误场景               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-#### 构造函数参数
+### 数据流向图
 
-| 参数名 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `remote_config` | `RemoteConfig` | 必需 | 远程通信配置 |
-| `transport_config` | `TransportConfig \| None` | `None` | 传输层配置 |
-| `health_check_interval` | `float` | `30.0` | 健康检查间隔（秒） |
-| `health_check_timeout` | `float` | `5.0` | 健康检查超时时间（秒） |
-| `max_consecutive_failures` | `int` | `3` | 最大连续失败次数 |
-| `connection_pool_size` | `int` | `5` | 每个Broker的连接池大小 |
-
-#### 核心属性
-
-| 属性名 | 类型 | 说明 |
-|--------|------|------|
-| `remote_config` | `RemoteConfig` | 远程通信配置对象 |
-| `transport_config` | `TransportConfig \| None` | 传输层配置对象 |
-| `health_check_interval` | `float` | 健康检查间隔时间 |
-| `connection_pool_size` | `int` | 连接池大小 |
-| `_broker_pools` | `dict[str, ConnectionPool]` | Broker地址到连接池的映射 |
-
-## API 参考
-
-### 主要方法
-
-#### `__init__()`
-
-初始化 Broker 管理器实例。
-
-```python
-def __init__(
-    self,
-    remote_config: RemoteConfig,
-    transport_config: TransportConfig | None = None,
-    health_check_interval: float = 30.0,
-    health_check_timeout: float = 5.0,
-    max_consecutive_failures: int = 3,
-    connection_pool_size: int = 5,
-) -> None
+```
+应用请求
+    ↓
+BrokerManager/AsyncBrokerManager (连接池管理)
+    ↓
+ConnectionPool/AsyncConnectionPool (连接复用)
+    ↓
+BrokerClient/AsyncBrokerClient (通信实现)
+    ↓
+Remote/AsyncRemote (远程通信层)
+    ↓
+Transport Layer (传输层)
+    ↓
+RocketMQ Broker
 ```
 
-**参数说明**：
-- `remote_config`: 远程通信配置，包含连接超时、请求超时等设置
-- `transport_config`: 传输层配置，包含主机、端口、连接参数等
-- `health_check_interval`: 健康检查的时间间隔，单位为秒
-- `health_check_timeout`: 单次健康检查的超时时间，单位为秒
-- `max_consecutive_failures`: 允许的最大连续失败次数
-- `connection_pool_size`: 每个 Broker 的连接池大小
+## 核心组件
 
-#### `start()`
+### 1. BrokerClient - 同步客户端
 
-启动 Broker 管理器。
+**模块概述**: `BrokerClient` 是同步模式的 Broker 客户端实现，基于 `Remote` 类进行同步通信，提供与 Broker 交互的完整功能。
+
+**核心功能**:
+- **连接管理**: 建立和断开与 Broker 的连接
+- **消息发送**: 支持普通发送、批量发送、单向发送
+- **消息拉取**: 完整的消息拉取和偏移量管理功能
+- **心跳维护**: 定期发送心跳保持连接活跃
+
+**关键方法**:
 
 ```python
+# 连接管理
+def connect(self) -> None
+def disconnect(self) -> None
+@property
+def is_connected(self) -> bool
+
+# 消息发送
+def sync_send_message(self, producer_group: str, body: bytes, mq: MessageQueue, properties: dict[str, str] | None = None, **kwargs: Any) -> SendMessageResult
+def oneway_send_message(self, producer_group: str, body: bytes, mq: MessageQueue, properties: dict[str, str] | None = None, **kwargs: Any) -> None
+def sync_batch_send_message(self, producer_group: str, body: bytes, mq: MessageQueue, properties: dict[str, str] | None = None, **kwargs: Any) -> SendMessageResult
+def oneway_batch_send_message(self, producer_group: str, body: bytes, mq: MessageQueue, properties: dict[str, str] | None = None, **kwargs: Any) -> None
+
+# 消息拉取和偏移量管理
+def pull_message(self, consumer_group: str, topic: str, queue_id: int, queue_offset: int, max_msg_nums: int = 32, sys_flag: int = 0, commit_offset: int = 0, **kwargs: Any) -> PullMessageResult
+def query_consumer_offset(self, consumer_group: str, topic: str, queue_id: int) -> int
+def update_consumer_offset(self, consumer_group: str, topic: str, queue_id: int, commit_offset: int) -> None
+def search_offset_by_timestamp(self, topic: str, queue_id: int, timestamp: int) -> int
+def get_max_offset(self, topic: str, queue_id: int) -> int
+
+# 心跳管理
+def send_heartbeat(self, heartbeat_data: HeartbeatData) -> None
+```
+
+**使用示例**:
+```python
+from pyrocketmq.broker import create_broker_client
+from pyrocketmq.model import MessageQueue
+
+# 创建同步客户端
+client = create_broker_client("localhost:9876")
+client.connect()
+
+# 发送消息
+message_queue = MessageQueue(topic="test_topic", broker_name="broker1", queue_id=0)
+result = client.sync_send_message("producer_group", b"Hello RocketMQ", message_queue)
+
+# 拉取消息
+pull_result = client.pull_message("consumer_group", "test_topic", 0, 0)
+
+# 断开连接
+client.disconnect()
+```
+
+### 2. AsyncBrokerClient - 异步客户端
+
+**模块概述**: `AsyncBrokerClient` 是异步模式的 Broker 客户端实现，基于 `AsyncRemote` 类进行异步通信，专为高并发应用场景设计。
+
+**关键特性**:
+- **异步通信**: 所有 I/O 操作都是非阻塞的，提升并发性能
+- **async/await 支持**: 完全支持 Python 的 async/await 语法
+- **并发连接管理**: 支持同时处理多个异步请求
+
+**使用示例**:
+```python
+import asyncio
+from pyrocketmq.broker import create_async_broker_client
+
+async def async_example():
+    # 创建异步客户端
+    client = create_async_broker_client("localhost:9876")
+    await client.connect()
+
+    # 异步发送消息
+    result = await client.sync_send_message("producer_group", b"Async Message", message_queue)
+
+    # 异步拉取消息
+    pull_result = await client.pull_message("consumer_group", "test_topic", 0, 0)
+
+    await client.disconnect()
+
+# 运行异步示例
+asyncio.run(async_example())
+```
+
+### 3. BrokerManager - 同步管理器
+
+**模块概述**: `BrokerManager` 是同步模式的 Broker 连接管理器，负责管理多个 Broker 的连接池，提供统一的服务接口。
+
+**核心功能**:
+- **连接池管理**: 为每个 Broker 创建和维护独立的连接池
+- **动态配置**: 支持运行时添加和移除 Broker
+- **线程安全**: 使用锁机制确保多线程环境下的安全性
+- **资源管理**: 统一的生命周期管理和资源清理
+
+**关键方法**:
+
+```python
+def __init__(self, remote_config: RemoteConfig, transport_config: TransportConfig | None = None, max_consecutive_failures: int = 3, connection_pool_size: int = 5)
 def start(self) -> None
-```
-
-**功能**：启动后台服务线程，开始健康检查等维护任务。
-
-#### `shutdown()`
-
-关闭 Broker 管理器。
-
-```python
 def shutdown(self) -> None
-```
-
-**功能**：
-- 停止所有后台线程
-- 关闭所有连接池
-- 清理资源
-
-#### `add_broker()`
-
-添加新的 Broker 到管理器。
-
-```python
 def add_broker(self, broker_addr: str, broker_name: str | None = None) -> None
-```
-
-**参数说明**：
-- `broker_addr`: Broker 地址，格式为 "host:port"
-- `broker_name`: Broker 名称，可选参数，未提供时从地址中提取
-
-**异常**：
-- `ValueError`: 当 Broker 地址格式无效时抛出
-
-**示例**：
-```python
-manager.add_broker("localhost:9876", "broker1")
-manager.add_broker("192.168.1.100:10911")  # 名称自动提取为 "192.168.1.100"
-```
-
-#### `remove_broker()`
-
-从管理器中移除指定 Broker。
-
-```python
 def remove_broker(self, broker_addr: str) -> None
-```
-
-**参数说明**：
-- `broker_addr`: 要移除的 Broker 地址
-
-**功能**：
-- 关闭对应的连接池
-- 清理相关资源
-- 从管理列表中移除
-
-#### `connection_pool()`
-
-获取指定 Broker 的连接池。
-
-```python
 def connection_pool(self, broker_addr: str) -> ConnectionPool | None
 ```
 
-**参数说明**：
-- `broker_addr`: Broker 地址
-
-**返回值**：
-- `ConnectionPool`: 连接池实例
-- `None`: 如果 Broker 不存在则返回 None
-
-## 使用示例
-
-### 基本使用
-
+**使用示例**:
 ```python
-from pyrocketmq.broker.broker_manager import BrokerManager
+from pyrocketmq.broker import BrokerManager
 from pyrocketmq.remote.config import RemoteConfig
-from pyrocketmq.transport.config import TransportConfig
 
-# 创建配置
+# 创建远程通信配置
 remote_config = RemoteConfig(
     connect_timeout=5000.0,
     request_timeout=30000.0
 )
 
-transport_config = TransportConfig(
-    timeout=10000.0
-)
-
-# 创建 Broker 管理器
+# 创建管理器
 manager = BrokerManager(
     remote_config=remote_config,
-    transport_config=transport_config,
     connection_pool_size=10
 )
-
-# 启动管理器
 manager.start()
 
 # 添加 Broker
 manager.add_broker("localhost:9876", "broker1")
-manager.add_broker("192.168.1.100:10911", "broker2")
 
 # 获取连接池
 pool = manager.connection_pool("localhost:9876")
-if pool:
-    with pool.get_connection() as connection:
-        # 使用连接进行通信
-        result = connection.send_request(request)
 
 # 关闭管理器
 manager.shutdown()
 ```
 
-### 高级配置
+### 4. AsyncBrokerManager - 异步管理器
 
+**模块概述**: `AsyncBrokerManager` 是异步模式的 Broker 连接管理器，专为高并发异步应用场景设计。
+
+**关键特性**:
+- **异步连接池管理**: 基于 `AsyncConnectionPool` 实现异步连接池
+- **并发安全**: 使用 `asyncio.Lock` 确保异步环境下的线程安全
+- **高性能**: 支持大规模并发连接管理
+
+**使用示例**:
 ```python
-# 创建高性能配置
-remote_config = RemoteConfig(
-    connect_timeout=3000.0,
-    request_timeout=15000.0,
-    connection_pool_timeout=10.0
-)
+import asyncio
+from pyrocketmq.broker import AsyncBrokerManager
 
-# 生产环境配置
-manager = BrokerManager(
-    remote_config=remote_config,
-    health_check_interval=15.0,  # 更频繁的健康检查
-    health_check_timeout=3.0,    # 更短的超时时间
-    max_consecutive_failures=2,  # 更严格的失败阈值
-    connection_pool_size=20      # 更大的连接池
-)
+async def async_manager_example():
+    # 创建异步管理器
+    manager = AsyncBrokerManager(remote_config, connection_pool_size=20)
+    await manager.start()
+
+    # 添加 Broker
+    await manager.add_broker("localhost:9876", "broker1")
+
+    # 获取异步连接池
+    pool = await manager.connection_pool("localhost:9876")
+
+    await manager.shutdown()
+
+asyncio.run(async_manager_example())
 ```
 
-### 错误处理
+### 5. 异常体系
+
+**模块概述**: broker 模块定义了完整的异常体系，包含 9 种专用异常类型，用于精确处理与 Broker 交互时的各种错误场景。
+
+**异常层次结构**:
+
+```
+BrokerError (基础异常)
+├── BrokerConnectionError (连接错误)
+├── BrokerTimeoutError (超时错误)
+├── BrokerResponseError (响应错误)
+├── BrokerProtocolError (协议错误)
+├── AuthorizationError (授权异常)
+├── BrokerBusyError (Broker繁忙异常)
+├── MessagePullError (消息拉取异常)
+├── OffsetError (偏移量异常)
+└── BrokerSystemError (Broker系统异常)
+```
+
+**异常特性**:
+- **结构化错误信息**: 每种异常都包含相关的上下文信息
+- **错误代码支持**: 部分异常包含 RocketMQ 的错误代码
+- **详细日志记录**: 完整的错误日志记录和监控
+
+**使用示例**:
+```python
+from pyrocketmq.broker.errors import (
+    BrokerConnectionError,
+    MessagePullError,
+    OffsetError
+)
+
+try:
+    result = client.pull_message("consumer_group", "test_topic", 0, 0)
+except BrokerConnectionError as e:
+    print(f"连接失败: {e}, Broker地址: {e.broker_address}")
+except MessagePullError as e:
+    print(f"消息拉取失败: {e}, Topic: {e.topic}, QueueId: {e.queue_id}")
+except OffsetError as e:
+    print(f"偏移量错误: {e}, Topic: {e.topic}, QueueId: {e.queue_id}")
+```
+
+## 便捷函数
+
+### 客户端创建函数
 
 ```python
-try:
-    manager.add_broker("invalid_address", "broker1")
-except ValueError as e:
-    print(f"添加 Broker 失败: {e}")
+def create_broker_client(broker_addr: str, timeout: float = 30.0) -> BrokerClient:
+    """创建同步Broker客户端的便捷函数
+    
+    Args:
+        broker_addr: Broker地址，格式为"host:port"
+        timeout: 请求超时时间，默认30秒
+        
+    Returns:
+        BrokerClient: 配置好的同步客户端实例
+    """
+    # 解析地址
+    host, port = broker_addr.split(":")
+    
+    # 创建配置
+    transport_config = TransportConfig(host=host, port=port)
+    remote_config = RemoteConfig(request_timeout=timeout)
+    
+    # 创建Remote实例
+    remote = Remote(
+        config=remote_config,
+        transport_config=transport_config
+    )
+    
+    return BrokerClient(remote, timeout)
 
-# 检查连接池是否存在
-pool = manager.connection_pool("nonexistent_broker")
-if pool is None:
-    print("Broker 不存在")
+def create_async_broker_client(broker_addr: str, timeout: float = 30.0) -> AsyncBrokerClient:
+    """创建异步Broker客户端的便捷函数
+    
+    Args:
+        broker_addr: Broker地址，格式为"host:port"
+        timeout: 请求超时时间，默认30秒
+        
+    Returns:
+        AsyncBrokerClient: 配置好的异步客户端实例
+    """
+    # 解析地址
+    host, port = broker_addr.split(":")
+    
+    # 创建配置
+    transport_config = TransportConfig(host=host, port=port)
+    remote_config = RemoteConfig(request_timeout=timeout)
+    
+    # 创建AsyncRemote实例
+    remote = AsyncRemote(
+        config=remote_config,
+        transport_config=transport_config
+    )
+    
+    return AsyncBrokerClient(remote, timeout)
+```
+
+### 管理器创建函数
+
+```python
+def create_broker_manager(namesrv_addr: str, **kwargs) -> BrokerManager:
+    """创建同步Broker管理器的便捷函数
+    
+    Args:
+        namesrv_addr: NameServer地址列表，用分号分隔
+        **kwargs: 其他配置参数
+        
+    Returns:
+        BrokerManager: 配置好的同步管理器实例
+    """
+    # 使用默认配置创建管理器
+    remote_config = RemoteConfig(**kwargs)
+    
+    return BrokerManager(
+        remote_config=remote_config,
+        **kwargs
+    )
+```
+
+## 使用模式
+
+### 1. 基础通信模式
+
+```python
+from pyrocketmq.broker import create_broker_client
+
+# 创建客户端
+client = create_broker_client("localhost:9876")
+
+# 建立连接
+client.connect()
+
+try:
+    # 发送消息
+    result = client.sync_send_message(
+        producer_group="test_group",
+        body=b"Hello RocketMQ",
+        mq=message_queue,
+        properties={"KEYS": "order_123"}
+    )
+    print(f"消息发送成功: {result.msg_id}")
+    
+finally:
+    # 断开连接
+    client.disconnect()
+```
+
+### 2. 高并发异步模式
+
+```python
+import asyncio
+from pyrocketmq.broker import create_async_broker_client
+
+async def async_concurrent_example():
+    # 创建异步客户端
+    client = create_async_broker_client("localhost:9876")
+    await client.connect()
+    
+    # 并发发送多个消息
+    tasks = []
+    for i in range(10):
+        task = client.sync_send_message(
+            producer_group="async_group",
+            body=f"Async Message {i}".encode(),
+            mq=message_queue
+        )
+        tasks.append(task)
+    
+    # 等待所有消息发送完成
+    results = await asyncio.gather(*tasks)
+    print(f"批量发送完成，成功 {len(results)} 条消息")
+    
+    await client.disconnect()
+
+asyncio.run(async_concurrent_example())
+```
+
+### 3. 连接池管理模式
+
+```python
+from pyrocketmq.broker import BrokerManager
+from pyrocketmq.broker.client import create_broker_client
+
+# 创建管理器
+manager = BrokerManager(remote_config, connection_pool_size=10)
+manager.start()
+
+# 添加多个Broker
+manager.add_broker("broker1:9876", "broker1")
+manager.add_broker("broker2:9876", "broker2")
+
+# 使用连接池
+pool = manager.connection_pool("broker1:9876")
+if pool:
+    with pool.get_connection() as connection:
+        # 使用连接进行通信
+        client = create_broker_client("broker1:9876")
+        result = client.sync_send_message("group", b"Hello", mq)
+
+manager.shutdown()
+```
+
+### 4. 批量操作模式
+
+```python
+# 批量发送消息
+batch_messages = [
+    {"body": b"Message 1", "properties": {"KEYS": "msg1"}},
+    {"body": b"Message 2", "properties": {"KEYS": "msg2"}},
+    {"body": b"Message 3", "properties": {"KEYS": "msg3"}}
+]
+
+# 编码批量消息
+batch_body = encode_batch_messages(batch_messages)
+
+# 发送批量消息
+result = client.sync_batch_send_message(
+    producer_group="batch_group",
+    body=batch_body,
+    mq=message_queue
+)
+
+print(f"批量发送成功: {result.msg_id}")
+```
+
+### 5. 消费者偏移量管理模式
+
+```python
+# 查询当前偏移量
+try:
+    current_offset = client.query_consumer_offset("consumer_group", "test_topic", 0)
+    print(f"当前偏移量: {current_offset}")
+except OffsetError as e:
+    if e.topic and e.queue_id is not None:
+        print(f"偏移量不存在，从0开始: Topic={e.topic}, QueueId={e.queue_id}")
+        current_offset = 0
+
+# 拉取消息
+pull_result = client.pull_message(
+    consumer_group="consumer_group",
+    topic="test_topic",
+    queue_id=0,
+    queue_offset=current_offset,
+    max_msg_nums=32
+)
+
+# 处理消息后更新偏移量
+new_offset = current_offset + len(pull_result.messages)
+client.update_consumer_offset("consumer_group", "test_topic", 0, new_offset)
+```
+
+### 6. 错误处理模式
+
+```python
+from pyrocketmq.broker.errors import (
+    BrokerConnectionError,
+    BrokerTimeoutError,
+    MessagePullError
+)
+
+def robust_client_example():
+    client = create_broker_client("localhost:9876")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client.connect()
+            break
+        except BrokerConnectionError as e:
+            if attempt == max_retries - 1:
+                raise
+            print(f"连接失败，重试 {attempt + 1}/{max_retries}: {e}")
+            time.sleep(2 ** attempt)  # 指数退避
+    
+    try:
+        result = client.sync_send_message("group", b"Hello", mq)
+        return result
+    except BrokerTimeoutError as e:
+        print(f"发送超时: {e}")
+        raise
+    except BrokerConnectionError as e:
+        print(f"连接断开: {e}")
+        # 尝试重连
+        client.connect()
+        return client.sync_send_message("group", b"Hello", mq)
+    finally:
+        client.disconnect()
+```
+
+### 7. 监控和日志模式
+
+```python
+import logging
+from pyrocketmq.logging import get_logger
+
+# 设置日志级别
+logging.basicConfig(level=logging.INFO)
+logger = get_logger(__name__)
+
+# 创建客户端时会自动记录详细日志
+client = create_broker_client("localhost:9876")
+
+# 所有操作都会记录结构化日志
+client.connect()  # 记录连接日志
+result = client.sync_send_message("group", b"Hello", mq)  # 记录发送日志
+client.disconnect()  # 记录断开日志
+
+# 日志包含丰富的上下文信息
+# - client_id: 客户端唯一标识
+# - operation_type: 操作类型
+# - timestamp: 时间戳
+# - status: 操作状态
+# - execution_time: 执行时间
+# - error_message: 错误信息（如果失败）
 ```
 
 ## 依赖项
@@ -239,8 +563,12 @@ if pool is None:
 | 模块 | 版本要求 | 说明 |
 |------|----------|------|
 | `logging` | Python 标准库 | 日志记录 |
-| `threading` | Python 标准库 | 线程同步 |
+| `threading` | Python 标准库 | 线程同步（同步模式） |
+| `asyncio` | Python 标准库 | 异步I/O（异步模式） |
 | `time` | Python 标准库 | 时间处理 |
+| `uuid` | Python 标准库 | 唯一标识生成 |
+| `json` | Python 标准库 | JSON序列化 |
+| `typing` | Python 标准库 | 类型注解 |
 
 ### 项目内依赖
 
@@ -248,79 +576,130 @@ if pool is None:
 |------|------|
 | `pyrocketmq.logging` | 项目日志系统 |
 | `pyrocketmq.remote.config` | 远程通信配置 |
+| `pyrocketmq.remote.sync_remote` | 同步远程通信 |
+| `pyrocketmq.remote.async_remote` | 异步远程通信 |
 | `pyrocketmq.remote.pool` | 连接池实现 |
 | `pyrocketmq.transport.config` | 传输层配置 |
+| `pyrocketmq.model` | 数据模型和枚举 |
+| `pyrocketmq.model.factory` | 请求工厂 |
 
-## 版本变更记录
+## 性能优化
 
-### v2.0.0 (重构版本)
-**发布日期**: 2025-01-17
+### 连接池配置
 
-#### 🔥 重大变更
-- **架构重构**: 基于 `ConnectionPool` 重新设计，移除重复的连接管理逻辑
-- **代码简化**: 删除冗余的 `BrokerConnectionPool` 和 `_BrokerConnectionWrapper` 类
-- **API 统一**: 直接使用标准的 `ConnectionPool` 接口
+```python
+# 高性能场景配置
+manager = BrokerManager(
+    remote_config=remote_config,
+    connection_pool_size=20,  # 更大的连接池
+    max_consecutive_failures=2  # 更快的故障检测
+)
 
-#### ✨ 新增功能
-- **连接池复用**: 完全基于 `remote.pool.ConnectionPool` 实现
-- **线程安全增强**: 改进多线程环境下的安全性
-- **配置灵活性**: 支持更细粒度的配置选项
+# 低延迟场景配置
+remote_config = RemoteConfig(
+    connect_timeout=1000.0,    # 1秒连接超时
+    request_timeout=5000.0     # 5秒请求超时
+)
+```
 
-#### 🛠️ 改进
-- **性能提升**: 减少连接创建和销毁的开销
-- **资源管理**: 更高效的资源利用和清理机制
-- **错误处理**: 完善异常处理和错误恢复
+### 异步模式优化
 
-#### 🗑️ 移除
-- **重复代码**: 移除自定义的连接池实现
-- **包装器类**: 删除 `_BrokerConnectionWrapper` 类
-- **复杂状态管理**: 简化连接状态的管理逻辑
+```python
+# 大规模并发配置
+async_manager = AsyncBrokerManager(
+    remote_config=remote_config,
+    connection_pool_size=50  # 更大的异步连接池
+)
 
-#### ⚠️ 破坏性变更
-- **API 变更**: `get_connection()` 方法现在返回标准的 `Remote` 对象
-- **配置参数**: 部分构造函数参数的默认值发生调整
-- **依赖变更**: 强依赖 `pyrocketmq.remote.pool` 模块
+# 批量操作优化
+async def batch_send_async(client, messages):
+    """批量异步发送消息"""
+    tasks = [
+        client.sync_send_message(msg.body, msg.queue, msg.properties)
+        for msg in messages
+    ]
+    return await asyncio.gather(*tasks)
+```
 
-#### 📝 文档更新
-- 添加完整的使用示例和最佳实践
-- 更新 API 文档和参数说明
-- 补充性能调优建议
+### 内存使用优化
 
-### v1.x.x (历史版本)
-- 初始版本实现
-- 基础的 Broker 管理功能
-- 自定义连接池实现
+```python
+# 合理的批量大小
+MAX_BATCH_SIZE = 64  # 推荐32-64
+
+# 连接池大小控制
+CONNECTION_POOL_SIZE = min(20, cpu_count() * 2)
+
+# 超时时间设置
+TIMEOUT_CONFIG = {
+    "connect_timeout": 5000.0,   # 5秒连接超时
+    "request_timeout": 30000.0,  # 30秒请求超时
+    "idle_timeout": 60000.0      # 60秒空闲超时
+}
+```
 
 ## 最佳实践
 
-### 性能优化
+### 1. 连接管理
+- **及时释放连接**: 使用 `with` 语句或 `try-finally` 确保连接正确释放
+- **连接池复用**: 优先使用 BrokerManager 进行连接池管理
+- **健康检查**: 定期检查连接状态，及时清理失效连接
 
-1. **连接池大小**: 根据并发需求调整 `connection_pool_size`
-   - 开发环境: 3-5 个连接
-   - 生产环境: 10-20 个连接
+### 2. 错误处理
+- **分类处理**: 针对不同类型的异常采用不同的处理策略
+- **重试机制**: 对网络错误实现指数退避重试
+- **降级策略**: 在 Broker 不可用时实现服务降级
 
-2. **健康检查间隔**: 平衡性能和实时性
-   - 高频场景: 10-15 秒
-   - 普通场景: 30-60 秒
+### 3. 性能优化
+- **批量操作**: 尽可能使用批量发送和拉取
+- **异步优先**: 在高并发场景下优先使用异步模式
+- **连接池调优**: 根据实际负载调整连接池大小
 
-3. **超时设置**: 根据网络环境调整超时参数
-   - 局域网: 3-5 秒
-   - 广域网: 10-30 秒
+### 4. 监控和日志
+- **结构化日志**: 利用内置的结构化日志进行监控
+- **性能指标**: 关注连接创建、销毁和使用频率等指标
+- **异常监控**: 监控各类异常的发生频率和模式
 
-### 错误处理
+## 版本变更记录
 
-1. **地址验证**: 确保 Broker 地址格式正确
-2. **异常捕获**: 妥善处理连接和通信异常
-3. **资源清理**: 确保在异常情况下正确清理资源
+### v3.0.0 (当前版本)
+**发布日期**: 2025-01-17
 
-### 监控建议
+#### 🔥 重大变更
+- **模块重构**: 整合了原有的分散模块，统一为 `pyrocketmq.broker` 模块
+- **双模式支持**: 同时提供同步和异步两种完整的客户端实现
+- **异常体系完善**: 新增 9 种专用异常类型，提供精确的错误处理
 
-1. **连接状态**: 定期检查连接池的健康状态
-2. **性能指标**: 监控连接创建、销毁和使用频率
-3. **错误日志**: 关注连接失败和异常日志
+#### ✨ 新增功能
+- **AsyncBrokerClient**: 完整的异步客户端实现
+- **AsyncBrokerManager**: 异步连接管理器
+- **便捷函数**: 提供 `create_broker_client()` 和 `create_async_broker_client()` 便捷创建函数
+- **完整日志**: 所有操作都包含详细的结构化日志记录
+
+#### 🛠️ 改进
+- **性能提升**: 异步模式支持大规模并发操作
+- **资源管理**: 优化的连接池管理和资源清理机制
+- **错误处理**: 更完善的异常分类和错误恢复机制
+- **类型安全**: 完整的类型注解和参数验证
+
+#### 📝 文档更新
+- 完整的模块架构设计文档
+- 详细的使用示例和最佳实践
+- 性能优化建议和配置指南
+- 异常处理指南和错误码说明
+
+### v2.0.0 (重构版本)
+- **架构重构**: 基于 `ConnectionPool` 重新设计 `BrokerManager`
+- **代码简化**: 移除冗余的连接管理逻辑
+- **API 统一**: 直接使用标准的 `ConnectionPool` 接口
+
+### v1.x.x (历史版本)
+- 初始版本实现
+- 基础的 Broker 客户端功能
+- 同步模式支持
 
 ---
 
 **最后更新**: 2025-01-17  
-**文档版本**: v2.0.0  
+**文档版本**: v3.0.0  
 **维护状态**: ✅ 活跃维护
