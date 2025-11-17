@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, contextmanager
-from typing import Any
+from typing import Any, Generator
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig
@@ -79,7 +79,9 @@ class ConnectionPool:
             )
 
     @contextmanager
-    def get_connection(self, timeout: float | None = None) -> Any:
+    def get_connection(
+        self, timeout: float | None = None
+    ) -> Generator[Any, None, None]:
         """获取连接
 
         Args:
