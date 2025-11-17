@@ -80,12 +80,13 @@ class ConnectionPool:
 
     @contextmanager
     def get_connection(
-        self, timeout: float | None = None
+        self, timeout: float | None = None, usage: str | None = None
     ) -> Generator[Any, None, None]:
         """获取连接
 
         Args:
             timeout: 获取连接超时时间
+            usage: 连接使用场景说明
 
         Yields:
             远程通信实例
@@ -114,10 +115,15 @@ class ConnectionPool:
                 # 短暂等待后重试
                 time.sleep(0.1)
 
+            log_extra: dict[str, str | int] = {"remaining_connections": len(self._pool)}
+            if usage:
+                log_extra["usage"] = usage
+
             self._logger.debug(
                 "获取连接成功",
-                extra={"remaining_connections": len(self._pool)},
+                extra=log_extra,
             )
+            # print(f"获取连接成功，usage：{usage}, addr:{self.address}")
             yield connection
 
         except Exception:
@@ -128,6 +134,7 @@ class ConnectionPool:
         finally:
             # 正常完成时归还连接
             if connection and connection.is_connected:
+                # print(f"归还连接成功，usage：{usage}, addr:{self.address}")
                 self._return_connection(connection)
 
     def _return_connection(self, connection: Remote) -> None:
@@ -293,12 +300,13 @@ class AsyncConnectionPool:
 
     @asynccontextmanager
     async def get_connection(
-        self, timeout: float | None = None
+        self, timeout: float | None = None, usage: str | None = None
     ) -> AsyncGenerator[Any, Any]:
         """获取连接
 
         Args:
             timeout: 获取连接超时时间
+            usage: 连接使用场景说明
 
         Yields:
             远程通信实例
@@ -331,9 +339,13 @@ class AsyncConnectionPool:
                 # 短暂等待后重试
                 await asyncio.sleep(0.1)
 
+            log_extra = {"remaining_connections": len(self._pool)}
+            if usage:
+                log_extra["usage"] = usage
+
             self._logger.debug(
                 "获取异步连接成功",
-                extra={"remaining_connections": len(self._pool)},
+                extra=log_extra,
             )
             yield connection
 

@@ -958,15 +958,7 @@ class BaseConsumer(ABC):
 
         # 维护broker连接
         for broker_data in topic_route_data.broker_data_list:
-            for idx, broker_addr in broker_data.broker_addresses.items():
-                logger.info(
-                    "Adding broker",
-                    extra={
-                        "broker_id": idx,
-                        "broker_address": broker_addr,
-                        "broker_name": broker_data.broker_name,
-                    },
-                )
+            for _idx, broker_addr in broker_data.broker_addresses.items():
                 self._broker_manager.add_broker(
                     broker_addr,
                     broker_data.broker_name,
@@ -1081,96 +1073,147 @@ class BaseConsumer(ABC):
 
         logger.info("Heartbeat loop stopped")
 
+    def _collect_broker_addresses(self) -> set[str]:
+        """收集所有Broker地址
+
+        Returns:
+            Broker地址集合
+        """
+        broker_addrs: set[str] = set()
+        all_topics: set[str] = self._topic_broker_mapping.get_all_topics().union(
+            self._subscription_manager.get_topics()
+        )
+
+        if not all_topics:
+            logger.warning("No topics found for heartbeat")
+            return broker_addrs
+
+        for topic in all_topics:
+            brokers: list[BrokerData] = (
+                self._topic_broker_mapping.get_available_brokers(topic)
+            )
+            for broker_data in brokers:
+                # 获取主从地址
+                if broker_data.broker_addresses:
+                    for addr in broker_data.broker_addresses.values():
+                        if addr:  # 过滤空地址
+                            broker_addrs.add(addr)
+
+        if not broker_addrs:
+            logger.warning("No broker addresses found for heartbeat")
+
+        return broker_addrs
+
+    def _build_heartbeat_data(self) -> HeartbeatData:
+        """构建心跳数据
+
+        Returns:
+            心跳数据对象
+        """
+        return HeartbeatData(
+            client_id=self._config.client_id,
+            consumer_data_set=[
+                ConsumerData(
+                    group_name=self._config.consumer_group,
+                    consume_type="CONSUME_PASSIVELY",
+                    message_model=self._config.message_model,
+                    consume_from_where=self._config.consume_from_where,
+                    subscription_data=[
+                        e.subscription_data
+                        for e in self._subscription_manager.get_all_subscriptions()
+                    ],
+                )
+            ],
+        )
+
+    def _send_heartbeat_to_broker(
+        self, broker_addr: str, heartbeat_data: HeartbeatData
+    ) -> bool:
+        """向单个Broker发送心跳
+
+        Args:
+            broker_addr: Broker地址
+            heartbeat_data: 心跳数据
+
+        Returns:
+            是否发送成功
+        """
+        try:
+            # 创建Broker客户端连接
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            with pool.get_connection(usage="发送心跳") as conn:
+                # 发送心跳请求
+                BrokerClient(conn).send_heartbeat(heartbeat_data)
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Failed to send heartbeat to broker {broker_addr}: {e}",
+                extra={
+                    "broker_addr": broker_addr,
+                    "consumer_group": self._config.consumer_group,
+                    "error": str(e),
+                },
+            )
+            return False
+
+    def _update_heartbeat_statistics(
+        self, success_count: int, failure_count: int, total_brokers: int
+    ) -> None:
+        """更新心跳统计信息
+
+        Args:
+            success_count: 成功次数
+            failure_count: 失败次数
+            total_brokers: 总Broker数量
+        """
+        # 更新统计信息
+        self._stats["heartbeat_success_count"] = (
+            self._stats.get("heartbeat_success_count", 0) + success_count
+        )
+        self._stats["heartbeat_failure_count"] = (
+            self._stats.get("heartbeat_failure_count", 0) + failure_count
+        )
+
+        if success_count > 0 or failure_count > 0:
+            logger.info(
+                f"Heartbeat summary: {success_count} success, {failure_count} failure",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "heartbeat_success_count": success_count,
+                    "heartbeat_failure_count": failure_count,
+                    "total_brokers": total_brokers,
+                },
+            )
+
     def _send_heartbeat_to_all_brokers(self) -> None:
         """向所有Broker发送心跳"""
         logger.debug("Sending heartbeat to all brokers...")
 
         try:
-            # 获取所有已知的Broker地址
-            broker_addrs: set[str] = set()
-            all_topics: set[str] = self._topic_broker_mapping.get_all_topics().union(
-                self._subscription_manager.get_topics()
-            )
-
-            if not all_topics:
-                logger.warning("No topics found for heartbeat")
-                return
-
-            for topic in all_topics:
-                brokers: list[BrokerData] = (
-                    self._topic_broker_mapping.get_available_brokers(topic)
-                )
-                for broker_data in brokers:
-                    # 获取主从地址
-                    if broker_data.broker_addresses:
-                        for addr in broker_data.broker_addresses.values():
-                            if addr:  # 过滤空地址
-                                broker_addrs.add(addr)
-
+            # 收集所有Broker地址
+            broker_addrs = self._collect_broker_addresses()
             if not broker_addrs:
-                logger.warning("No broker addresses found for heartbeat")
                 return
 
-            heartbeat_data = HeartbeatData(
-                client_id=self._config.client_id,
-                consumer_data_set=[
-                    ConsumerData(
-                        group_name=self._config.consumer_group,
-                        consume_type="CONSUME_PASSIVELY",
-                        message_model=self._config.message_model,
-                        consume_from_where=self._config.consume_from_where,
-                        subscription_data=[
-                            e.subscription_data
-                            for e in self._subscription_manager.get_all_subscriptions()
-                        ],
-                    )
-                ],
-            )
+            # 构建心跳数据
+            heartbeat_data = self._build_heartbeat_data()
 
             # 向每个Broker发送心跳
             heartbeat_success_count: int = 0
             heartbeat_failure_count: int = 0
 
             for broker_addr in broker_addrs:
-                try:
-                    # 创建Broker客户端连接
-                    pool: ConnectionPool = self._broker_manager.must_connection_pool(
-                        broker_addr
-                    )
-                    with pool.get_connection() as conn:
-                        # 发送心跳请求
-                        BrokerClient(conn).send_heartbeat(heartbeat_data)
-
-                except Exception as e:
+                if self._send_heartbeat_to_broker(broker_addr, heartbeat_data):
+                    heartbeat_success_count += 1
+                else:
                     heartbeat_failure_count += 1
-                    logger.warning(
-                        f"Failed to send heartbeat to broker {broker_addr}: {e}",
-                        extra={
-                            "broker_addr": broker_addr,
-                            "consumer_group": self._config.consumer_group,
-                            "error": str(e),
-                        },
-                    )
 
             # 更新统计信息
-            self._stats["heartbeat_success_count"] = (
-                self._stats.get("heartbeat_success_count", 0) + heartbeat_success_count
+            self._update_heartbeat_statistics(
+                heartbeat_success_count, heartbeat_failure_count, len(broker_addrs)
             )
-            self._stats["heartbeat_failure_count"] = (
-                self._stats.get("heartbeat_failure_count", 0) + heartbeat_failure_count
-            )
-
-            if heartbeat_success_count > 0 or heartbeat_failure_count > 0:
-                logger.info(
-                    f"Heartbeat summary: {heartbeat_success_count} success, "
-                    f"{heartbeat_failure_count} failure",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "heartbeat_success_count": heartbeat_success_count,
-                        "heartbeat_failure_count": heartbeat_failure_count,
-                        "total_brokers": len(broker_addrs),
-                    },
-                )
 
         except Exception as e:
             logger.error(

@@ -1119,7 +1119,7 @@ class ConcurrentConsumer(BaseConsumer):
                 broker_address
             )
             self._prepare_consumer_remote(pool)
-            with pool.get_connection() as conn:
+            with pool.get_connection(usage="拉取消息") as conn:
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
@@ -1336,7 +1336,7 @@ class ConcurrentConsumer(BaseConsumer):
             )
             return
         pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
-        with pool.get_connection() as conn:
+        with pool.get_connection(usage="发送消息回broker") as conn:
             BrokerClient(conn).consumer_send_msg_back(
                 message,
                 0,
@@ -1409,7 +1409,7 @@ class ConcurrentConsumer(BaseConsumer):
             return []
 
         pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
-        with pool.get_connection() as conn:
+        with pool.get_connection(usage="查找消费者列表") as conn:
             return BrokerClient(conn).get_consumers_by_group(
                 self._config.consumer_group
             )

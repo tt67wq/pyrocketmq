@@ -229,7 +229,7 @@ class RemoteOffsetStore(OffsetStore):
                 pool: ConnectionPool = self.broker_manager.must_connection_pool(
                     broker_addr
                 )
-                with pool.get_connection() as connection:
+                with pool.get_connection(usage="更新消费者偏移量") as connection:
                     BrokerClient(connection).update_consumer_offset(
                         self.consumer_group, queue.topic, queue.queue_id, offset
                     )
@@ -364,7 +364,7 @@ class RemoteOffsetStore(OffsetStore):
                     pool: ConnectionPool = self.broker_manager.must_connection_pool(
                         broker_addr
                     )
-                    with pool.get_connection() as conn:
+                    with pool.get_connection(usage="查询消费者偏移量") as conn:
                         offset = BrokerClient(conn).query_consumer_offset(
                             consumer_group=self.consumer_group,
                             topic=queue.topic,

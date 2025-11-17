@@ -180,7 +180,7 @@ class ConsumeFromWhereManager:
             pool: ConnectionPool = self.broker_manager.must_connection_pool(
                 broker_address
             )
-            with pool.get_connection() as conn:
+            with pool.get_connection(usage="获取最大偏移量") as conn:
                 broker_client: BrokerClient = BrokerClient(conn)
                 max_offset: int = broker_client.get_max_offset(
                     queue.topic, queue.queue_id
@@ -294,7 +294,7 @@ class ConsumeFromWhereManager:
             )
         try:
             pool: ConnectionPool = self.broker_manager.must_connection_pool(broker_addr)
-            with pool.get_connection() as conn:
+            with pool.get_connection(usage="根据时间戳获取偏移量") as conn:
                 broker_client: BrokerClient = BrokerClient(conn)
                 offset: int = broker_client.search_offset_by_timestamp(
                     topic=queue.topic,
