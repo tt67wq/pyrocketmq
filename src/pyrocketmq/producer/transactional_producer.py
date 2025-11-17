@@ -34,6 +34,7 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
 )
 from pyrocketmq.producer.router import RoutingResult
+from pyrocketmq.remote import ConnectionPool
 from pyrocketmq.remote.sync_remote import Remote
 
 from .producer import Producer
@@ -229,11 +230,11 @@ class TransactionProducer(Producer):
         return routing_result
 
     def _register_transaction_check_handler(
-        self, broker_remote: Remote, broker_addr: str
+        self, pool: ConnectionPool, broker_addr: str
     ) -> None:
         """注册事务检查处理器，包含详细的错误处理"""
         try:
-            _ = broker_remote.register_request_processor_lazy(
+            _ = pool.register_request_processor(
                 self._transaction_check_code,
                 self._handle_transaction_check,
             )
@@ -333,16 +334,12 @@ class TransactionProducer(Producer):
             if not routing_result.message_queue:
                 raise QueueNotAvailableError(topic=message.topic)
 
-            # print("*" * 30)
-            # print("message.body:", str(message.body))
-            # print("message.queue:", routing_result.message_queue)
-            # print("message.properties:", message.properties)
-            # print("*" * 30)
-
-            # 发送事务消息
-            with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            self._register_transaction_check_handler(pool, broker_addr)
+            with pool.get_connection() as broker_remote:
                 # 注册事务检查处理器
-                self._register_transaction_check_handler(broker_remote, broker_addr)
 
                 # 发送消息
                 return self._send_to_broker(
@@ -444,7 +441,10 @@ class TransactionProducer(Producer):
             if not broker_addr:
                 raise ValueError("Broker address not found")
 
-            with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            with pool.get_connection() as broker_remote:
                 broker_client: BrokerClient = BrokerClient(broker_remote)
 
                 broker_client.end_transaction(
@@ -559,7 +559,10 @@ class TransactionProducer(Producer):
                     "state": str(local_state),
                 },
             )
-            with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            with pool.get_connection() as broker_remote:
                 BrokerClient(broker_remote).end_transaction(
                     self._config.producer_group,
                     callback.header.tran_state_table_offset,

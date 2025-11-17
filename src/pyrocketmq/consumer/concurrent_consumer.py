@@ -53,7 +53,7 @@ from pyrocketmq.model import (
     RequestCode,
     ResponseCode,
 )
-from pyrocketmq.remote import ConnectionPool, Remote
+from pyrocketmq.remote import ConnectionPool
 
 logger = get_logger(__name__)
 
@@ -1118,8 +1118,8 @@ class ConcurrentConsumer(BaseConsumer):
             pool: ConnectionPool = self._broker_manager.must_connection_pool(
                 broker_address
             )
+            self._prepare_consumer_remote(pool)
             with pool.get_connection() as conn:
-                self._prepare_consumer_remote(conn)
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
@@ -1632,12 +1632,12 @@ class ConcurrentConsumer(BaseConsumer):
         return self._get_final_stats()
 
     # ==================== 其他方法 ====================
-    def _prepare_consumer_remote(self, conn: Remote) -> None:
-        _ = conn.register_request_processor_lazy(
+    def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
+        pool.register_request_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
             self._on_notify_consumer_ids_changed,
         )
-        _ = conn.register_request_processor_lazy(
+        pool.register_request_processor(
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
         )

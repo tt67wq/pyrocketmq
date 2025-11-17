@@ -34,6 +34,7 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
 )
 from pyrocketmq.producer.router import RoutingResult
+from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.async_remote import AsyncRemote
 
 from .async_producer import AsyncProducer
@@ -228,11 +229,11 @@ class AsyncTransactionProducer(AsyncProducer):
         return routing_result
 
     async def _register_transaction_check_handler(
-        self, broker_remote: AsyncRemote, broker_addr: str
+        self, pool: AsyncConnectionPool, broker_addr: str
     ) -> None:
         """异步注册事务检查处理器，包含详细的错误处理"""
         try:
-            _ = await broker_remote.register_request_processor_lazy(
+            _ = await pool.register_request_processor(
                 self._transaction_check_code,
                 self._handle_transaction_check,
             )
@@ -294,11 +295,12 @@ class AsyncTransactionProducer(AsyncProducer):
                 raise QueueNotAvailableError(topic=message.topic)
 
             # 发送事务消息
-            async with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            await self._register_transaction_check_handler(pool, broker_addr)
+            async with pool.get_connection() as broker_remote:
                 # 注册事务检查处理器
-                await self._register_transaction_check_handler(
-                    broker_remote, broker_addr
-                )
 
                 # 发送消息
                 return await self._send_to_broker(
@@ -394,7 +396,10 @@ class AsyncTransactionProducer(AsyncProducer):
                 raise ValueError("Broker address not found")
 
             # 使用连接池获取Broker客户端
-            async with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            async with pool.get_connection() as broker_remote:
                 broker_client: AsyncBrokerClient = AsyncBrokerClient(broker_remote)
 
                 await broker_client.end_transaction(
@@ -514,7 +519,10 @@ class AsyncTransactionProducer(AsyncProducer):
             )
 
             # 异步连接到Broker并发送响应
-            async with self._broker_manager.connection(broker_addr) as broker_remote:
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            async with pool.get_connection() as broker_remote:
                 broker_client = AsyncBrokerClient(broker_remote)
 
                 await broker_client.end_transaction(
@@ -650,7 +658,7 @@ def create_async_transaction_producer(
     producer_group: str,
     namesrv_addr: str,
     transaction_listener: AsyncTransactionListener | None = None,
-    **kwargs,
+    **kwargs: Any,
 ) -> AsyncTransactionProducer:
     """创建异步事务Producer的便利函数
 

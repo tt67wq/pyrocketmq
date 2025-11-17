@@ -13,10 +13,10 @@ from typing import Any, Generator
 from pyrocketmq.logging import get_logger
 from pyrocketmq.transport.config import TransportConfig
 
-from .async_remote import AsyncRemote
+from .async_remote import AsyncClientRequestFunc, AsyncRemote
 from .config import RemoteConfig
 from .errors import ConnectionError
-from .sync_remote import Remote
+from .sync_remote import ClientRequestFunc, Remote
 
 
 class ConnectionPool:
@@ -186,6 +186,26 @@ class ConnectionPool:
     def __enter__(self) -> "ConnectionPool":
         """上下文管理器入口"""
         return self
+
+    def register_request_processor(
+        self, request_code: int, processor_func: ClientRequestFunc
+    ) -> None:
+        """为连接池中的所有remote注册请求处理器
+
+        Args:
+            request_code: 请求代码
+            processor_func: 处理器函数
+        """
+        with self._pool_lock:
+            for remote in self._pool:
+                remote.register_request_processor_lazy(request_code, processor_func)
+            self._logger.debug(
+                "为连接池中的所有remote注册请求处理器",
+                extra={
+                    "request_code": request_code,
+                    "connection_count": len(self._pool),
+                },
+            )
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """上下文管理器出口"""
@@ -394,6 +414,32 @@ class AsyncConnectionPool:
         """异步上下文管理器入口"""
         await self.initialize()
         return self
+
+    async def register_request_processor(
+        self, request_code: int, processor_func: AsyncClientRequestFunc
+    ) -> None:
+        """为异步连接池中的所有remote注册请求处理器
+
+        Args:
+            request_code: 请求代码
+            processor_func: 处理器函数
+        """
+        # 确保连接池已初始化
+        if self._initialize_task is None or self._initialize_task.done():
+            await self.initialize()
+
+        async with self._pool_lock:
+            for remote in self._pool:
+                await remote.register_request_processor_lazy(
+                    request_code, processor_func
+                )
+            self._logger.debug(
+                "为异步连接池中的所有remote注册请求处理器",
+                extra={
+                    "request_code": request_code,
+                    "connection_count": len(self._pool),
+                },
+            )
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """异步上下文管理器出口"""
