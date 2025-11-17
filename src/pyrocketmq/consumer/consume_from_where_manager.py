@@ -15,6 +15,7 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
 from pyrocketmq.model.consumer import ConsumeFromWhere
 from pyrocketmq.nameserver import NameServerManager
+from pyrocketmq.remote import ConnectionPool
 
 
 class ConsumeFromWhereManager:
@@ -176,7 +177,10 @@ class ConsumeFromWhereManager:
                 broker_name=queue.broker_name, message="无法获取broker地址"
             )
         try:
-            with self.broker_manager.connection(broker_address) as conn:
+            pool: ConnectionPool = self.broker_manager.must_connection_pool(
+                broker_address
+            )
+            with pool.get_connection() as conn:
                 broker_client: BrokerClient = BrokerClient(conn)
                 max_offset: int = broker_client.get_max_offset(
                     queue.topic, queue.queue_id
@@ -289,7 +293,8 @@ class ConsumeFromWhereManager:
                 broker_name=queue.broker_name, message="无法获取broker地址"
             )
         try:
-            with self.broker_manager.connection(broker_addr) as conn:
+            pool: ConnectionPool = self.broker_manager.must_connection_pool(broker_addr)
+            with pool.get_connection() as conn:
                 broker_client: BrokerClient = BrokerClient(conn)
                 offset: int = broker_client.search_offset_by_timestamp(
                     topic=queue.topic,

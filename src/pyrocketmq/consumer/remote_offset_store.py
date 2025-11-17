@@ -29,6 +29,7 @@ from pyrocketmq.model import MessageQueue
 from pyrocketmq.nameserver import NameServerManager
 from pyrocketmq.producer.router import MessageRouter
 from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
+from pyrocketmq.remote import ConnectionPool
 
 logger = get_logger(__name__)
 
@@ -225,7 +226,10 @@ class RemoteOffsetStore(OffsetStore):
                 if not broker_addr:
                     raise ValueError(f"Broker address not found for {queue}")
 
-                with self.broker_manager.connection(broker_addr) as connection:
+                pool: ConnectionPool = self.broker_manager.must_connection_pool(
+                    broker_addr
+                )
+                with pool.get_connection() as connection:
                     BrokerClient(connection).update_consumer_offset(
                         self.consumer_group, queue.topic, queue.queue_id, offset
                     )
@@ -357,7 +361,10 @@ class RemoteOffsetStore(OffsetStore):
                         self.metrics.record_cache_miss()
                         return -1
 
-                    with self.broker_manager.connection(broker_addr) as conn:
+                    pool: ConnectionPool = self.broker_manager.must_connection_pool(
+                        broker_addr
+                    )
+                    with pool.get_connection() as conn:
                         offset = BrokerClient(conn).query_consumer_offset(
                             consumer_group=self.consumer_group,
                             topic=queue.topic,
@@ -461,7 +468,8 @@ class RemoteOffsetStore(OffsetStore):
                 logger.warning("broker address not found")
                 return
 
-            with self.broker_manager.connection(broker_addr) as conn:
+            pool: ConnectionPool = self.broker_manager.must_connection_pool(broker_addr)
+            with pool.get_connection() as conn:
                 cli: BrokerClient = BrokerClient(conn)
                 for queue, offset in offsets:
                     try:

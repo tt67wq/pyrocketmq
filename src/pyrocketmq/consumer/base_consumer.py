@@ -31,7 +31,7 @@ from pyrocketmq.model import (
     MessageSelector,
 )
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
-from pyrocketmq.remote import DEFAULT_CONFIG
+from pyrocketmq.remote import DEFAULT_CONFIG, ConnectionPool
 
 # 本地模块导入
 from .config import ConsumerConfig
@@ -1134,7 +1134,9 @@ class BaseConsumer(ABC):
             for broker_addr in broker_addrs:
                 try:
                     # 创建Broker客户端连接
-                    pool = self._broker_manager.must_connection_pool(broker_addr)
+                    pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                        broker_addr
+                    )
                     with pool.get_connection() as conn:
                         # 发送心跳请求
                         BrokerClient(conn).send_heartbeat(heartbeat_data)

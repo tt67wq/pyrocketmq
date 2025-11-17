@@ -56,6 +56,7 @@ from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
 from pyrocketmq.remote.config import RemoteConfig
+from pyrocketmq.remote.pool import ConnectionPool
 from pyrocketmq.transport.config import TransportConfig
 
 logger = get_logger(__name__)
@@ -747,7 +748,8 @@ class Producer:
             SendResult: 发送结果
         """
 
-        with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as broker_remote:
             return BrokerClient(broker_remote).sync_send_message(
                 self._config.producer_group,
                 message.body,
@@ -769,7 +771,8 @@ class Producer:
             message_queue: 消息队列
         """
 
-        with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as broker_remote:
             BrokerClient(broker_remote).oneway_send_message(
                 self._config.producer_group,
                 message.body,
@@ -794,7 +797,8 @@ class Producer:
         Returns:
             SendMessageResult: 发送结果
         """
-        with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as broker_remote:
             return BrokerClient(broker_remote).sync_batch_send_message(
                 self._config.producer_group,
                 batch_message.body,
@@ -818,7 +822,8 @@ class Producer:
             broker_addr: Broker地址
             message_queue: 消息队列
         """
-        with self._broker_manager.connection(broker_addr) as broker_remote:
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as broker_remote:
             BrokerClient(broker_remote).oneway_batch_send_message(
                 self._config.producer_group,
                 batch_message.body,
@@ -891,7 +896,10 @@ class Producer:
             for broker_addr in broker_addrs:
                 try:
                     # 获取或创建Broker连接
-                    with self._broker_manager.connection(broker_addr) as broker_remote:
+                    pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                        broker_addr
+                    )
+                    with pool.get_connection() as broker_remote:
                         BrokerClient(broker_remote).send_heartbeat(heartbeat_data)
                         success_count += 1
                         logger.debug(
