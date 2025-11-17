@@ -9,20 +9,16 @@ MVP版本功能:
 - 智能故障规避机制
 - 路由信息更新和状态管理
 - 与TopicBrokerMapping的深度集成
-- 路由性能监控和统计
 
 作者: pyrocketmq团队
 版本: MVP 1.0
 """
 
 import logging
-import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
-from pyrocketmq.broker import BrokerState
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message
 from pyrocketmq.model.message_queue import MessageQueue
@@ -57,103 +53,6 @@ class RoutingStrategy(Enum):
 
 
 @dataclass
-class BrokerHealthInfo:
-    """Broker健康信息"""
-
-    broker_data: BrokerData
-
-    # 健康状态
-    status: BrokerState = BrokerState.HEALTHY
-
-    # 统计信息
-    success_count: int = 0
-    failure_count: int = 0
-    total_requests: int = 0
-    last_success_time: float = 0
-    last_failure_time: float = 0
-
-    # 性能指标
-    avg_latency: float = 0.0  # 平均延迟 (ms)
-    max_latency: float = 0.0  # 最大延迟 (ms)
-    recent_latencies: list[float] = field(default_factory=list)  # 最近延迟记录
-
-    # 故障恢复
-    failure_start_time: float = 0
-    recovery_attempt_time: float = 0
-    consecutive_failures: int = 0
-    consecutive_successes: int = 0
-
-    def __post_init__(self) -> None:
-        pass
-
-    def update_success(self, latency_ms: float) -> None:
-        """更新成功请求统计"""
-        self.success_count += 1
-        self.total_requests += 1
-        self.last_success_time = time.time()
-        self.consecutive_successes += 1
-        self.consecutive_failures = 0
-
-        # 更新延迟统计
-        self.recent_latencies.append(latency_ms)
-        if len(self.recent_latencies) > 100:  # 只保留最近100次
-            _ = self.recent_latencies.pop(0)
-
-        self.avg_latency = sum(self.recent_latencies) / len(self.recent_latencies)
-        self.max_latency = max(self.max_latency, latency_ms)
-
-        # 故障恢复检查
-        if self.status != BrokerState.HEALTHY and self.consecutive_successes >= 5:
-            self.status = BrokerState.HEALTHY
-            logger.info(
-                f"Broker {self.broker_data.broker_name} recovered to healthy status"
-            )
-
-    def update_failure(self) -> None:
-        """更新失败请求统计"""
-        self.failure_count += 1
-        self.total_requests += 1
-        self.last_failure_time = time.time()
-        self.consecutive_failures += 1
-        self.consecutive_successes = 0
-
-        # 故障检测
-        if self.consecutive_failures >= 3 and self.status == BrokerState.HEALTHY:
-            self.status = BrokerState.DEGRADED
-            self.failure_start_time = time.time()
-            logger.warning(
-                f"Broker {self.broker_data.broker_name} degraded due to consecutive failures"
-            )
-        elif self.consecutive_failures >= 5 and self.status == BrokerState.DEGRADED:
-            self.status = BrokerState.UNHEALTHY
-            logger.error(f"Broker {self.broker_data.broker_name} marked as unhealthy")
-
-    def get_success_rate(self) -> float:
-        """获取成功率"""
-        if self.total_requests == 0:
-            return 1.0
-        return self.success_count / self.total_requests
-
-    def is_available(self) -> bool:
-        """判断Broker是否可用"""
-        return (
-            self.status != BrokerState.SUSPENDED
-            and self.status != BrokerState.UNHEALTHY
-        )
-
-    def should_use_for_routing(self) -> bool:
-        """判断是否应该用于路由（考虑健康状态和性能）"""
-        if not self.is_available():
-            return False
-
-        # 如果性能下降但成功率较高，仍然可以使用
-        if self.status == BrokerState.DEGRADED:
-            return self.get_success_rate() > 0.8
-
-        return True
-
-
-@dataclass
 class RoutingResult:
     """路由结果"""
 
@@ -185,37 +84,18 @@ class MessageRouter:
     2. 故障感知和规避
     3. 延迟感知优化
     4. 自动路由更新
-    5. 性能监控和统计
     """
 
     def __init__(
         self,
         topic_mapping: TopicBrokerMapping,
         default_strategy: RoutingStrategy = RoutingStrategy.ROUND_ROBIN,
-        health_check_interval: float = 30.0,
     ):
         # Topic-Broker映射
         self.topic_mapping: TopicBrokerMapping = topic_mapping
 
         # 路由策略配置
         self.default_strategy: RoutingStrategy = default_strategy
-
-        # Broker健康信息
-        self.broker_health: dict[str, BrokerHealthInfo] = {}
-        self._health_lock: threading.RLock = threading.RLock()
-
-        # 健康检查配置
-        self.health_check_interval: float = health_check_interval
-
-        # 统计信息
-        self._routing_stats: dict[str, Any] = {
-            "total_routing": 0,
-            "successful_routing": 0,
-            "failed_routing": 0,
-            "strategy_usage": {strategy.value: 0 for strategy in RoutingStrategy},
-            "broker_usage": {},
-        }
-        self._stats_lock: threading.RLock = threading.RLock()
 
         self._logger: logging.Logger = get_logger(__name__)
 
@@ -227,7 +107,6 @@ class MessageRouter:
             "MessageRouter initialized",
             extra={
                 "strategy": default_strategy.value,
-                "health_check_interval": health_check_interval,
                 "pre_created_selectors": list(self._selectors.keys()),
             },
         )
@@ -268,10 +147,6 @@ class MessageRouter:
         )
 
         try:
-            with self._stats_lock:
-                self._routing_stats["total_routing"] += 1
-                self._routing_stats["strategy_usage"][routing_strategy.value] += 1
-
             # Debug: 记录即将获取可用队列
             self._logger.debug(
                 "Fetching available queues for topic",
@@ -316,9 +191,6 @@ class MessageRouter:
                     },
                 )
 
-                with self._stats_lock:
-                    self._routing_stats["failed_routing"] += 1
-
                 return RoutingResult(
                     success=False,
                     error=error,
@@ -342,8 +214,7 @@ class MessageRouter:
                         "timestamp": time.time(),
                     },
                 )
-                with self._stats_lock:
-                    self._routing_stats["failed_routing"] += 1
+
                 return RoutingResult(
                     success=False,
                     error=error,
@@ -392,8 +263,6 @@ class MessageRouter:
                     },
                 )
 
-                with self._stats_lock:
-                    self._routing_stats["failed_routing"] += 1
                 return RoutingResult(
                     success=False,
                     error=error,
@@ -458,25 +327,11 @@ class MessageRouter:
                     },
                 )
 
-                with self._stats_lock:
-                    self._routing_stats["failed_routing"] += 1
                 return RoutingResult(
                     success=False,
                     error=error,
                     routing_strategy=routing_strategy,
                 )
-
-            # 更新统计信息
-            with self._stats_lock:
-                self._routing_stats["successful_routing"] += 1
-                broker_name = broker_data.broker_name
-                self._routing_stats["broker_usage"][broker_name] = (
-                    self._routing_stats["broker_usage"].get(broker_name, 0) + 1
-                )
-
-                # Debug: 记录统计信息更新
-                successful_routing = self._routing_stats["successful_routing"]
-                broker_usage = self._routing_stats["broker_usage"][broker_name]
 
             routing_time = (time.time() - start_time) * 1000  # ms
 
@@ -491,8 +346,6 @@ class MessageRouter:
                     "broker_address": broker_address,
                     "routing_strategy": routing_strategy.value,
                     "routing_time_ms": round(routing_time, 2),
-                    "successful_routing_count": successful_routing,
-                    "broker_usage_count": broker_usage,
                     "timestamp": time.time(),
                 },
             )
@@ -506,9 +359,6 @@ class MessageRouter:
             )
 
         except Exception as e:
-            with self._stats_lock:
-                self._routing_stats["failed_routing"] += 1
-
             # Error: 记录路由失败的结构化日志
             self._logger.error(
                 "Routing failed with exception",
@@ -518,7 +368,6 @@ class MessageRouter:
                     "error_type": type(e).__name__,
                     "error_message": str(e),
                     "routing_strategy": routing_strategy.value,
-                    "failed_routing_count": self._routing_stats["failed_routing"],
                     "timestamp": time.time(),
                 },
             )
@@ -526,167 +375,6 @@ class MessageRouter:
             return RoutingResult(
                 success=False, error=e, routing_strategy=routing_strategy
             )
-
-    def report_routing_result(
-        self,
-        result: RoutingResult,
-        latency_ms: float | None = None,
-    ) -> None:
-        """
-        报告路由结果（用于性能监控和故障检测）
-
-        Args:
-            result: 路由结果
-            latency_ms: 请求延迟（毫秒）
-        """
-        if not result.success or not result.get_broker_name():
-            return
-
-        broker_name = result.get_broker_name()
-        if not broker_name:
-            self._logger.warning("Cannot report routing result: no broker name")
-            return
-
-        with self._health_lock:
-            health_info = self.broker_health.get(broker_name)
-            if not health_info:
-                # 创建新的健康信息
-                if result.broker_data:
-                    health_info = BrokerHealthInfo(broker_data=result.broker_data)
-                    self.broker_health[broker_name] = health_info
-                else:
-                    self._logger.warning(
-                        f"Cannot create health info for broker {broker_name}: no broker data"
-                    )
-                    return
-
-            # 更新统计信息
-            if latency_ms is not None:
-                health_info.update_success(latency_ms)
-            else:
-                health_info.update_success(0.0)  # 默认延迟
-
-    def report_routing_failure(
-        self,
-        broker_name: str,
-        _error: Exception,
-        broker_data: BrokerData | None = None,
-    ) -> None:
-        """
-        报告路由失败（用于故障检测）
-
-        Args:
-            broker_name: Broker名称
-            error: 错误信息
-            broker_data: Broker数据（可选）
-        """
-        with self._health_lock:
-            health_info = self.broker_health.get(broker_name)
-            if not health_info:
-                # 创建新的健康信息
-                if broker_data:
-                    health_info = BrokerHealthInfo(broker_data=broker_data)
-                    self.broker_health[broker_name] = health_info
-                    health_info.update_failure()
-            elif health_info:
-                health_info.update_failure()
-
-    def get_routing_stats(self) -> dict[str, Any]:
-        """
-        获取路由统计信息
-
-        Returns:
-            dict[str, any]: 统计信息
-        """
-        with self._stats_lock:
-            stats = self._routing_stats.copy()
-
-        # 添加健康信息统计
-        with self._health_lock:
-            health_summary = {}
-            for broker_name, health_info in self.broker_health.items():
-                health_summary[broker_name] = {
-                    "status": health_info.status.value,
-                    "success_rate": health_info.get_success_rate(),
-                    "avg_latency": health_info.avg_latency,
-                    "total_requests": health_info.total_requests,
-                    "is_available": health_info.is_available(),
-                }
-
-        stats["broker_health"] = health_summary
-        return stats
-
-    def reset_stats(self) -> None:
-        """重置统计信息"""
-        with self._stats_lock:
-            self._routing_stats = {
-                "total_routing": 0,
-                "successful_routing": 0,
-                "failed_routing": 0,
-                "strategy_usage": {strategy.value: 0 for strategy in RoutingStrategy},
-                "broker_usage": {},
-            }
-
-        self._logger.info("Routing stats reset")
-
-    def update_broker_health_info(
-        self,
-        broker_name: str,
-        broker_data: BrokerData,
-    ) -> None:
-        """
-        更新Broker健康信息
-
-        Args:
-            broker_name: Broker名称
-            broker_data: Broker数据
-        """
-        with self._health_lock:
-            health_info = self.broker_health.get(broker_name)
-            if not health_info:
-                health_info = BrokerHealthInfo(
-                    broker_data=broker_data,
-                )
-                self.broker_health[broker_name] = health_info
-            else:
-                # 更新地址信息
-                health_info.broker_data = broker_data
-
-    def force_broker_recovery(self, broker_name: str) -> bool:
-        """
-        强制恢复Broker状态
-
-        Args:
-            broker_name: Broker名称
-
-        Returns:
-            bool: 是否成功恢复
-        """
-        with self._health_lock:
-            health_info = self.broker_health.get(broker_name)
-            if health_info:
-                health_info.status = BrokerState.HEALTHY
-                health_info.consecutive_failures = 0
-                health_info.consecutive_successes = 0
-                self._logger.info(
-                    f"Force recovered broker {broker_name} to healthy status"
-                )
-                return True
-            return False
-
-    def get_available_brokers(self) -> list[str]:
-        """
-        获取可用的Broker列表
-
-        Returns:
-            list[str]: 可用的Broker名称列表
-        """
-        available_brokers: list[str] = []
-        with self._health_lock:
-            for broker_name, health_info in self.broker_health.items():
-                if health_info.is_available():
-                    available_brokers.append(broker_name)
-        return available_brokers
 
     def _get_available_queues(
         self, topic: str
