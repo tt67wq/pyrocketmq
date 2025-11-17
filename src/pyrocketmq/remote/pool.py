@@ -1,5 +1,5 @@
 """
-连接池实现
+连接池实现 - 重构版本
 """
 
 import asyncio
@@ -49,34 +49,139 @@ class ConnectionPool:
     def _initialize_pool(self) -> None:
         """初始化连接池"""
         with self._pool_lock:
-            for i in range(self.pool_size):
-                try:
-                    # 这里需要导入工厂函数，避免循环导入
-                    from .factory import RemoteFactory
+            for _ in range(self.pool_size):
+                remote: Remote = self._build_connection()
+                self._pool.append(remote)
 
-                    remote = RemoteFactory.create_sync_remote(
-                        self.address, self.remote_config, self.transport_config
-                    )
-                    remote.connect()
-                    self._pool.append(remote)
-                    self._logger.debug(
-                        "连接池初始化连接",
-                        extra={
-                            "current": i + 1,
-                            "total": self.pool_size,
-                        },
-                    )
-                except Exception as e:
-                    self._logger.error(
-                        "初始化连接池连接失败",
-                        extra={"error": str(e)},
-                    )
-                    raise ConnectionError(f"初始化连接池失败: {e}") from e
+        self._logger.info(
+            "连接池初始化完成",
+            extra={"pool_size": self.pool_size},
+        )
+
+    def _extract_from_pool(self) -> Remote | None:
+        """从连接池中提取一个连接
+
+        Returns:
+            Remote | None: 提取的连接，如果池为空则返回None
+        """
+        with self._pool_lock:
+            if self._pool:
+                return self._pool.pop(0)
+            return None
+
+    def _wait_for_available_connection(
+        self, timeout: float, start_time: float
+    ) -> Remote:
+        """等待直到有可用连接或超时
+
+        Args:
+            timeout: 超时时间
+            start_time: 开始等待的时间
+
+        Returns:
+            Remote: 可用的连接
+
+        Raises:
+            TimeoutError: 等待超时
+        """
+        while True:
+            connection = self._extract_from_pool()
+            if connection is not None:
+                return connection
+
+            # 检查是否超时
+            if time.time() - start_time > timeout:
+                raise TimeoutError("获取连接超时")
+
+            # 短暂等待后重试
+            time.sleep(0.1)
+
+    def _validate_connection(self, connection: Remote, usage: str | None) -> Remote:
+        """验证连接有效性，如果无效则重建
+
+        Args:
+            connection: 要验证的连接
+            usage: 连接使用场景
+
+        Returns:
+            Remote: 有效的连接
+
+        Raises:
+            ConnectionError: 连接重建失败
+        """
+        if connection.is_connected:
+            return connection
+
+        # 连接无效，需要重建
+        self._logger.warning(
+            "获取到已断开的连接，正在淘汰并重建连接",
+            extra={
+                "address": self.address,
+                "remaining_connections": len(self._pool),
+                "usage": usage,
+            },
+        )
+
+        # 关闭断开的连接
+        try:
+            connection.close()
+        except Exception as e:
+            self._logger.warning("关闭断开连接时发生错误", extra={"error": str(e)})
+
+        # 重建连接
+        conn: Remote = self._build_connection()
+
+        # 添加新连接到池中
+        self._add_connection(conn)
+        return conn
+
+    def _build_connection(self) -> Remote:
+        """建立一个新的连接
+
+        Returns:
+            Remote: 新建的连接
+
+        Raises:
+            ConnectionError: 连接失败
+        """
+        try:
+            from .factory import RemoteFactory
+
+            new_connection: Remote = RemoteFactory.create_sync_remote(
+                self.address, self.remote_config, self.transport_config
+            )
+            new_connection.connect()
 
             self._logger.info(
-                "连接池初始化完成",
-                extra={"pool_size": self.pool_size},
+                "成功连接",
+                extra={
+                    "address": self.address,
+                    "remaining_connections": len(self._pool),
+                },
             )
+
+            return new_connection
+
+        except Exception as e:
+            self._logger.error(
+                "连接失败", extra={"address": self.address, "error": str(e)}
+            )
+            raise ConnectionError("连接失败") from e
+
+    def _log_connection_success(self, usage: str | None) -> None:
+        """记录成功获取连接的日志
+
+        Args:
+            usage: 连接使用场景
+        """
+        log_extra: dict[str, str | int] = {"remaining_connections": len(self._pool)}
+        if usage:
+            log_extra["usage"] = usage
+
+        self._logger.debug(
+            "获取连接成功",
+            extra=log_extra,
+        )
 
     @contextmanager
     def get_connection(
@@ -94,6 +199,7 @@ class ConnectionPool:
         Raises:
             ResourceExhaustedError: 连接池耗尽
             TimeoutError: 获取连接超时
+            ConnectionError: 连接重建失败
         """
         connection: Remote | None = None
         start_time = time.time()
@@ -102,28 +208,15 @@ class ConnectionPool:
             # 获取连接超时时间
             get_timeout: float = timeout or self.remote_config.connection_pool_timeout
 
-            while True:
-                with self._pool_lock:
-                    if self._pool:
-                        connection = self._pool.pop(0)
-                        break
+            # 等待并获取可用连接
+            connection = self._wait_for_available_connection(get_timeout, start_time)
 
-                # 检查是否超时
-                if time.time() - start_time > get_timeout:
-                    raise TimeoutError("获取连接超时")
+            # 验证连接有效性，必要时重建
+            connection = self._validate_connection(connection, usage)
 
-                # 短暂等待后重试
-                time.sleep(0.1)
+            # 记录成功日志
+            self._log_connection_success(usage)
 
-            log_extra: dict[str, str | int] = {"remaining_connections": len(self._pool)}
-            if usage:
-                log_extra["usage"] = usage
-
-            self._logger.debug(
-                "获取连接成功",
-                extra=log_extra,
-            )
-            # print(f"获取连接成功，usage：{usage}, addr:{self.address}")
             yield connection
 
         except Exception:
@@ -134,7 +227,6 @@ class ConnectionPool:
         finally:
             # 正常完成时归还连接
             if connection and connection.is_connected:
-                # print(f"归还连接成功，usage：{usage}, addr:{self.address}")
                 self._return_connection(connection)
 
     def _return_connection(self, connection: Remote) -> None:
@@ -157,6 +249,21 @@ class ConnectionPool:
                 "关闭连接时发生错误",
                 extra={"error": str(e)},
             )
+
+    def _add_connection(self, connection: Remote) -> None:
+        """添加连接到池中"""
+        with self._pool_lock:
+            if len(self._pool) < self.pool_size:
+                self._pool.append(connection)
+                self._logger.debug(
+                    "添加连接到池中",
+                    extra={"current_connections": len(self._pool)},
+                )
+            else:
+                self._logger.warning(
+                    "连接池已满，无法添加连接",
+                    extra={"current_connections": len(self._pool)},
+                )
 
     def close(self) -> None:
         """关闭连接池"""
@@ -258,29 +365,9 @@ class AsyncConnectionPool:
             if self._is_initialized:
                 return
 
-            for i in range(self.pool_size):
-                try:
-                    # 这里需要导入工厂函数，避免循环导入
-                    from .factory import RemoteFactory
-
-                    remote = RemoteFactory.create_async_remote(
-                        self.address, self.remote_config, self.transport_config
-                    )
-                    await remote.connect()
-                    self._pool.append(remote)
-                    self._logger.debug(
-                        "异步连接池初始化连接",
-                        extra={
-                            "current": i + 1,
-                            "total": self.pool_size,
-                        },
-                    )
-                except Exception as e:
-                    self._logger.error(
-                        "初始化异步连接池连接失败",
-                        extra={"error": str(e)},
-                    )
-                    raise ConnectionError(f"初始化连接池失败: {e}") from e
+            for _ in range(self.pool_size):
+                conn: AsyncRemote = await self._build_connection()
+                self._pool.append(conn)
 
             # 标记为已初始化
             self._is_initialized = True
@@ -297,6 +384,132 @@ class AsyncConnectionPool:
             )
 
         await self._initialize_task
+
+    async def _extract_from_pool(self) -> AsyncRemote | None:
+        """从连接池中提取一个连接
+
+        Returns:
+            AsyncRemote | None: 提取的连接，如果池为空则返回None
+        """
+        async with self._pool_lock:
+            if self._pool:
+                return self._pool.pop(0)
+            return None
+
+    async def _wait_for_available_connection(
+        self, timeout: float, start_time: float
+    ) -> AsyncRemote:
+        """等待直到有可用连接或超时
+
+        Args:
+            timeout: 超时时间
+            start_time: 开始等待的时间
+
+        Returns:
+            AsyncRemote: 可用的连接
+
+        Raises:
+            TimeoutError: 等待超时
+        """
+        while True:
+            connection = await self._extract_from_pool()
+            if connection is not None:
+                return connection
+
+            # 检查是否超时
+            if time.time() - start_time > timeout:
+                raise TimeoutError("获取连接超时")
+
+            # 短暂等待后重试
+            await asyncio.sleep(0.1)
+
+    async def _validate_connection(
+        self, connection: AsyncRemote, usage: str | None
+    ) -> AsyncRemote:
+        """验证连接有效性，如果无效则重建
+
+        Args:
+            connection: 要验证的连接
+            usage: 连接使用场景
+
+        Returns:
+            AsyncRemote: 有效的连接
+
+        Raises:
+            ConnectionError: 连接重建失败
+        """
+        if connection.is_connected:
+            return connection
+
+        # 连接无效，需要重建
+        self._logger.warning(
+            "获取到已断开的异步连接，正在淘汰并重建连接",
+            extra={
+                "address": self.address,
+                "remaining_connections": len(self._pool),
+                "usage": usage,
+            },
+        )
+
+        # 关闭断开的连接
+        try:
+            await connection.close()
+        except Exception as e:
+            self._logger.warning("关闭断开异步连接时发生错误", extra={"error": str(e)})
+
+        # 重建连接
+        conn: AsyncRemote = await self._build_connection()
+        # 添加新连接到池中
+        await self._add_connection(conn)
+        return conn
+
+    async def _build_connection(self) -> AsyncRemote:
+        """重建一个新的连接
+
+        Returns:
+            AsyncRemote: 新建的连接
+
+        Raises:
+            ConnectionError: 连接失败
+        """
+        try:
+            from .factory import RemoteFactory
+
+            new_connection = RemoteFactory.create_async_remote(
+                self.address, self.remote_config, self.transport_config
+            )
+            await new_connection.connect()
+
+            self._logger.info(
+                "成功异步连接",
+                extra={
+                    "address": self.address,
+                    "remaining_connections": len(self._pool),
+                },
+            )
+
+            return new_connection
+
+        except Exception as e:
+            self._logger.error(
+                "异步连接失败", extra={"address": self.address, "error": str(e)}
+            )
+            raise ConnectionError("连接失败") from e
+
+    def _log_connection_success(self, usage: str | None) -> None:
+        """记录成功获取连接的日志
+
+        Args:
+            usage: 连接使用场景
+        """
+        log_extra: dict[str, str | int] = {"remaining_connections": len(self._pool)}
+        if usage:
+            log_extra["usage"] = usage
+
+        self._logger.debug(
+            "获取异步连接成功",
+            extra=log_extra,
+        )
 
     @asynccontextmanager
     async def get_connection(
@@ -326,27 +539,17 @@ class AsyncConnectionPool:
             # 获取连接超时时间
             get_timeout = timeout or self.remote_config.connection_pool_timeout
 
-            while True:
-                async with self._pool_lock:
-                    if self._pool:
-                        connection = self._pool.pop(0)
-                        break
-
-                # 检查是否超时
-                if time.time() - start_time > get_timeout:
-                    raise TimeoutError("获取连接超时")
-
-                # 短暂等待后重试
-                await asyncio.sleep(0.1)
-
-            log_extra = {"remaining_connections": len(self._pool)}
-            if usage:
-                log_extra["usage"] = usage
-
-            self._logger.debug(
-                "获取异步连接成功",
-                extra=log_extra,
+            # 等待并获取可用连接
+            connection = await self._wait_for_available_connection(
+                get_timeout, start_time
             )
+
+            # 验证连接有效性，必要时重建
+            connection = await self._validate_connection(connection, usage)
+
+            # 记录成功日志
+            self._log_connection_success(usage)
+
             yield connection
 
         except Exception:
@@ -379,6 +582,11 @@ class AsyncConnectionPool:
                 "关闭异步连接时发生错误",
                 extra={"error": str(e)},
             )
+
+    async def _add_connection(self, connection: AsyncRemote) -> None:
+        """添加新连接到池中"""
+        async with self._pool_lock:
+            self._pool.append(connection)
 
     async def close(self) -> None:
         """关闭连接池"""

@@ -195,7 +195,7 @@ class RemoteConfig:
 
 
 # 预定义配置
-DEFAULT_CONFIG = RemoteConfig()
+DEFAULT_CONFIG = RemoteConfig(connection_pool_size=16)
 DEVELOPMENT_CONFIG = RemoteConfig(
     rpc_timeout=10.0,
     max_waiters=1000,
@@ -210,7 +210,7 @@ PRODUCTION_CONFIG = RemoteConfig(
     cleanup_interval=120.0,
     waiter_timeout=600.0,
     enable_metrics=True,
-    connection_pool_size=5,
+    connection_pool_size=32,
 )
 TESTING_CONFIG = RemoteConfig(
     rpc_timeout=5.0,
