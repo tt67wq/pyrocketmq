@@ -27,8 +27,7 @@ from pyrocketmq.nameserver.client import SyncNameServerClient
 from pyrocketmq.nameserver.errors import NameServerError
 from pyrocketmq.nameserver.models import BrokerData, TopicRouteData
 from pyrocketmq.remote.config import RemoteConfig
-from pyrocketmq.remote.factory import create_sync_remote
-from pyrocketmq.remote.sync_remote import Remote
+from pyrocketmq.remote.pool import ConnectionPool
 from pyrocketmq.transport.config import TransportConfig
 
 
@@ -62,6 +61,7 @@ class NameServerConfig:
         """
         return RemoteConfig(
             rpc_timeout=self.timeout,
+            connection_pool_size=2,
         )
 
     def cast_transport_config(self) -> TransportConfig:
@@ -127,7 +127,7 @@ class NameServerManager:
         self._cache_lock: threading.RLock = threading.RLock()
 
         # NameServer连接池
-        self._sync_connections: dict[str, Remote] = {}
+        self._sync_connection_pools: dict[str, ConnectionPool] = {}
 
         # 状态管理
         self._started: bool = False
@@ -157,31 +157,31 @@ class NameServerManager:
                 "NameServer管理器已经启动，跳过重复启动",
                 extra={
                     "nameserver_addrs": self._nameserver_addrs,
-                    "connected_count": len(self._sync_connections),
+                    "connected_count": len(self._sync_connection_pools),
                 },
             )
             return
 
         self._logger.info("启动NameServer管理器")
 
-        # 建立同步连接
+        # 建立同步连接池
         for addr in self._nameserver_addrs:
             try:
-                remote: Remote = create_sync_remote(
+                connection_pool: ConnectionPool = ConnectionPool(
                     address=addr,
-                    config=self.config.cast_remote_config(),
+                    pool_size=self.config.cast_remote_config().connection_pool_size,
+                    remote_config=self.config.cast_remote_config(),
                     transport_config=self.config.cast_transport_config(),
                 )
-                remote.connect()
-                self._sync_connections[addr] = remote
-                self._logger.info("建立NameServer同步连接", extra={"addr": addr})
+                self._sync_connection_pools[addr] = connection_pool
+                self._logger.info("建立NameServer连接池", extra={"addr": addr})
             except Exception as e:
                 self._logger.warning(
-                    "建立NameServer同步连接失败", extra={"addr": addr, "error": str(e)}
+                    "建立NameServer连接池失败", extra={"addr": addr, "error": str(e)}
                 )
 
-        if not self._sync_connections:
-            raise NameServerError("", "无法建立任何NameServer连接")
+        if not self._sync_connection_pools:
+            raise NameServerError("", "无法建立任何NameServer连接池")
 
         # 设置启动状态
         self._started = True
@@ -197,17 +197,17 @@ class NameServerManager:
         """
         self._logger.info("停止NameServer管理器")
 
-        # 关闭同步连接
-        for addr, remote in self._sync_connections.items():
+        # 关闭同步连接池
+        for addr, connection_pool in self._sync_connection_pools.items():
             try:
-                remote.close()
-                self._logger.info("关闭NameServer同步连接", extra={"addr": addr})
+                connection_pool.close()
+                self._logger.info("关闭NameServer连接池", extra={"addr": addr})
             except Exception as e:
                 self._logger.warning(
-                    "关闭NameServer同步连接失败", extra={"addr": addr, "error": str(e)}
+                    "关闭NameServer连接池失败", extra={"addr": addr, "error": str(e)}
                 )
 
-        self._sync_connections.clear()
+        self._sync_connection_pools.clear()
 
         # 清理缓存
         with self._cache_lock:
@@ -487,7 +487,7 @@ class NameServerManager:
             return {
                 "cached_broker_addresses": len(self._broker_addr_cache),
                 "cached_routes": len(self._route_cache),
-                "connected_nameservers": len(self._sync_connections),
+                "connected_nameservers": len(self._sync_connection_pools),
             }
 
     def clear_cache(self) -> None:
@@ -538,50 +538,55 @@ class NameServerManager:
         last_error: Exception | None = None
 
         for attempt in range(self.config.max_retry_times):
-            for addr, remote in self._sync_connections.items():
+            for addr, connection_pool in self._sync_connection_pools.items():
                 try:
-                    client: SyncNameServerClient = SyncNameServerClient(
-                        remote, self.config.timeout
-                    )
-
-                    if topic:
-                        # 通过topic路由查询
-                        route_data: TopicRouteData | None = (
-                            client.query_topic_route_info(topic)
+                    with connection_pool.get_connection(
+                        usage=f"query_broker_address_{broker_name}"
+                    ) as remote:
+                        client: SyncNameServerClient = SyncNameServerClient(
+                            remote, self.config.timeout
                         )
-                        if route_data:
-                            for broker_data in route_data.broker_data_list:
-                                if broker_data.broker_name == broker_name:
-                                    address: str | None = self._select_broker_address(
-                                        broker_data
-                                    )
-                                    if address:
-                                        self._logger.debug(
-                                            "通过topic路由查询到broker地址",
-                                            extra={
-                                                "broker_name": broker_name,
-                                                "address": address,
-                                            },
+
+                        if topic:
+                            # 通过topic路由查询
+                            route_data: TopicRouteData | None = (
+                                client.query_topic_route_info(topic)
+                            )
+                            if route_data:
+                                for broker_data in route_data.broker_data_list:
+                                    if broker_data.broker_name == broker_name:
+                                        address: str | None = (
+                                            self._select_broker_address(broker_data)
                                         )
-                                        return address
-                    else:
-                        # 通过集群信息查询
-                        cluster_info = client.get_broker_cluster_info()
-                        if (
-                            cluster_info
-                            and broker_name in cluster_info.broker_addr_table
-                        ):
-                            broker_data = cluster_info.broker_addr_table[broker_name]
-                            address = self._select_broker_address(broker_data)
-                            if address:
-                                self._logger.debug(
-                                    "通过集群信息查询到broker地址",
-                                    extra={
-                                        "broker_name": broker_name,
-                                        "address": address,
-                                    },
-                                )
-                                return address
+                                        if address:
+                                            self._logger.debug(
+                                                "通过topic路由查询到broker地址",
+                                                extra={
+                                                    "broker_name": broker_name,
+                                                    "address": address,
+                                                },
+                                            )
+                                            return address
+                        else:
+                            # 通过集群信息查询
+                            cluster_info = client.get_broker_cluster_info()
+                            if (
+                                cluster_info
+                                and broker_name in cluster_info.broker_addr_table
+                            ):
+                                broker_data = cluster_info.broker_addr_table[
+                                    broker_name
+                                ]
+                                address = self._select_broker_address(broker_data)
+                                if address:
+                                    self._logger.debug(
+                                        "通过集群信息查询到broker地址",
+                                        extra={
+                                            "broker_name": broker_name,
+                                            "address": address,
+                                        },
+                                    )
+                                    return address
 
                 except Exception as e:
                     last_error = e
@@ -621,24 +626,27 @@ class NameServerManager:
         last_error: Exception | None = None
 
         for attempt in range(self.config.max_retry_times):
-            for addr, remote in self._sync_connections.items():
+            for addr, connection_pool in self._sync_connection_pools.items():
                 try:
-                    client: SyncNameServerClient = SyncNameServerClient(
-                        remote, self.config.timeout
-                    )
-                    route_data: TopicRouteData | None = client.query_topic_route_info(
-                        topic
-                    )
-
-                    if route_data:
-                        self._logger.debug(
-                            "查询到Topic路由",
-                            extra={
-                                "topic": topic,
-                                "broker_count": len(route_data.broker_data_list),
-                            },
+                    with connection_pool.get_connection(
+                        usage=f"query_topic_route_{topic}"
+                    ) as remote:
+                        client: SyncNameServerClient = SyncNameServerClient(
+                            remote, self.config.timeout
                         )
-                        return route_data
+                        route_data: TopicRouteData | None = (
+                            client.query_topic_route_info(topic)
+                        )
+
+                        if route_data:
+                            self._logger.debug(
+                                "查询到Topic路由",
+                                extra={
+                                    "topic": topic,
+                                    "broker_count": len(route_data.broker_data_list),
+                                },
+                            )
+                            return route_data
 
                 except Exception as e:
                     last_error = e
