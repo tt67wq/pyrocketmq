@@ -38,7 +38,6 @@ class LocalOffsetStore(OffsetStore):
         consumer_group: str,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
-        persist_batch_size: int = 10,
     ) -> None:
         """
         初始化本地偏移量存储
@@ -47,7 +46,6 @@ class LocalOffsetStore(OffsetStore):
             consumer_group: 消费者组名称
             store_path: 存储路径
             persist_interval: 持久化间隔（毫秒）
-            persist_batch_size: 批量提交大小
         """
         super().__init__(consumer_group)
 
@@ -62,7 +60,6 @@ class LocalOffsetStore(OffsetStore):
 
         # 配置参数
         self.persist_interval: int = persist_interval
-        self.persist_batch_size: int = persist_batch_size
 
         # 指标收集
         self.metrics: OffsetStoreMetrics = OffsetStoreMetrics()
@@ -442,7 +439,6 @@ class LocalOffsetStore(OffsetStore):
                 "cached_offsets_count": len(self.offset_table),
                 "store_path": str(self.offset_file_path),
                 "persist_interval": self.persist_interval,
-                "persist_batch_size": self.persist_batch_size,
             }
         )
         return metrics_dict

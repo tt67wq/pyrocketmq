@@ -2,7 +2,7 @@
 Consumer配置管理模块
 
 提供RocketMQ Consumer的完整配置管理功能，包括消费策略、
-线程池配置、流量控制等核心参数。
+线程池配置、偏移量存储等核心参数。
 
 MVP版本专注于核心配置，后续版本会逐步扩展更多配置选项。
 """
@@ -47,19 +47,11 @@ class ConsumerConfig:
     consume_timeout: int = 15  # 消费超时时间(秒)
     consume_batch_size: int = 1  # 每次消费处理的批次大小
     pull_batch_size: int = 32  # 批量拉取消息数量
-    pull_interval: int = 0  # 拉取间隔(毫秒)，0表示持续拉取
-
-    # === 流量控制配置 ===
-    pull_threshold_for_all: int = 50000  # 所有队列消息数阈值
-    pull_threshold_for_topic: int = 10000  # 单个topic消息数阈值
-    pull_threshold_size_for_topic: int = 100  # 单个topic消息大小阈值(MB)
-    pull_threshold_of_queue: int = 1000  # 单个队列消息数阈值
-    pull_threshold_size_of_queue: int = 100  # 单个队列消息大小阈值(MB)
+    pull_interval: int = 1000  # 拉取间隔(毫秒)，0表示持续拉取
 
     # === OffsetStore偏移量存储配置 ===
     # 持久化间隔配置
     persist_interval: int = 5000  # 毫秒，定期持久化间隔
-    persist_batch_size: int = 10  # 批量提交大小
 
     # 本地存储路径(广播模式使用)
     offset_store_path: str = "~/.rocketmq/offsets"
@@ -110,8 +102,6 @@ class ConsumerConfig:
         # 验证OffsetStore配置
         if self.persist_interval <= 0:
             raise ValueError("persist_interval 必须大于0")
-        if self.persist_batch_size <= 0:
-            raise ValueError("persist_batch_size 必须大于0")
         if self.max_cache_size <= 0:
             raise ValueError("max_cache_size 必须大于0")
         if self.max_retry_times < 0:
@@ -176,8 +166,6 @@ class ConsumerConfig:
         # OffsetStore配置环境变量
         if os.getenv("ROCKETMQ_PERSIST_INTERVAL"):
             self.persist_interval = int(os.getenv("ROCKETMQ_PERSIST_INTERVAL", 5000))
-        if os.getenv("ROCKETMQ_PERSIST_BATCH_SIZE"):
-            self.persist_batch_size = int(os.getenv("ROCKETMQ_PERSIST_BATCH_SIZE", 10))
         if os.getenv("ROCKETMQ_OFFSET_STORE_PATH"):
             self.offset_store_path = os.getenv(
                 "ROCKETMQ_OFFSET_STORE_PATH", "~/.rocketmq/offsets"
@@ -234,14 +222,8 @@ class ConsumerConfig:
             "consume_batch_size": self.consume_batch_size,
             "pull_batch_size": self.pull_batch_size,
             "pull_interval": self.pull_interval,
-            "pull_threshold_for_all": self.pull_threshold_for_all,
-            "pull_threshold_for_topic": self.pull_threshold_for_topic,
-            "pull_threshold_size_for_topic": self.pull_threshold_size_for_topic,
-            "pull_threshold_of_queue": self.pull_threshold_of_queue,
-            "pull_threshold_size_of_queue": self.pull_threshold_size_of_queue,
             # OffsetStore配置
             "persist_interval": self.persist_interval,
-            "persist_batch_size": self.persist_batch_size,
             "offset_store_path": self.offset_store_path,
             "max_cache_size": self.max_cache_size,
             "enable_auto_recovery": self.enable_auto_recovery,
@@ -333,7 +315,6 @@ def create_config(**kwargs: Any) -> ConsumerConfig:
         ...     pull_batch_size=64,
         ...     pull_interval=0,
         ...     persist_interval=1000,  # 频繁持久化
-        ...     persist_batch_size=50,
         ...     max_cache_size=50000
         ... )
         >>>
@@ -346,7 +327,6 @@ def create_config(**kwargs: Any) -> ConsumerConfig:
         ...     pull_batch_size=8,
         ...     pull_interval=1000,
         ...     persist_interval=10000,  # 较低频持久化
-        ...     persist_batch_size=5,
         ...     max_cache_size=500
         ... )
         >>>

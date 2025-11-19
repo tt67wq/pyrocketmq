@@ -60,7 +60,6 @@ class RemoteOffsetStore(OffsetStore):
         broker_manager: BrokerManager,
         nameserver_manager: NameServerManager,
         persist_interval: int = 5000,
-        persist_batch_size: int = 10,
     ) -> None:
         """初始化远程偏移量存储.
 
@@ -69,7 +68,6 @@ class RemoteOffsetStore(OffsetStore):
             broker_manager: Broker管理器，用于与Broker通信
             nameserver_manager: NameServer管理器，用于路由查询
             persist_interval: 持久化间隔（毫秒），默认5秒
-            persist_batch_size: 批量提交大小，默认10个偏移量
 
         Raises:
             ValueError: 当参数值无效时抛出
@@ -83,7 +81,6 @@ class RemoteOffsetStore(OffsetStore):
         super().__init__(consumer_group)
         self.broker_manager: BrokerManager = broker_manager
         self.persist_interval: int = persist_interval
-        self.persist_batch_size: int = persist_batch_size
 
         # 远程偏移量缓存，减少网络请求
         self.remote_offset_cache: dict[MessageQueue, int] = {}
@@ -564,7 +561,6 @@ class RemoteOffsetStore(OffsetStore):
                 "cached_offsets_count": len(self.offset_table),
                 "remote_cache_count": len(self.remote_offset_cache),
                 "persist_interval": self.persist_interval,
-                "persist_batch_size": self.persist_batch_size,
             }
         )
         return metrics_dict

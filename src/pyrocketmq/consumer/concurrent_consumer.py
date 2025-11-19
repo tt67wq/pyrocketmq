@@ -770,8 +770,8 @@ class ConcurrentConsumer(BaseConsumer):
                 else:
                     self._stats["pull_requests"] += 1
 
-                # 控制拉取频率
-                self._apply_pull_interval()
+                # 控制拉取频率 - 传入是否有消息的标志
+                self._apply_pull_interval(len(messages) > 0)
 
             except MessagePullError as e:
                 logger.warning(
@@ -799,7 +799,7 @@ class ConcurrentConsumer(BaseConsumer):
                 self._stats["pull_failures"] += 1
 
                 # 拉取失败时等待一段时间再重试
-                time.sleep(1.0)
+                time.sleep(3.0)
 
     def _perform_single_pull(
         self, message_queue: MessageQueue, suggest_broker_id: int
@@ -928,14 +928,37 @@ class ConcurrentConsumer(BaseConsumer):
             batch_messages = messages[i : i + batch_size]
             self._process_queue.put((batch_messages, message_queue))
 
-    def _apply_pull_interval(self) -> None:
-        """应用拉取间隔控制。
+    def _apply_pull_interval(self, has_messages: bool = True) -> None:
+        """应用智能拉取间隔控制。
 
-        根据配置的拉取间隔进行休眠控制。
+        根据上次拉取结果智能调整拉取间隔：
+        - 如果上次拉取到了消息，立即继续拉取以提高消费速度
+        - 如果上次拉取为空，则休眠配置的间隔时间以避免空轮询
+
+        Args:
+            has_messages: 上次拉取是否获取到消息，默认为True
         """
+        # TODO: 如果msg_cache中消息体积太大，需要调整拉取间隔
         if self._config.pull_interval > 0:
-            sleep_time: float = self._config.pull_interval / 1000.0
-            time.sleep(sleep_time)
+            if has_messages:
+                # 拉取到消息，不休眠继续拉取
+                logger.debug(
+                    "Messages pulled, continuing without interval",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                    },
+                )
+            else:
+                # 拉取为空，休眠配置的间隔时间
+                sleep_time: float = self._config.pull_interval / 1000.0
+                logger.debug(
+                    f"No messages pulled, sleeping for {sleep_time}s",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "sleep_time": sleep_time,
+                    },
+                )
+                time.sleep(sleep_time)
 
     def _get_queue_cache_lock(self, queue: MessageQueue) -> threading.Lock:
         """获取指定队列的消息缓存锁"""
@@ -962,6 +985,7 @@ class ConcurrentConsumer(BaseConsumer):
             - 按queue_offset升序排列，方便后续按序消费
             - 自动过滤空消息列表，避免不必要的锁操作
             - 如果queue_offset为None，则默认使用0作为排序键
+            - 自动去重，避免重复缓存相同偏移量的消息
 
         Raises:
             无异常抛出，确保消息添加流程的稳定性
@@ -969,18 +993,80 @@ class ConcurrentConsumer(BaseConsumer):
         See Also:
             _remove_messages_from_cache: 从缓存中移除已处理的消息
             _get_queue_cache_lock: 获取队列缓存锁
+            _is_message_cached: 检查消息是否已在缓存中
         """
         if not messages:
             return
 
         cache_lock = self._get_queue_cache_lock(queue)
         with cache_lock:
+            added_count = 0
+            skipped_count = 0
+
             for message in messages:
+                if not message.queue_offset:
+                    continue
+                # 检查消息是否已经存在于缓存中
+                if self._is_message_cached(queue, message.queue_offset):
+                    skipped_count += 1
+                    logger.debug(
+                        f"Skipping duplicate message with offset: {message.queue_offset}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": queue.topic,
+                            "queue_id": queue.queue_id,
+                            "queue_offset": message.queue_offset,
+                        },
+                    )
+                    continue
+
+                # 将消息插入缓存，保持按queue_offset排序
                 insort(
                     self._msg_cache[queue],
                     message,
                     key=lambda msg: msg.queue_offset or 0,
                 )
+                added_count += 1
+
+            if skipped_count > 0:
+                logger.info(
+                    f"Added {added_count} messages to cache, skipped {skipped_count} duplicates",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": queue.topic,
+                        "queue_id": queue.queue_id,
+                        "added_count": added_count,
+                        "skipped_count": skipped_count,
+                    },
+                )
+
+    def _is_message_cached(self, queue: MessageQueue, queue_offset: int) -> bool:
+        """检查指定偏移量的消息是否已在缓存中。
+
+        使用二分查找快速检查消息是否已存在，避免重复缓存。
+
+        Args:
+            queue: 消息队列
+            queue_offset: 要检查的消息偏移量
+
+        Returns:
+            bool: True表示消息已存在，False表示不存在
+        """
+        if queue not in self._msg_cache:
+            return False
+
+        # 使用二分查找检查是否存在相同偏移量的消息
+        cached_messages = self._msg_cache[queue]
+        index = bisect_left(
+            cached_messages, queue_offset, key=lambda msg: msg.queue_offset or 0
+        )
+
+        # 检查找到的位置是否有相同偏移量的消息
+        if index < len(cached_messages):
+            cached_message = cached_messages[index]
+            return cached_message.queue_offset == queue_offset
+
+        return False
 
     def _remove_messages_from_cache(
         self, queue: MessageQueue, messages: list[MessageExt]

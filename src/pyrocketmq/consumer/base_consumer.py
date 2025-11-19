@@ -131,6 +131,7 @@ class BaseConsumer(ABC):
             message_model=self._config.message_model,
             namesrv_manager=self._name_server_manager,
             broker_manager=self._broker_manager,
+            persist_interval=self._config.persist_interval,
         )
 
         self._is_running: bool = False

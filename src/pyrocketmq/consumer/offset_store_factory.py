@@ -47,7 +47,6 @@ class OffsetStoreFactory:
         broker_manager: BrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
-        persist_batch_size: int = 10,
         auto_start: bool = True,
         **kwargs: Any,
     ) -> OffsetStore:
@@ -85,11 +84,6 @@ class OffsetStoreFactory:
                 - 定期持久化缓存中的偏移量
                 - 间隔越短数据安全性越高，但性能开销越大
                 - 建议范围：1000ms-30000ms
-
-            persist_batch_size (int, optional): 批量提交大小，默认10
-                - 批量持久化的偏移量数量阈值
-                - 较大的值可以提高性能，但增加内存占用
-                - 建议范围：5-50
 
             auto_start (bool, optional): 是否自动启动存储服务，默认True
                 - True: 创建后自动调用start()方法
@@ -156,7 +150,6 @@ class OffsetStoreFactory:
                 nameserver_manager=namesrv_manager,
                 broker_manager=broker_manager,
                 persist_interval=persist_interval,
-                persist_batch_size=persist_batch_size,
                 **kwargs,
             )
 
@@ -170,7 +163,6 @@ class OffsetStoreFactory:
                 consumer_group=consumer_group,
                 store_path=store_path,
                 persist_interval=persist_interval,
-                persist_batch_size=persist_batch_size,
                 **kwargs,
             )
 
@@ -223,7 +215,6 @@ class OffsetStoreManager:
         broker_manager: BrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
-        persist_batch_size: int = 10,
         **kwargs: Any,
     ) -> OffsetStore:
         """获取或创建偏移量存储实例
@@ -238,7 +229,6 @@ class OffsetStoreManager:
             broker_manager (BrokerManager | None): Broker连接管理器，集群模式必需
             store_path (str): 本地存储路径，广播模式使用
             persist_interval (int): 持久化间隔（毫秒）
-            persist_batch_size (int): 批量提交大小
             **kwargs: 其他配置参数
 
         Returns:
@@ -270,7 +260,6 @@ class OffsetStoreManager:
                     broker_manager=broker_manager,
                     store_path=store_path,
                     persist_interval=persist_interval,
-                    persist_batch_size=persist_batch_size,
                     auto_start=True,
                     **kwargs,
                 )
@@ -510,7 +499,6 @@ def create_offset_store(
     broker_manager: BrokerManager | None = None,
     store_path: str = "~/.rocketmq/offsets",
     persist_interval: int = 5000,
-    persist_batch_size: int = 10,
     **kwargs: Any,
 ) -> OffsetStore:
     """便捷函数：创建偏移量存储实例
@@ -525,7 +513,6 @@ def create_offset_store(
         broker_manager (BrokerManager | None): Broker连接管理器，集群模式必需
         store_path (str): 本地存储路径，广播模式使用
         persist_interval (int): 持久化间隔（毫秒）
-        persist_batch_size (int): 批量提交大小
         **kwargs: 其他配置参数
 
     Returns:
@@ -563,7 +550,6 @@ def create_offset_store(
         broker_manager=broker_manager,
         store_path=store_path,
         persist_interval=persist_interval,
-        persist_batch_size=persist_batch_size,
         **kwargs,
     )
 
