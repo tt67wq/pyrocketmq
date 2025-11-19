@@ -1,11 +1,9 @@
 """连接状态管理模块 - 使用python-statemachine重构"""
 
 import asyncio
-import dis
 import logging
 import socket
 import time
-from typing import Any
 
 from statemachine import State, StateMachine
 
@@ -97,7 +95,7 @@ class ConnectionStateMachine(StateMachine):
             if self.config.keep_alive:
                 self._set_keepalive()
 
-            self._logger.info(
+            self._logger.debug(
                 "Socket选项已设置",
                 extra={
                     "tcp_nodelay": True,
@@ -134,7 +132,7 @@ class ConnectionStateMachine(StateMachine):
                 # 探测次数
                 self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
-            self._logger.info(
+            self._logger.debug(
                 "TCP KeepAlive已启用",
                 extra={
                     "keepalive_interval": self.config.keep_alive_interval,
@@ -556,7 +554,7 @@ class AsyncConnectionStateMachine(StateMachine):
             },
         )
         if self._writer and self._socket:
-            self._logger.info(
+            self._logger.debug(
                 "异步Socket选项已设置",
                 extra={
                     "tcp_nodelay": True,
@@ -595,7 +593,7 @@ class AsyncConnectionStateMachine(StateMachine):
                 # 探测次数
                 self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
 
-            self._logger.info(
+            self._logger.debug(
                 "异步TCP KeepAlive已启用",
                 extra={
                     "keepalive_interval": self.config.keep_alive_interval,

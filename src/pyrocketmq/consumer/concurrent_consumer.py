@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import Any
 
 # pyrocketmq导入
-from pyrocketmq.broker import BrokerClient
+from pyrocketmq.broker import BrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateContext,
     AllocateQueueStrategyFactory,
@@ -804,6 +804,17 @@ class ConcurrentConsumer(BaseConsumer):
                     sleep_time: float = self._config.pull_interval / 1000.0
                     time.sleep(sleep_time)
 
+            except MessagePullError as e:
+                logger.warning(
+                    "The pull request is illegal",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
+                    },
+                )
+                break
             except Exception as e:
                 logger.error(
                     f"Error in pull messages loop for {message_queue}: {e}",
@@ -1010,6 +1021,7 @@ class ConcurrentConsumer(BaseConsumer):
                         "offset": current_offset,
                     },
                 )
+
             except Exception as e:
                 logger.error(
                     f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
@@ -1140,6 +1152,19 @@ class ConcurrentConsumer(BaseConsumer):
                     )
 
                 return [], offset, 0
+
+        except MessagePullError as e:
+            logger.warning(
+                "The pull request is illegal",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": offset,
+                    "error": str(e),
+                },
+            )
+            raise e
 
         except Exception as e:
             logger.warning(

@@ -62,6 +62,7 @@ class NameServerConfig:
         return RemoteConfig(
             rpc_timeout=self.timeout,
             connection_pool_size=2,
+            connection_max_lifetime=60,
         )
 
     def cast_transport_config(self) -> TransportConfig:

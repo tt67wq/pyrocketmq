@@ -26,6 +26,7 @@ class RemoteConfig:
     # 连接池配置
     connection_pool_size: int = 1  # 连接池大小
     connection_pool_timeout: float = 10.0  # 连接池获取超时时间
+    connection_max_lifetime: float = 300.0  # 连接最大存活时间（秒），0表示无限制
 
     # 传输层配置
     # transport_config: Optional[TransportConfig] = None
@@ -55,6 +56,11 @@ class RemoteConfig:
 
         if self.connection_pool_timeout <= 0:
             raise ValueError("connection_pool_timeout must be greater than 0")
+
+        if self.connection_max_lifetime < 0:
+            raise ValueError(
+                "connection_max_lifetime must be greater than or equal to 0"
+            )
 
         # 创建默认传输层配置
         # if self.transport_config is None:
@@ -105,6 +111,12 @@ class RemoteConfig:
             except ValueError:
                 pass
 
+        if max_lifetime := os.getenv("PYROCKETMQ_CONNECTION_MAX_LIFETIME"):
+            try:
+                config.connection_max_lifetime = float(max_lifetime)
+            except ValueError:
+                pass
+
         # 性能监控配置
         if enable_metrics := os.getenv("PYROCKETMQ_ENABLE_METRICS"):
             config.enable_metrics = enable_metrics.lower() in (
@@ -151,6 +163,7 @@ class RemoteConfig:
             enable_metrics=self.enable_metrics,
             connection_pool_size=self.connection_pool_size,
             connection_pool_timeout=self.connection_pool_timeout,
+            connection_max_lifetime=self.connection_max_lifetime,
             # transport_config=self.transport_config,
         )
 
@@ -178,6 +191,11 @@ class RemoteConfig:
                 f"Invalid connection_pool_timeout: {self.connection_pool_timeout}"
             )
 
+        if self.connection_max_lifetime < 0:
+            raise ValueError(
+                f"Invalid connection_max_lifetime: {self.connection_max_lifetime}"
+            )
+
     def __str__(self) -> str:
         """字符串表示"""
         return (
@@ -195,7 +213,7 @@ class RemoteConfig:
 
 
 # 预定义配置
-DEFAULT_CONFIG = RemoteConfig(connection_pool_size=16)
+DEFAULT_CONFIG = RemoteConfig()
 DEVELOPMENT_CONFIG = RemoteConfig(
     rpc_timeout=10.0,
     max_waiters=1000,

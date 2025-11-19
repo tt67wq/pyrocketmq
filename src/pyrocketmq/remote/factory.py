@@ -57,7 +57,7 @@ class RemoteFactory:
         # 创建远程通信实例
         remote = Remote(transport_config, config)
 
-        logger.info(
+        logger.debug(
             "同步远程通信实例创建成功",
             extra={"address": parsed_address},
         )

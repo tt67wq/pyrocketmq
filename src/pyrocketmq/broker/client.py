@@ -765,51 +765,27 @@ class BrokerClient:
                 },
             )
 
+            result: PullMessageResult = PullMessageResult.decode_from_cmd(response)
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 成功拉取到消息
-                if response.body:
-                    result = PullMessageResult.decode_from_cmd(response)
-                    result.pull_rt = pull_rt
-                    self._logger.info(
-                        "Successfully pulled messages",
-                        extra={
-                            "client_id": self._client_id,
-                            "consumer_group": consumer_group,
-                            "topic": topic,
-                            "queue_id": queue_id,
-                            "message_count": result.message_count,
-                            "next_offset": result.next_begin_offset,
-                            "execution_time": pull_rt,
-                            "operation_type": "pull_message",
-                            "status": "success",
-                            "timestamp": time.time(),
-                        },
-                    )
-                    return result
-                else:
-                    # 没有消息但响应成功
-                    self._logger.info(
-                        "No messages found",
-                        extra={
-                            "client_id": self._client_id,
-                            "consumer_group": consumer_group,
-                            "topic": topic,
-                            "queue_id": queue_id,
-                            "execution_time": pull_rt,
-                            "operation_type": "pull_message",
-                            "status": "no_messages",
-                            "timestamp": time.time(),
-                        },
-                    )
-                    return PullMessageResult(
-                        messages=[],
-                        next_begin_offset=queue_offset,
-                        min_offset=queue_offset,
-                        max_offset=queue_offset,
-                        pull_rt=pull_rt,
-                    )
-
+                result.pull_rt = pull_rt
+                self._logger.info(
+                    "Successfully pulled messages",
+                    extra={
+                        "client_id": self._client_id,
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "message_count": result.message_count,
+                        "next_offset": result.next_begin_offset,
+                        "execution_time": pull_rt,
+                        "operation_type": "pull_message",
+                        "status": "success",
+                        "timestamp": time.time(),
+                    },
+                )
+                return result
             elif response.code == ResponseCode.PULL_NOT_FOUND:
                 # 没有找到消息
                 self._logger.info(
@@ -826,13 +802,7 @@ class BrokerClient:
                         "timestamp": time.time(),
                     },
                 )
-                return PullMessageResult(
-                    messages=[],
-                    next_begin_offset=queue_offset,
-                    min_offset=queue_offset,
-                    max_offset=queue_offset,
-                    pull_rt=pull_rt,
-                )
+                return result
 
             elif response.code == ResponseCode.PULL_OFFSET_MOVED:
                 # 偏移量已移动
@@ -856,7 +826,6 @@ class BrokerClient:
                     topic=topic,
                     queue_id=queue_id,
                 )
-
             elif response.code == ResponseCode.PULL_RETRY_IMMEDIATELY:
                 # 需要立即重试
                 self._logger.warning(
@@ -874,11 +843,7 @@ class BrokerClient:
                         "timestamp": time.time(),
                     },
                 )
-                raise MessagePullError(
-                    f"Pull retry immediately: {response.remark}",
-                    topic=topic,
-                    queue_id=queue_id,
-                )
+                return result
 
             else:
                 # 其他错误响应
@@ -2175,9 +2140,6 @@ class BrokerClient:
             # 使用oneway模式发送请求，不等待响应
             start_time = time.time()
             self.remote.oneway(request)
-            # print("------------")
-            # print(str(resp))
-            # print("------------")
             end_tx_rt = time.time() - start_time
 
             self._logger.info(

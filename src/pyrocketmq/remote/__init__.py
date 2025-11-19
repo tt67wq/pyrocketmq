@@ -86,7 +86,7 @@ __author__ = "PyRocketMQ Team"
 __email__ = "team@pyrocketmq.org"
 
 
-def __getattr__(name):
+def __getattr__(name: str):
     """支持动态导入"""
     if name == "__all__":
         return __all__

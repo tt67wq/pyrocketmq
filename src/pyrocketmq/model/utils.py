@@ -619,6 +619,9 @@ def create_uniq_id() -> str:
 
         # 递增计数器
         _counter += 1
+        # 如果_counter溢出int16，重置为0
+        if _counter > 0xFFFF:
+            _counter = 0
 
         # 计算时间差（毫秒），与Go实现保持一致
         time_diff_ms = (current_unix_time - START_TIMESTAMP) * 1000

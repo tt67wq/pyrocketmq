@@ -801,8 +801,10 @@ class AsyncBrokerClient:
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 成功拉取到消息
-                if response.body:
-                    result = PullMessageResult.from_bytes(response.body)
+                if response:
+                    result: PullMessageResult = PullMessageResult.decode_from_cmd(
+                        response
+                    )
                     result.pull_rt = pull_rt
                     logger.info(
                         "Successfully pulled messages",

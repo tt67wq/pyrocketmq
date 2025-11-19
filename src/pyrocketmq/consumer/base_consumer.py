@@ -31,7 +31,7 @@ from pyrocketmq.model import (
     MessageSelector,
 )
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
-from pyrocketmq.remote import DEFAULT_CONFIG, ConnectionPool
+from pyrocketmq.remote import ConnectionPool, RemoteConfig
 
 # 本地模块导入
 from .config import ConsumerConfig
@@ -114,7 +114,9 @@ class BaseConsumer(ABC):
         self._name_server_manager: NameServerManager = create_nameserver_manager(
             self._config.namesrv_addr
         )
-        self._broker_manager: BrokerManager = BrokerManager(DEFAULT_CONFIG)
+        self._broker_manager: BrokerManager = BrokerManager(
+            RemoteConfig(connection_pool_size=16, connection_max_lifetime=60)
+        )
         # 创建偏移量存储
         self._offset_store: OffsetStore = OffsetStoreFactory.create_offset_store(
             consumer_group=self._config.consumer_group,
