@@ -862,6 +862,7 @@ class ConcurrentConsumer(BaseConsumer):
         for message in messages:
             if message.get_tags() in tags_set:
                 filtered_messages.append(message)
+
         return filtered_messages
 
     def _handle_pulled_messages(

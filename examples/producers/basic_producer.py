@@ -56,6 +56,8 @@ def main():
                     topic="test_im_015",
                     body=f"Hello, This Is Batch Msg From Python {index}".encode(),
                 )
+                message.set_tags("TAG2")
+                message.set_keys("MSG_KEY" + str(index))
                 messages.append(message)
                 index += 1
             ret = producer.send_batch(*messages)

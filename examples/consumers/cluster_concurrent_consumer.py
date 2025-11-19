@@ -32,7 +32,7 @@ def main():
         "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
     )
     # consumer.subscribe("test_im_015", SUBSCRIBE_ALL)
-    consumer.subscribe("test_im_015", create_tag_selector("TAG2"))
+    consumer.subscribe("test_im_015", create_tag_selector("TAG1||TAG2"))
 
     consumer.register_message_listener(create_message_listener(message_listener))
 
