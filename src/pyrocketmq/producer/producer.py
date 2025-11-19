@@ -108,7 +108,7 @@ class Producer:
 
         # 核心组件
         self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping(
-            route_timeout=self._config.update_topic_route_info_interval / 1000.0
+            route_timeout=self._config.route_timeout_seconds
         )
 
         # 消息路由器
@@ -229,7 +229,9 @@ class Producer:
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                )
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data
@@ -723,8 +725,7 @@ class Producer:
 
         for topic in topics:
             try:
-                if self._topic_mapping.get_route_info(topic) is None:
-                    _ = self.update_route_info(topic)
+                _ = self.update_route_info(topic)
             except Exception as e:
                 logger.debug(
                     "Failed to refresh route",

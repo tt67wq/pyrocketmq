@@ -29,6 +29,7 @@ Producer配置管理模块
 import os
 import socket
 from dataclasses import dataclass
+from typing import Any
 
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.transport.config import TransportConfig
@@ -175,6 +176,13 @@ class ProducerConfig:
 
     定期更新已缓存的主题路由信息的时间间隔。
     默认30秒，与poll_name_server_interval保持一致。
+    """
+
+    route_timeout_seconds: float = 60.0  # 秒
+    """路由信息缓存过期时间
+
+    主题路由信息在本地缓存的有效时间，超过此时间将认为路由过期。
+    默认60秒，与TopicBrokerMapping的默认超时时间保持一致。
     """
 
     # ==================== 心跳配置 ====================
@@ -566,7 +574,7 @@ def get_config(environment: str = "default") -> ProducerConfig:
 def create_custom_config(
     producer_group: str = "DEFAULT_PRODUCER",
     namesrv_addr: str = "localhost:9876",
-    **kwargs,
+    **kwargs: Any,
 ) -> ProducerConfig:
     """创建自定义配置的便捷函数
 

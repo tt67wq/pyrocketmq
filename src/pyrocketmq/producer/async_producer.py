@@ -115,7 +115,7 @@ class AsyncProducer:
 
         # 核心组件
         self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping(
-            route_timeout=self._config.update_topic_route_info_interval / 1000.0
+            route_timeout=self._config.route_timeout_seconds
         )
 
         # 消息路由器
@@ -778,8 +778,7 @@ class AsyncProducer:
 
         for topic in topics:
             try:
-                if self._topic_mapping.get_route_info(topic) is None:
-                    _ = await self.update_route_info(topic)
+                _ = await self.update_route_info(topic)
             except Exception as e:
                 logger.debug(
                     "Failed to refresh route",

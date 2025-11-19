@@ -131,7 +131,7 @@ class TopicBrokerMapping:
     4. 提供可用队列列表（不涉及选择逻辑）
     """
 
-    def __init__(self, route_timeout: float = 30.0) -> None:
+    def __init__(self, route_timeout: float = 60.0) -> None:
         # 路由信息缓存: topic -> RouteInfo
         self._route_cache: dict[str, RouteInfo] = {}
 
@@ -273,6 +273,9 @@ class TopicBrokerMapping:
 
             # 检查路由信息是否过期
             if route_info.is_expired(self._default_route_timeout):
+                print("!!!!!!!!!!!!!!!!")
+                print(self._default_route_timeout)
+                print(route_info.last_update_time)
                 return []
 
             # 直接返回预构建订阅队列列表的副本
