@@ -27,6 +27,7 @@ from pyrocketmq.model import (
     ConsumeResult,
     HeartbeatData,
     MessageExt,
+    MessageModel,
     MessageQueue,
     MessageSelector,
 )
@@ -102,6 +103,13 @@ class BaseConsumer(ABC):
         """
         if not config:
             raise ValueError("ConsumerConfig cannot be None")
+
+        # 验证消息模型
+        if self._config.message_model not in [
+            MessageModel.CLUSTERING,
+            MessageModel.BROADCASTING,
+        ]:
+            raise ValueError(f"Unsupported message model: {self._config.message_model}")
 
         self._config: ConsumerConfig = config
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
@@ -205,6 +213,10 @@ class BaseConsumer(ABC):
 
         # 启动心跳任务
         self._start_heartbeat_task()
+
+        # 订阅重试主题
+        if self._config.message_model == MessageModel.CLUSTERING:
+            self._subscribe_retry_topic()
 
     @abstractmethod
     def shutdown(self) -> None:
@@ -1226,6 +1238,68 @@ class BaseConsumer(ABC):
                 },
                 exc_info=True,
             )
+
+    def _subscribe_retry_topic(self) -> None:
+        """
+        订阅重试主题
+
+        自动订阅该消费者组的重试主题，格式为：%RETRY%+consumer_group。
+        重试主题用于接收消费失败需要重试的消息。
+
+        Note:
+            重试主题使用TAG选择器订阅所有消息（"*"），因为重试消息不需要额外过滤
+        """
+        retry_topic = f"%RETRY%{self._config.consumer_group}"
+
+        try:
+            from pyrocketmq.model.client_data import create_tag_selector
+
+            # 创建订阅所有消息的选择器
+            retry_selector = create_tag_selector("*")
+
+            # 检查是否已经订阅了重试主题，避免重复订阅
+            if not self._subscription_manager.is_subscribed(retry_topic):
+                success = self._subscription_manager.subscribe(
+                    retry_topic, retry_selector
+                )
+
+                if success:
+                    logger.info(
+                        f"Successfully subscribed to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                            "max_retry_times": self._config.max_retry_times,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to subscribe to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                        },
+                    )
+            else:
+                logger.debug(
+                    f"Retry topic already subscribed: {retry_topic}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "retry_topic": retry_topic,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error subscribing to retry topic {retry_topic}: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "retry_topic": retry_topic,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
 
     # ==================== 字符串表示方法 ====================
 

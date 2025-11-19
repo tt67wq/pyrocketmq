@@ -101,13 +101,6 @@ class ConcurrentConsumer(BaseConsumer):
         """
         super().__init__(config)
 
-        # 验证消息模型
-        if self._config.message_model not in [
-            MessageModel.CLUSTERING,
-            MessageModel.BROADCASTING,
-        ]:
-            raise ValueError(f"Unsupported message model: {self._config.message_model}")
-
         # 创建消费起始位置管理器
         self._consume_from_where_manager: ConsumeFromWhereManager = (
             ConsumeFromWhereManager(
