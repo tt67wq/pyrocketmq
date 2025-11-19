@@ -170,7 +170,12 @@ class SyncNameServerClient:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         """上下文管理器出口"""
         self.disconnect()
 
@@ -337,7 +342,12 @@ class AsyncNameServerClient:
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         """异步上下文管理器出口"""
         await self.disconnect()
 
