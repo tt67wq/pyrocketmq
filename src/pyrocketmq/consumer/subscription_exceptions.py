@@ -7,8 +7,6 @@
 作者: pyrocketmq开发团队
 """
 
-from typing import Any
-
 
 class SubscriptionError(Exception):
     """订阅相关异常基类

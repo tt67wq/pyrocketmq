@@ -52,6 +52,8 @@ from pyrocketmq.model import (
     RemotingCommandBuilder,
     RequestCode,
     ResponseCode,
+    SubscriptionData,
+    SubscriptionEntry,
 )
 from pyrocketmq.remote import ConnectionPool
 
@@ -740,58 +742,36 @@ class ConcurrentConsumer(BaseConsumer):
         suggest_broker_id = 0
         while self._is_running:
             try:
-                # 获取当前偏移量
-                current_offset: int = self._get_or_initialize_offset(message_queue)
-
-                # 拉取消息
-                messages, next_begin_offset, next_suggest_id = self._pull_messages(
-                    message_queue,
-                    current_offset,
-                    suggest_broker_id,
+                # 执行单次拉取操作
+                pull_result = self._perform_single_pull(
+                    message_queue, suggest_broker_id
                 )
-                suggest_broker_id = next_suggest_id
 
-                if messages:
-                    # 更新偏移量
-                    self._assigned_queues[message_queue] = next_begin_offset
-
-                    # 按照config.consume_batch_size分割消息批次
-                    batch_size = self._config.consume_batch_size
-                    message_count = len(messages)
-
-                    # 计算批次数量
-                    batch_count = (message_count + batch_size - 1) // batch_size
-
-                    logger.debug(
-                        f"Splitting {message_count} messages into {batch_count} batches",
+                if pull_result is None:
+                    # 如果返回None，说明没有订阅信息，停止消费
+                    logger.warning(
+                        "No subscription found for topic, stopping pull loop",
                         extra={
                             "consumer_group": self._config.consumer_group,
                             "topic": message_queue.topic,
                             "queue_id": message_queue.queue_id,
-                            "message_count": message_count,
-                            "batch_size": batch_size,
-                            "batch_count": batch_count,
                         },
                     )
+                    break
 
-                    # 将消息添加到缓存中（用于解决并发偏移量问题）
-                    self._add_messages_to_cache(message_queue, messages)
+                messages, next_begin_offset, next_suggest_id = pull_result
+                suggest_broker_id = next_suggest_id
 
-                    # 将消息按批次放入处理队列
-                    for i in range(0, message_count, batch_size):
-                        batch_messages = messages[i : i + batch_size]
-                        self._process_queue.put((batch_messages, message_queue))
-
-                    self._stats["pull_successes"] += 1
-                    self._stats["messages_consumed"] += message_count
-                    self._stats["pull_requests"] += 1
+                if messages:
+                    # 处理拉取到的消息
+                    self._handle_pulled_messages(
+                        message_queue, messages, next_begin_offset
+                    )
                 else:
                     self._stats["pull_requests"] += 1
 
                 # 控制拉取频率
-                if self._config.pull_interval > 0:
-                    sleep_time: float = self._config.pull_interval / 1000.0
-                    time.sleep(sleep_time)
+                self._apply_pull_interval()
 
             except MessagePullError as e:
                 logger.warning(
@@ -820,6 +800,141 @@ class ConcurrentConsumer(BaseConsumer):
 
                 # 拉取失败时等待一段时间再重试
                 time.sleep(1.0)
+
+    def _perform_single_pull(
+        self, message_queue: MessageQueue, suggest_broker_id: int
+    ) -> tuple[list[MessageExt], int, int] | None:
+        """执行单次消息拉取操作。
+
+        Args:
+            message_queue: 要拉取消息的队列
+            suggest_broker_id: 建议的Broker ID
+
+        Returns:
+            tuple[list[MessageExt], int, int] | None:
+                - messages: 拉取到的消息列表
+                - next_begin_offset: 下次拉取的起始偏移量
+                - next_suggest_id: 下次建议的Broker ID
+            None: 如果没有订阅信息
+
+        Raises:
+            MessagePullError: 当拉取请求非法时抛出
+        """
+        # 获取当前偏移量
+        current_offset: int = self._get_or_initialize_offset(message_queue)
+
+        # 拉取消息
+        messages, next_begin_offset, next_suggest_id = self._pull_messages(
+            message_queue,
+            current_offset,
+            suggest_broker_id,
+        )
+
+        # 检查订阅信息
+        sub: SubscriptionEntry | None = self._subscription_manager.get_subscription(
+            message_queue.topic
+        )
+        if sub is None:
+            # 如果没有订阅信息，则停止消费
+            return None
+
+        sub_data: SubscriptionData = sub.subscription_data
+
+        # 根据订阅信息过滤消息
+        if sub_data.tags_set:
+            messages = self._filter_messages_by_tags(messages, sub_data.tags_set)
+
+        return messages, next_begin_offset, next_suggest_id
+
+    def _filter_messages_by_tags(
+        self, messages: list[MessageExt], tags_set: list[str]
+    ) -> list[MessageExt]:
+        """根据标签过滤消息。
+
+        Args:
+            messages: 待过滤的消息列表
+            tags_set: 允许的标签集合
+
+        Returns:
+            list[MessageExt]: 过滤后的消息列表
+        """
+        filtered_messages: list[MessageExt] = []
+        for message in messages:
+            if message.get_tags() in tags_set:
+                filtered_messages.append(message)
+        return filtered_messages
+
+    def _handle_pulled_messages(
+        self,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        next_begin_offset: int,
+    ) -> None:
+        """处理拉取到的消息。
+
+        包括更新偏移量、缓存消息、分批处理等。
+
+        Args:
+            message_queue: 消息队列
+            messages: 拉取到的消息列表
+            next_begin_offset: 下次拉取的起始偏移量
+        """
+        # 更新偏移量
+        self._assigned_queues[message_queue] = next_begin_offset
+
+        # 将消息添加到缓存中（用于解决并发偏移量问题）
+        self._add_messages_to_cache(message_queue, messages)
+
+        # 将消息按批次放入处理队列
+        self._submit_messages_for_processing(message_queue, messages)
+
+        # 更新统计信息
+        message_count = len(messages)
+        self._stats["pull_successes"] += 1
+        self._stats["messages_consumed"] += message_count
+        self._stats["pull_requests"] += 1
+
+    def _submit_messages_for_processing(
+        self, message_queue: MessageQueue, messages: list[MessageExt]
+    ) -> None:
+        """将消息按批次提交给处理队列。
+
+        Args:
+            message_queue: 消息队列
+            messages: 要处理的消息列表
+        """
+        # 按照config.consume_batch_size分割消息批次
+        batch_size = self._config.consume_batch_size
+        message_count = len(messages)
+
+        # 计算批次数量
+        batch_count = (message_count + batch_size - 1) // batch_size
+
+        logger.debug(
+            f"Splitting {message_count} messages into {batch_count} batches",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": message_queue.topic,
+                "queue_id": message_queue.queue_id,
+                "message_count": message_count,
+                "batch_size": batch_size,
+                "batch_count": batch_count,
+            },
+        )
+
+        # 将消息按批次放入处理队列
+        for i in range(0, message_count, batch_size):
+            batch_messages = messages[i : i + batch_size]
+            self._process_queue.put((batch_messages, message_queue))
+
+    def _apply_pull_interval(self) -> None:
+        """应用拉取间隔控制。
+
+        根据配置的拉取间隔进行休眠控制。
+        """
+        if self._config.pull_interval > 0:
+            sleep_time: float = self._config.pull_interval / 1000.0
+            time.sleep(sleep_time)
 
     def _get_queue_cache_lock(self, queue: MessageQueue) -> threading.Lock:
         """获取指定队列的消息缓存锁"""

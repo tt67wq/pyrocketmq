@@ -44,8 +44,8 @@ def main():
                 topic="test_im_015",
                 body=f"Hello, This Is Single Msg From Python {index}".encode(),
             )
-            message.set_tags("TAG1||TAG2")
-            message.set_keys("KEY1 KEY2")
+            message.set_tags("TAG1")
+            message.set_keys("MSG_KEY" + str(index))
             ret = producer.send(message)
             print("Message sent ret:", ret)
             index += 1
