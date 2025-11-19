@@ -226,7 +226,7 @@ class ConnectionPool:
         # 首先检查连接是否已过期
         if conn_info.is_connection_expired():
             self._expired_connections_count += 1
-            self._logger.info(
+            self._logger.debug(
                 "连接已过期，正在淘汰并重建连接",
                 extra={
                     "address": self.address,
@@ -644,7 +644,7 @@ class AsyncConnectionPool:
         # 首先检查连接是否已过期
         if conn_info.is_connection_expired():
             self._expired_connections_count += 1
-            self._logger.info(
+            self._logger.debug(
                 "异步连接已过期，正在淘汰并重建连接",
                 extra={
                     "address": self.address,
