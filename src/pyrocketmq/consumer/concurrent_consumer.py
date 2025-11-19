@@ -17,9 +17,8 @@ ConcurrentConsumer是pyrocketmq的核心消费者实现，支持高并发消息�
 import queue
 import threading
 import time
-from bisect import bisect_left, insort
-from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor
+from ctypes import memmove
 from datetime import datetime
 from typing import Any
 
@@ -38,6 +37,7 @@ from pyrocketmq.consumer.errors import (
     MessageConsumeError,
 )
 from pyrocketmq.consumer.offset_store import ReadOffsetType
+from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     ConsumeMessageDirectlyHeader,
@@ -124,11 +124,11 @@ class ConcurrentConsumer(BaseConsumer):
             queue.Queue()
         )
 
-        # 消息缓存管理 - 用于解决并发消费偏移量问题
-        # 每个队列维护一个有序的消息缓存 tree[MessageExt] (按queue_offset排序)
-        self._msg_cache: dict[MessageQueue, list[MessageExt]] = defaultdict(list)
-        self._msg_cache_locks: dict[MessageQueue, threading.Lock] = {}
-        self._cache_lock = threading.Lock()  # 用于保护_cache_locks字典
+        # 消息缓存管理 - 使用ProcessQueue解决并发消费偏移量问题
+        # ProcessQueue支持高效的insert/remove/min/max/count计算
+        # 还能统计MessageExt的body总体积，提供更好的性能
+        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
+        self._cache_lock = threading.Lock()  # 用于保护_msg_cache字典
 
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
@@ -741,6 +741,10 @@ class ConcurrentConsumer(BaseConsumer):
         """
         suggest_broker_id = 0
         while self._is_running:
+            pq: ProcessQueue = self._get_or_create_process_queue(message_queue)
+            if pq.need_flow_control():
+                time.sleep(3.0)
+                continue
             try:
                 # 执行单次拉取操作
                 pull_result = self._perform_single_pull(
@@ -960,90 +964,54 @@ class ConcurrentConsumer(BaseConsumer):
                 )
                 time.sleep(sleep_time)
 
-    def _get_queue_cache_lock(self, queue: MessageQueue) -> threading.Lock:
-        """获取指定队列的消息缓存锁"""
+    def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
+        """获取或创建指定队列的ProcessQueue"""
         with self._cache_lock:
-            if queue not in self._msg_cache_locks:
-                self._msg_cache_locks[queue] = threading.Lock()
-            return self._msg_cache_locks[queue]
+            if queue not in self._msg_cache:
+                self._msg_cache[queue] = ProcessQueue(
+                    max_cache_count=self._config.max_cache_count_per_queue,
+                    max_cache_size_mb=self._config.max_cache_size_per_queue,
+                )
+            return self._msg_cache[queue]
 
     def _add_messages_to_cache(
         self, queue: MessageQueue, messages: list[MessageExt]
     ) -> None:
         """
-        将消息添加到缓存中，保持按queue_offset排序
+        将消息添加到ProcessQueue缓存中
 
-        此方法用于将从Broker拉取的消息添加到内存缓存中，为后续消费做准备。
-        使用insort确保消息按queue_offset排序，这对于顺序消费和偏移量管理非常重要。
+        此方法用于将从Broker拉取的消息添加到ProcessQueue中，为后续消费做准备。
+        ProcessQueue自动保持按queue_offset排序，并提供高效的插入、查询和统计功能。
 
         Args:
             queue (MessageQueue): 目标消息队列
             messages (list[MessageExt]): 要添加的消息列表，消息应包含有效的queue_offset
 
         Note:
-            - 使用队列特定的锁确保线程安全
+            - 使用ProcessQueue内置的线程安全机制
             - 按queue_offset升序排列，方便后续按序消费
-            - 自动过滤空消息列表，避免不必要的锁操作
-            - 如果queue_offset为None，则默认使用0作为排序键
+            - 自动过滤空消息列表，避免不必要的操作
             - 自动去重，避免重复缓存相同偏移量的消息
+            - 自动检查缓存限制（数量和大小）
 
         Raises:
             无异常抛出，确保消息添加流程的稳定性
 
         See Also:
             _remove_messages_from_cache: 从缓存中移除已处理的消息
-            _get_queue_cache_lock: 获取队列缓存锁
+            _get_or_create_process_queue: 获取或创建ProcessQueue
             _is_message_cached: 检查消息是否已在缓存中
         """
         if not messages:
             return
 
-        cache_lock = self._get_queue_cache_lock(queue)
-        with cache_lock:
-            added_count = 0
-            skipped_count = 0
-
-            for message in messages:
-                if not message.queue_offset:
-                    continue
-                # 检查消息是否已经存在于缓存中
-                if self._is_message_cached(queue, message.queue_offset):
-                    skipped_count += 1
-                    logger.debug(
-                        f"Skipping duplicate message with offset: {message.queue_offset}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "topic": queue.topic,
-                            "queue_id": queue.queue_id,
-                            "queue_offset": message.queue_offset,
-                        },
-                    )
-                    continue
-
-                # 将消息插入缓存，保持按queue_offset排序
-                insort(
-                    self._msg_cache[queue],
-                    message,
-                    key=lambda msg: msg.queue_offset or 0,
-                )
-                added_count += 1
-
-            if skipped_count > 0:
-                logger.info(
-                    f"Added {added_count} messages to cache, skipped {skipped_count} duplicates",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": queue.topic,
-                        "queue_id": queue.queue_id,
-                        "added_count": added_count,
-                        "skipped_count": skipped_count,
-                    },
-                )
+        process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
+        _ = process_queue.add_batch_messages(messages)
 
     def _is_message_cached(self, queue: MessageQueue, queue_offset: int) -> bool:
-        """检查指定偏移量的消息是否已在缓存中。
+        """检查指定偏移量的消息是否已在ProcessQueue缓存中。
 
-        使用二分查找快速检查消息是否已存在，避免重复缓存。
+        使用ProcessQueue的高效查找机制检查消息是否已存在，避免重复缓存。
 
         Args:
             queue: 消息队列
@@ -1052,30 +1020,22 @@ class ConcurrentConsumer(BaseConsumer):
         Returns:
             bool: True表示消息已存在，False表示不存在
         """
-        if queue not in self._msg_cache:
-            return False
+        with self._cache_lock:
+            if queue not in self._msg_cache:
+                return False
 
-        # 使用二分查找检查是否存在相同偏移量的消息
-        cached_messages = self._msg_cache[queue]
-        index = bisect_left(
-            cached_messages, queue_offset, key=lambda msg: msg.queue_offset or 0
-        )
-
-        # 检查找到的位置是否有相同偏移量的消息
-        if index < len(cached_messages):
-            cached_message = cached_messages[index]
-            return cached_message.queue_offset == queue_offset
-
-        return False
+        # 使用ProcessQueue的contains_message方法
+        process_queue = self._msg_cache[queue]
+        return process_queue.contains_message(queue_offset)
 
     def _remove_messages_from_cache(
         self, queue: MessageQueue, messages: list[MessageExt]
     ) -> int | None:
         """
-        从缓存中移除已处理的消息，并返回当前队列的最小offset
+        从ProcessQueue缓存中移除已处理的消息，并返回当前队列的最小offset
 
-        此方法用于从消息缓存中移除已经成功处理的消息，释放内存空间。
-        使用二分查找高效定位消息位置，确保在大量消息缓存中仍能保持良好的性能。
+        此方法用于从ProcessQueue中移除已经成功处理的消息，释放内存空间。
+        ProcessQueue提供高效的移除操作，确保在大量消息缓存中仍能保持良好的性能。
         移除完成后直接返回当前缓存中最小消息的offset，避免额外的查询操作。
 
         Args:
@@ -1086,10 +1046,10 @@ class ConcurrentConsumer(BaseConsumer):
             int | None: 移除完成后缓存中最小消息的offset，如果缓存为空则返回None
 
         Note:
-            - 使用队列特定的锁确保线程安全的移除操作
-            - 采用bisect_left进行二分查找，时间复杂度为O(log n)
+            - 使用ProcessQueue内置的线程安全机制
+            - ProcessQueue提供高效的remove_message操作
             - 只移除完全匹配的消息（queue_offset相同），避免误删
-            - 自动过滤空消息列表，减少不必要的锁竞争
+            - 自动过滤空消息列表，减少不必要的操作
             - 如果消息未找到，静默跳过，不影响其他消息的处理
             - 移除完成后直接返回最小offset，提高性能
 
@@ -1103,72 +1063,59 @@ class ConcurrentConsumer(BaseConsumer):
         See Also:
             _add_messages_to_cache: 向缓存中添加消息
             _update_offset_from_cache: 更新消费偏移量（独立方法）
-            _get_queue_cache_lock: 获取队列缓存锁
+            _get_or_create_process_queue: 获取或创建ProcessQueue
         """
+        process_queue = self._get_or_create_process_queue(queue)
+
         if not messages:
             # 如果没有消息要移除，直接返回当前最小offset
-            cache_lock = self._get_queue_cache_lock(queue)
-            with cache_lock:
-                if self._msg_cache[queue]:
-                    return self._msg_cache[queue][0].queue_offset or 0
-                else:
-                    return None
+            return process_queue.get_min_offset()
 
-        cache_lock = self._get_queue_cache_lock(queue)
-        with cache_lock:
-            for message in messages:
-                offset = message.queue_offset or 0
-                # 使用bisect查找消息位置
-                index = bisect_left(
-                    [msg.queue_offset or 0 for msg in self._msg_cache[queue]], offset
-                )
-                if (
-                    index < len(self._msg_cache[queue])
-                    and (self._msg_cache[queue][index].queue_offset or 0) == offset
-                ):
-                    self._msg_cache[queue].pop(index)
+        _ = process_queue.remove_batch_messages(
+            [x.queue_offset for x in messages if x.queue_offset is not None]
+        )
 
-            # 返回移除完成后当前缓存中的最小offset
-            if self._msg_cache[queue]:
-                return self._msg_cache[queue][0].queue_offset or 0
-            else:
-                return None
+        # 返回移除完成后当前缓存中的最小offset
+        return process_queue.get_min_offset()
 
     def _update_offset_from_cache(self, queue: MessageQueue) -> None:
-        """从缓存中获取最小offset并更新到offset_store"""
-        cache_lock = self._get_queue_cache_lock(queue)
-        with cache_lock:
-            if not self._msg_cache[queue]:
-                # 缓存为空，不需要更新
+        """从ProcessQueue缓存中获取最小offset并更新到offset_store"""
+        with self._cache_lock:
+            if queue not in self._msg_cache:
+                # ProcessQueue不存在，不需要更新
                 return
 
-            # 获取缓存中最小的offset
-            min_message = self._msg_cache[queue][0]
-            min_offset = min_message.queue_offset or 0
+        process_queue: ProcessQueue = self._msg_cache[queue]
 
-            # 更新到offset_store
-            try:
-                self._offset_store.update_offset(queue, min_offset)
-                logger.debug(
-                    f"Updated offset from cache: {min_offset}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": queue.topic,
-                        "queue_id": queue.queue_id,
-                        "offset": min_offset,
-                        "cache_size": len(self._msg_cache[queue]),
-                    },
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to update offset from cache: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": queue.topic,
-                        "queue_id": queue.queue_id,
-                        "error": str(e),
-                    },
-                )
+        # 获取缓存中最小的offset
+        min_offset: int | None = process_queue.get_min_offset()
+        if min_offset is None:
+            # 缓存为空，不需要更新
+            return
+
+        # 更新到offset_store
+        try:
+            self._offset_store.update_offset(queue, min_offset)
+            logger.debug(
+                f"Updated offset from cache: {min_offset}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": queue.topic,
+                    "queue_id": queue.queue_id,
+                    "offset": min_offset,
+                    "cache_stats": process_queue.get_stats(),
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to update offset from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": queue.topic,
+                    "queue_id": queue.queue_id,
+                    "error": str(e),
+                },
+            )
 
     def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
         """获取或初始化消费偏移量。
@@ -1464,9 +1411,9 @@ class ConcurrentConsumer(BaseConsumer):
                                         "topic": message_queue.topic,
                                         "queue_id": message_queue.queue_id,
                                         "offset": min_offset,
-                                        "cache_size": len(
-                                            self._msg_cache.get(message_queue, [])
-                                        ),
+                                        "cache_stats": self._msg_cache.get(
+                                            message_queue, ProcessQueue()
+                                        ).get_stats(),
                                     },
                                 )
                             except Exception as e:
@@ -1737,13 +1684,11 @@ class ConcurrentConsumer(BaseConsumer):
                 except queue.Empty:
                     break
 
-        # 清理消息缓存
+        # 清理ProcessQueue消息缓存
         if hasattr(self, "_msg_cache"):
+            for process_queue in self._msg_cache.values():
+                process_queue.clear()
             self._msg_cache.clear()
-
-        # 清理缓存锁
-        if hasattr(self, "_msg_cache_locks"):
-            self._msg_cache_locks.clear()
 
         # 清理状态
         self._pull_tasks.clear()
