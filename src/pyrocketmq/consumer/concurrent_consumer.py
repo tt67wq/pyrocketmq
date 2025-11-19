@@ -227,7 +227,7 @@ class ConcurrentConsumer(BaseConsumer):
                 self._start_rebalance_task()
 
                 # 启动消息处理任务
-                # self._start_consume_tasks()
+                self._start_consume_tasks()
 
                 # 启动消息拉取任务
                 # self._start_pull_tasks()

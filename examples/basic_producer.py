@@ -48,6 +48,7 @@ def main():
             message.set_keys("KEY1 KEY2")
             ret = producer.send(message)
             print("Message sent ret:", ret)
+            index += 1
 
             messages: list[Message] = []
             for _ in range(10):
@@ -56,9 +57,9 @@ def main():
                     body=f"Hello, This Is Batch Msg From Python {index}".encode(),
                 )
                 messages.append(message)
+                index += 1
             ret = producer.send_batch(*messages)
             print("Batch message sent ret:", ret)
-            index += 1
         except ProducerError as e:
             print(f"Failed to send message: {e}")
             time.sleep(5)
