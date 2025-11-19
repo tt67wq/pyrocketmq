@@ -105,7 +105,7 @@ class BaseConsumer(ABC):
             raise ValueError("ConsumerConfig cannot be None")
 
         # 验证消息模型
-        if self._config.message_model not in [
+        if config.message_model not in [
             MessageModel.CLUSTERING,
             MessageModel.BROADCASTING,
         ]:

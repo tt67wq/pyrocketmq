@@ -4,7 +4,11 @@
 import pyrocketmq.logging
 from pyrocketmq.consumer import create_concurrent_consumer, create_message_listener
 from pyrocketmq.logging import LoggingConfig
-from pyrocketmq.model import SUBSCRIBE_ALL, ConsumeResult, MessageExt
+from pyrocketmq.model import (
+    ConsumeResult,
+    MessageExt,
+    create_tag_selector,
+)
 
 
 def message_listener(messages: list[MessageExt]) -> ConsumeResult:
@@ -27,7 +31,8 @@ def main():
     consumer = create_concurrent_consumer(
         "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
     )
-    consumer.subscribe("test_im_015", SUBSCRIBE_ALL)
+    # consumer.subscribe("test_im_015", SUBSCRIBE_ALL)
+    consumer.subscribe("test_im_015", create_tag_selector("TAG2"))
 
     consumer.register_message_listener(create_message_listener(message_listener))
 

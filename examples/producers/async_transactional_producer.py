@@ -23,8 +23,8 @@
 """
 
 import asyncio
-import sys
 import signal
+import sys
 
 import pyrocketmq.logging
 from pyrocketmq.logging import LoggingConfig

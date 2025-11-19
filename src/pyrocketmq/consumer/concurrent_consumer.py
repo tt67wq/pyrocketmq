@@ -668,10 +668,6 @@ class ConcurrentConsumer(BaseConsumer):
             # 唤醒重平衡循环，使其立即执行重平衡
             self._rebalance_event.set()
 
-            # 同时在后台线程中执行重平衡（确保立即响应）
-            # if self._pull_executor:
-            #     self._pull_executor.submit(self._do_rebalance)
-
     # ==================== 内部方法：消息拉取 ====================
 
     def _start_pull_tasks(self) -> None:
