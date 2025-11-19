@@ -57,8 +57,8 @@ class ConsumerConfig:
     offset_store_path: str = "~/.rocketmq/offsets"
 
     # 内存缓存配置
-    max_cache_size: int = 10000  # 最大缓存条目数
-
+    max_cache_count_per_queue: int = 1024  # 每个队列最大缓存消息数量
+    max_cache_size_per_queue: int = 512  # 每个队列最大缓存字节数(MB)
     # 故障恢复配置
     enable_auto_recovery: bool = True  # 启用自动恢复
     max_retry_times: int = 3  # 最大重试次数
@@ -102,8 +102,10 @@ class ConsumerConfig:
         # 验证OffsetStore配置
         if self.persist_interval <= 0:
             raise ValueError("persist_interval 必须大于0")
-        if self.max_cache_size <= 0:
-            raise ValueError("max_cache_size 必须大于0")
+        if not (1 <= self.max_cache_count_per_queue <= 65535):
+            raise ValueError("max_cache_count_per_queue 必须在1-65535范围内")
+        if not (1 <= self.max_cache_size_per_queue <= 1024):
+            raise ValueError("max_cache_size_per_queue 必须在1-1024范围内")
         if self.max_retry_times < 0:
             raise ValueError("max_retry_times 不能为负数")
 
@@ -170,8 +172,22 @@ class ConsumerConfig:
             self.offset_store_path = os.getenv(
                 "ROCKETMQ_OFFSET_STORE_PATH", "~/.rocketmq/offsets"
             )
-        if os.getenv("ROCKETMQ_MAX_CACHE_SIZE"):
-            self.max_cache_size = int(os.getenv("ROCKETMQ_MAX_CACHE_SIZE", 10000))
+        if os.getenv("ROCKETMQ_MAX_CACHE_COUNT_PER_QUEUE"):
+            cache_count_env = int(
+                os.getenv("ROCKETMQ_MAX_CACHE_COUNT_PER_QUEUE", 10000)
+            )
+            if not (1 <= cache_count_env <= 65535):
+                raise ValueError(
+                    "ROCKETMQ_MAX_CACHE_COUNT_PER_QUEUE 环境变量必须在1-65535范围内"
+                )
+            self.max_cache_count_per_queue = cache_count_env
+        if os.getenv("ROCKETMQ_MAX_CACHE_SIZE_PER_QUEUE"):
+            cache_size_env = int(os.getenv("ROCKETMQ_MAX_CACHE_SIZE_PER_QUEUE", 512))
+            if not (1 <= cache_size_env <= 1024):
+                raise ValueError(
+                    "ROCKETMQ_MAX_CACHE_SIZE_PER_QUEUE 环境变量必须在1-1024范围内"
+                )
+            self.max_cache_size_per_queue = cache_size_env
         if os.getenv("ROCKETMQ_ENABLE_AUTO_RECOVERY"):
             self.enable_auto_recovery = (
                 os.getenv("ROCKETMQ_ENABLE_AUTO_RECOVERY", "true").lower() == "true"
@@ -225,7 +241,8 @@ class ConsumerConfig:
             # OffsetStore配置
             "persist_interval": self.persist_interval,
             "offset_store_path": self.offset_store_path,
-            "max_cache_size": self.max_cache_size,
+            "max_cache_count_per_queue": self.max_cache_count_per_queue,
+            "max_cache_size_per_queue": self.max_cache_size_per_queue,
             "enable_auto_recovery": self.enable_auto_recovery,
             "max_retry_times": self.max_retry_times,
             # 高级配置
