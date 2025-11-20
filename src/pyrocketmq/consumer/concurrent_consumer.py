@@ -45,6 +45,7 @@ from pyrocketmq.model import (
     ConsumeResult,
     MessageExt,
     MessageModel,
+    MessageProperty,
     MessageQueue,
     MessageSelector,
     PullMessageResult,
@@ -1975,6 +1976,12 @@ class ConcurrentConsumer(BaseConsumer):
             q = MessageQueue(msg.topic, header.broker_name, 0)
 
         now = datetime.now()
+
+        for msg in msgs:
+            msg.set_property(MessageProperty.RETRY_TOPIC, self._get_retry_topic())
+            msg.set_property(
+                MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+            )
 
         if self._consume_message(msgs, q):
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
