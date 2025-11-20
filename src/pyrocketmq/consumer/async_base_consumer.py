@@ -22,8 +22,9 @@ from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFacto
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
-    ConsumeResult,
-    MessageExt,
+    BrokerData,
+    ConsumerData,
+    HeartbeatData,
     MessageSelector,
     TopicRouteData,
 )
@@ -31,10 +32,11 @@ from pyrocketmq.nameserver.async_manager import (
     AsyncNameServerManager,
     create_async_nameserver_manager,
 )
+from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.config import RemoteConfig
 
 from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
-from .async_listener import AsyncConsumeContext, AsyncMessageListener
+from .async_listener import AsyncMessageListener
 
 # 本地模块导入
 from .config import ConsumerConfig
@@ -131,8 +133,8 @@ class AsyncBaseConsumer:
         self._heartbeat_event: asyncio.Event = asyncio.Event()
 
         # 路由映射
-        self._topic_broker_mapping: ConsumerTopicBrokerMapping | None = (
-            None  # TopicBrokerMapping实例
+        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
+            ConsumerTopicBrokerMapping()
         )
 
         # 统计信息
@@ -425,10 +427,6 @@ class AsyncBaseConsumer:
             )
             self._logger.info("消费起始位置管理器创建成功")
 
-            # 创建ConsumerTopicBrokerMapping
-
-            self._topic_broker_mapping = ConsumerTopicBrokerMapping()
-
             # 启动路由刷新任务
             await self._start_route_refresh_task()
 
@@ -611,8 +609,7 @@ class AsyncBaseConsumer:
 
                 # 执行路由刷新
                 await self._refresh_all_routes()
-                if self._topic_broker_mapping:
-                    self._topic_broker_mapping.clear_expired_routes()
+                self._topic_broker_mapping.clear_expired_routes()
 
                 # 更新统计信息
                 self._stats["route_refresh_count"] += 1
@@ -626,8 +623,6 @@ class AsyncBaseConsumer:
                         "refresh_count": self._stats["route_refresh_count"],
                         "topics_count": (
                             len(self._topic_broker_mapping.get_all_topics())
-                            if self._topic_broker_mapping
-                            else 0
                         ),
                     },
                 )
@@ -668,17 +663,13 @@ class AsyncBaseConsumer:
         topics: set[str] = set()
 
         # 收集所有需要刷新路由的Topic
-        if self._topic_broker_mapping:
-            topics.update(self._topic_broker_mapping.get_all_topics())
+        topics.update(self._topic_broker_mapping.get_all_topics())
         topics.update(self._subscription_manager.get_topics())
 
         for topic in topics:
             try:
-                if (
-                    not self._topic_broker_mapping
-                    or self._topic_broker_mapping.get_route_info(topic) is None
-                ):
-                    await self._update_route_info(topic)
+                if self._topic_broker_mapping.get_route_info(topic) is None:
+                    _ = await self._update_route_info(topic)
             except Exception as e:
                 self._logger.debug(
                     "Failed to refresh route",
@@ -714,8 +705,7 @@ class AsyncBaseConsumer:
                 return False
 
             # 更新TopicBrokerMapping中的路由信息
-            if self._topic_broker_mapping:
-                self._topic_broker_mapping.update_route_info(topic, topic_route_data)
+            _ = self._topic_broker_mapping.update_route_info(topic, topic_route_data)
 
             return True
 
@@ -830,83 +820,86 @@ class AsyncBaseConsumer:
                 exc_info=True,
             )
 
-    async def _collect_broker_addresses(self) -> list[str]:
-        """收集所有Broker地址"""
-        broker_addrs = []
+    async def _collect_broker_addresses(self) -> set[str]:
+        """收集所有Broker地址
 
-        try:
-            if self._topic_broker_mapping:
-                broker_addrs = self._topic_broker_mapping.get_available_brokers()
+        Returns:
+            Broker地址集合
+        """
+        broker_addrs: set[str] = set()
 
-            # 如果没有从TopicBrokerMapping获取到地址，尝试从订阅的Topic获取
-            if not broker_addrs and self._nameserver_manager:
-                topics = self._subscription_manager.get_topics()
-                for topic in topics:
-                    try:
-                        route_data = (
-                            await self._nameserver_manager.query_topic_route_info(topic)
-                        )
-                        if route_data and route_data.broker_datas:
-                            for broker_data in route_data.broker_datas:
-                                broker_addrs.extend(broker_data.broker_addresses)
-                    except Exception as e:
-                        self._logger.debug(
-                            f"Failed to get broker addresses for topic {topic}: {e}",
-                            extra={"topic": topic, "error": str(e)},
-                        )
+        # 获取所有Topic：缓存的Topic + 订阅的Topic
+        all_topics: set[str] = set()
+        all_topics = self._topic_broker_mapping.get_all_topics().union(
+            self._subscription_manager.get_topics()
+        )
 
-        except Exception as e:
-            self._logger.error(
-                f"Error collecting broker addresses: {e}",
-                extra={"error": str(e)},
-                exc_info=True,
+        if not all_topics:
+            self._logger.warning("No topics found for heartbeat")
+            return broker_addrs
+
+        for topic in all_topics:
+            # 使用TopicBrokerMapping获取可用的Broker
+            brokers: list[BrokerData] = (
+                self._topic_broker_mapping.get_available_brokers(topic)
             )
+            for broker_data in brokers:
+                # 获取主从地址
+                if broker_data.broker_addresses:
+                    for addr in broker_data.broker_addresses.values():
+                        if addr:  # 过滤空地址
+                            broker_addrs.add(addr)
 
-        return list(set(broker_addrs))  # 去重
+        if not broker_addrs:
+            self._logger.warning("No broker addresses found for heartbeat")
 
-    def _build_heartbeat_data(self) -> dict[str, Any]:
-        """构建心跳数据"""
-        return {
-            "consumer_group": self._config.consumer_group,
-            "client_id": self._config.client_id,
-            "subscription_data": [
-                {
-                    "topic": topic,
-                    "sub_string": entry.sub_string,
-                    "expression_type": entry.expression_type,
-                }
-                for topic, entry in self._subscription_manager.get_all_subscriptions().items()
+        return broker_addrs
+
+    def _build_heartbeat_data(self) -> HeartbeatData:
+        """构建心跳数据
+
+        Returns:
+            心跳数据对象
+        """
+        return HeartbeatData(
+            client_id=self._config.client_id,
+            consumer_data_set=[
+                ConsumerData(
+                    group_name=self._config.consumer_group,
+                    consume_type="CONSUME_PASSIVELY",
+                    message_model=self._config.message_model,
+                    consume_from_where=self._config.consume_from_where,
+                    subscription_data=[
+                        e.subscription_data
+                        for e in self._subscription_manager.get_all_subscriptions()
+                    ],
+                )
             ],
-            "heartbeat_time": time.time(),
-        }
+        )
 
     async def _send_heartbeat_to_broker(
-        self, broker_addr: str, heartbeat_data: dict[str, Any]
+        self, broker_addr: str, heartbeat_data: HeartbeatData
     ) -> bool:
         """异步向指定Broker发送心跳"""
         try:
             if not self._broker_manager:
                 return False
 
-            pool = await self._broker_manager.get_connection_pool(broker_addr)
-            async with pool.get_connection("heartbeat") as conn:
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            async with pool.get_connection(usage="heartbeat") as conn:
                 from pyrocketmq.broker import AsyncBrokerClient
 
                 broker_client = AsyncBrokerClient(conn)
 
                 # 发送心跳
-                result = await broker_client.send_heartbeat(heartbeat_data)
-                if result:
-                    self._logger.debug(
-                        f"Heartbeat sent successfully to {broker_addr}",
-                        extra={"broker_addr": broker_addr},
-                    )
-                else:
-                    self._logger.warning(
-                        f"Failed to send heartbeat to {broker_addr}",
-                        extra={"broker_addr": broker_addr},
-                    )
-                return result
+                await broker_client.send_heartbeat(heartbeat_data)
+                self._logger.debug(
+                    f"Heartbeat sent successfully to {broker_addr}",
+                    extra={"broker_addr": broker_addr},
+                )
+                return True
 
         except Exception as e:
             self._logger.warning(
