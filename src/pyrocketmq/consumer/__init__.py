@@ -48,13 +48,14 @@ from .allocate_queue_strategy import (
     create_average_strategy,
     create_hash_strategy,
 )
+
+# ==================== 消费起始位置管理 ====================
+from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
 from .base_consumer import BaseConsumer
 from .concurrent_consumer import ConcurrentConsumer
 
 # ==================== 配置管理 ====================
 from .config import ConsumerConfig, create_config, create_consumer_config
-
-# ==================== 消费起始位置管理 ====================
 from .consume_from_where_manager import ConsumeFromWhereManager
 
 # ==================== Consumer便利工厂函数 ====================
@@ -171,6 +172,7 @@ __all__ = [
     "create_hash_strategy",
     # 消费起始位置管理
     "ConsumeFromWhereManager",
+    "AsyncConsumeFromWhereManager",
     # 异常类 - 核心异常
     "ConsumerError",
     "ConsumerStartError",

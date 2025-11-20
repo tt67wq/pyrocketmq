@@ -18,7 +18,6 @@ import queue
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from ctypes import memmove
 from datetime import datetime
 from typing import Any
 
