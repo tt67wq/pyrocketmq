@@ -1587,11 +1587,46 @@ class ConcurrentConsumer(BaseConsumer):
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> list[MessageExt]:
         """
-        处理失败消费的消息
+        处理消费失败的消息，根据消息模式采取不同的处理策略。
+
+        当消息监听器返回RECONSUME_LATER或抛出异常时，此方法负责处理失败的消息。
+        根据消费者配置的消息模型（集群模式或广播模式），采取不同的重试策略。
 
         Args:
-            messages: 消费失败的消息列表
-            message_queue: 消息队列
+            messages (list[MessageExt]): 消费失败的消息列表
+            message_queue (MessageQueue): 消息所属的队列信息
+
+        Returns:
+            list[MessageExt]: 需要重新消费的消息列表
+
+        处理策略:
+            集群模式 (MessageModel.CLUSTERING):
+                - 尝试将失败的消息发送回broker进行重试
+                - 只有成功发送回broker的消息才会被保留用于重新消费
+                - 发送失败的消息会被丢弃（可能导致消息丢失，需谨慎处理）
+
+            广播模式 (MessageModel.BROADCASTING):
+                - 直接丢弃所有失败的消息
+                - 广播模式下每个消费者独立消费，不需要重试机制
+                - 记录警告日志，便于问题排查
+
+        Examples:
+            >>> # 在消息处理循环中使用
+            >>> failed_messages = []
+            >>> try:
+            >>>     result = await self._consume_message(messages, context)
+            >>>     if result == ConsumeResult.RECONSUME_LATER:
+            >>>         failed_messages = self._handle_failed_consume(messages, queue)
+            >>> except Exception as e:
+            >>>     failed_messages = self._handle_failed_consume(messages, queue)
+            >>>     logger.error(f"Message processing failed: {e}")
+
+        Note:
+            - 集群模式下，重试次数受max_reconsume_times配置限制
+            - 重试消息会被发送到重试主题(%RETRY%{consumer_group})
+            - 超过最大重试次数的消息会进入死信队列(%DLQ%{consumer_group})
+            - 广播模式的消息丢失风险需要业务方考虑补偿机制
+            - 返回的消息列表会被用于后续的重新消费处理
         """
         if self._config.message_model == MessageModel.CLUSTERING:
             return [
