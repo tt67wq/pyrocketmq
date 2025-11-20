@@ -32,7 +32,7 @@ class OffsetStoreFactory:
     - 封装创建逻辑，客户端无需了解具体实现细节
     - 统一的创建接口，便于扩展新的存储类型
     - 参数验证和错误处理，确保创建的实例有效
-    - 支持自动启动，简化使用流程
+    - 手动启动控制，便于在启动前进行额外配置
 
     Thread Safety:
         所有方法都是线程安全的，支持并发创建实例。
@@ -46,13 +46,11 @@ class OffsetStoreFactory:
         broker_manager: BrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
-        auto_start: bool = True,
         **kwargs: Any,
     ) -> OffsetStore:
         """创建偏移量存储实例
 
         根据消息模型类型创建相应的偏移量存储实例，支持集群和广播两种模式。
-        创建完成后可选择性地自动启动存储服务。
 
         Args:
             consumer_group (str): 消费者组名称，用于标识消费者实例
@@ -60,12 +58,12 @@ class OffsetStoreFactory:
                 - 在同一应用中应该保持唯一性
                 - 用于持久化文件命名或Broker通信
 
-            namesrv_addr (str): NameServer地址列表，格式："host1:port1;host2:port2"
+            namesrv_manager (NameServerManager | None): NameServer管理器
                 - 集群模式必需，用于路由查询
                 - 广播模式下某些实现也可能需要
-                - 支持多个地址以实现高可用
+                - 用于获取Topic路由信息
 
-            message_model (MessageModel): 消息消费模式枚举
+            message_model (str): 消息消费模式
                 - MessageModel.CLUSTERING: 集群消费，偏移量存储在Broker
                 - MessageModel.BROADCASTING: 广播消费，偏移量存储在本地
 
@@ -84,11 +82,6 @@ class OffsetStoreFactory:
                 - 间隔越短数据安全性越高，但性能开销越大
                 - 建议范围：1000ms-30000ms
 
-            auto_start (bool, optional): 是否自动启动存储服务，默认True
-                - True: 创建后自动调用start()方法
-                - False: 仅创建实例，需要手动启动
-                - 便于在启动前进行额外配置
-
             **kwargs: 其他特定实现的配置参数
                 - 传递给具体OffsetStore实现类的额外参数
                 - 允许扩展配置而不修改接口
@@ -98,37 +91,35 @@ class OffsetStoreFactory:
             OffsetStore: 配置完成的偏移量存储实例
                 - 集群模式返回RemoteOffsetStore实例
                 - 广播模式返回LocalOffsetStore实例
-                - 如果auto_start=True，实例已启动并可使用
+                - 实例未启动，需要手动调用start()方法
 
         Raises:
             ValueError: 当参数配置不合法时抛出：
                 - consumer_group为空字符串
                 - 集群模式下缺少broker_manager参数
+                - 集群模式下缺少namesrv_manager参数
                 - message_model参数无效
 
             OSError: 当存储路径创建失败时抛出（广播模式）
-
-            RuntimeError: 当存储实例启动失败时抛出（auto_start=True时）
 
         Examples:
             >>> # 创建集群模式存储
             >>> remote_store = OffsetStoreFactory.create_offset_store(
             ...     consumer_group="test_group",
-            ...     namesrv_addr="localhost:9876",
+            ...     namesrv_manager=namesrv_manager,
             ...     message_model=MessageModel.CLUSTERING,
             ...     broker_manager=broker_manager,
             ...     persist_interval=3000
             ... )
+            >>> remote_store.start()  # 手动启动
             >>>
             >>> # 创建广播模式存储
             >>> local_store = OffsetStoreFactory.create_offset_store(
             ...     consumer_group="broadcast_group",
-            ...     namesrv_addr="localhost:9876",
             ...     message_model=MessageModel.BROADCASTING,
-            ...     store_path="/tmp/rocketmq_offsets",
-            ...     auto_start=False  # 手动控制启动时机
+            ...     store_path="/tmp/rocketmq_offsets"
             ... )
-            >>> local_store.start()
+            >>> local_store.start()  # 手动启动
         """
         if not consumer_group:
             raise ValueError("Consumer group cannot be empty")
@@ -168,10 +159,6 @@ class OffsetStoreFactory:
         else:
             raise ValueError(f"Unsupported message model: {message_model}")
 
-        # 自动启动
-        if auto_start:
-            offset_store.start()
-
         return offset_store
 
 
@@ -191,31 +178,31 @@ def create_offset_store(
 
     Args:
         consumer_group (str): 消费者组名称，用于标识消费者实例
-        namesrv_addr (str): NameServer地址，格式："host1:port1;host2:port2"
-        message_model (MessageModel): 消息消费模式枚举
+        namesrv_manager (NameServerManager | None): NameServer管理器
+        message_model (str): 消息消费模式
         broker_manager (BrokerManager | None): Broker连接管理器，集群模式必需
         store_path (str): 本地存储路径，广播模式使用
         persist_interval (int): 持久化间隔（毫秒）
         **kwargs: 其他配置参数
 
     Returns:
-        OffsetStore: 偏移量存储实例，保证已启动状态
+        OffsetStore: 偏移量存储实例，未启动状态
             - 集群模式返回RemoteOffsetStore实例
             - 广播模式返回LocalOffsetStore实例
-            - 实例已启动并可用
+            - 需要手动调用start()方法启动
 
     Raises:
         ValueError: 当参数配置不合法时抛出
-        RuntimeError: 当OffsetStore创建或启动失败时抛出
 
     Example:
         >>> # 快速创建集群模式存储
         >>> store = create_offset_store(
         ...     consumer_group="quick_group",
-        ...     namesrv_addr="localhost:9876",
+        ...     namesrv_manager=namesrv_manager,
         ...     message_model=MessageModel.CLUSTERING,
         ...     broker_manager=broker_mgr
         ... )
+        >>> store.start()  # 手动启动
         >>>
         >>> # 创建广播模式存储
         >>> local_store = create_offset_store(
@@ -223,6 +210,7 @@ def create_offset_store(
         ...     message_model=MessageModel.BROADCASTING,
         ...     store_path="/tmp/offsets"
         ... )
+        >>> local_store.start()  # 手动启动
     """
     return OffsetStoreFactory.create_offset_store(
         consumer_group=consumer_group,

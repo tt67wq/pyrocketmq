@@ -114,10 +114,33 @@ class AsyncBaseConsumer:
         self._lock: asyncio.Lock = asyncio.Lock()
 
         # 异步管理器
-        self._nameserver_manager: AsyncNameServerManager | None = None
-        self._broker_manager: AsyncBrokerManager | None = None
-        self._offset_store: AsyncOffsetStore | None = None
-        self._consume_from_where_manager: AsyncConsumeFromWhereManager | None = None
+        self._nameserver_manager: AsyncNameServerManager = (
+            create_async_nameserver_manager(self._config.namesrv_addr)
+        )
+
+        remote_config: RemoteConfig = RemoteConfig(
+            connection_pool_size=16, connection_max_lifetime=60
+        )
+        self._broker_manager: AsyncBrokerManager = AsyncBrokerManager(
+            remote_config=remote_config
+        )
+        self._offset_store: AsyncOffsetStore = (
+            AsyncOffsetStoreFactory.create_offset_store(
+                consumer_group=self._config.consumer_group,
+                message_model=self._config.message_model,
+                namesrv_manager=self._nameserver_manager,
+                broker_manager=self._broker_manager,
+                store_path=self._config.offset_store_path,
+                persist_interval=self._config.persist_interval,
+            )
+        )
+        self._consume_from_where_manager: AsyncConsumeFromWhereManager = (
+            AsyncConsumeFromWhereManager(
+                consume_group=self._config.consumer_group,
+                namesrv_manager=self._nameserver_manager,
+                broker_manager=self._broker_manager,
+            )
+        )
 
         # 异步任务
         self._route_refresh_task: asyncio.Task[None] | None = None
@@ -213,7 +236,7 @@ class AsyncBaseConsumer:
                         topic, f"无效的订阅参数: topic={topic}, selector={selector}"
                     )
 
-                success = self._subscription_manager.subscribe(topic, selector)
+                success: bool = self._subscription_manager.subscribe(topic, selector)
                 if not success:
                     raise SubscribeError(topic, f"订阅失败: topic={topic}")
 
@@ -252,7 +275,7 @@ class AsyncBaseConsumer:
         """
         try:
             async with self._lock:
-                success = self._subscription_manager.unsubscribe(topic)
+                success: bool = self._subscription_manager.unsubscribe(topic)
                 if not success:
                     raise UnsubscribeError(topic, f"取消订阅失败: topic={topic}")
 
@@ -364,7 +387,8 @@ class AsyncBaseConsumer:
         Returns:
             包含消费者状态信息的字典
         """
-        subscriptions = self._subscription_manager.get_status_summary()
+        subscriptions: dict[str, Any] = self._subscription_manager.get_status_summary()
+        uptime: float = time.time() - self._start_time if self._is_running else 0
 
         return {
             "consumer_group": self._config.consumer_group,
@@ -374,7 +398,7 @@ class AsyncBaseConsumer:
             "is_running": self._is_running,
             "start_time": self._start_time,
             "shutdown_time": self._shutdown_time,
-            "uptime": time.time() - self._start_time if self._is_running else 0,
+            "uptime": uptime,
             "subscriptions": subscriptions,
             "has_message_listener": self._message_listener is not None,
         }
@@ -392,40 +416,9 @@ class AsyncBaseConsumer:
         try:
             self._logger.info("开始启动异步消费者基础组件")
 
-            # 启动NameServer管理器
-            self._nameserver_manager = create_async_nameserver_manager(
-                self._config.namesrv_addr
-            )
             await self._nameserver_manager.start()
-            self._logger.info("NameServer管理器启动成功")
-
-            # 启动Broker管理器
-            remote_config = RemoteConfig(
-                connection_pool_size=16, connection_max_lifetime=60
-            )
-            self._broker_manager = AsyncBrokerManager(remote_config=remote_config)
             await self._broker_manager.start()
-            self._logger.info("Broker管理器启动成功")
-
-            # 创建偏移量存储
-            self._offset_store = await AsyncOffsetStoreFactory.create_offset_store(
-                consumer_group=self._config.consumer_group,
-                message_model=self._config.message_model,
-                namesrv_manager=self._nameserver_manager,
-                broker_manager=self._broker_manager,
-                store_path=self._config.offset_store_path,
-                persist_interval=self._config.persist_interval,
-                auto_start=True,
-            )
-            self._logger.info("偏移量存储创建成功")
-
-            # 创建消费起始位置管理器
-            self._consume_from_where_manager = AsyncConsumeFromWhereManager(
-                consume_group=self._config.consumer_group,
-                namesrv_manager=self._nameserver_manager,
-                broker_manager=self._broker_manager,
-            )
-            self._logger.info("消费起始位置管理器创建成功")
+            await self._offset_store.start()
 
             # 启动路由刷新任务
             await self._start_route_refresh_task()
@@ -521,20 +514,18 @@ class AsyncBaseConsumer:
         """
         try:
             # 关闭偏移量存储
-            if self._offset_store is not None:
-                await self._offset_store.stop()
-                self._offset_store = None
+            await self._offset_store.persist_all()
+            await self._offset_store.stop()
+
+            # 清理订阅管理器
+            self._subscription_manager.cleanup_inactive_subscriptions()
+            self._subscription_manager.clear_all()
 
             # 关闭Broker管理器
-            if self._broker_manager is not None:
-                # 等待连接池关闭
-                await self._broker_manager.shutdown()
-                self._broker_manager = None
+            await self._broker_manager.shutdown()
 
             # 关闭NameServer管理器
-            if self._nameserver_manager is not None:
-                await self._nameserver_manager.stop()
-                self._nameserver_manager = None
+            await self._nameserver_manager.stop()
 
             self._logger.info("资源清理完成")
 
@@ -549,11 +540,14 @@ class AsyncBaseConsumer:
 
     def __str__(self) -> str:
         """字符串表示"""
+        subscription_count: int = len(
+            self._subscription_manager.get_all_subscriptions()
+        )
         return (
             f"AsyncBaseConsumer["
             f"group={self._config.consumer_group}, "
             f"running={self._is_running}, "
-            f"subscriptions={len(self._subscription_manager.get_all_subscriptions())}"
+            f"subscriptions={subscription_count}"
             f"]"
         )
 
@@ -689,9 +683,6 @@ class AsyncBaseConsumer:
         )
 
         try:
-            if not self._nameserver_manager:
-                return False
-
             topic_route_data: (
                 TopicRouteData | None
             ) = await self._nameserver_manager.get_topic_route(topic)
@@ -788,16 +779,16 @@ class AsyncBaseConsumer:
 
         try:
             # 收集所有Broker地址
-            broker_addrs = await self._collect_broker_addresses()
+            broker_addrs: set[str] = await self._collect_broker_addresses()
             if not broker_addrs:
                 return
 
             # 构建心跳数据
-            heartbeat_data = self._build_heartbeat_data()
+            heartbeat_data: HeartbeatData = self._build_heartbeat_data()
 
             # 向每个Broker发送心跳
-            heartbeat_success_count = 0
-            heartbeat_failure_count = 0
+            heartbeat_success_count: int = 0
+            heartbeat_failure_count: int = 0
 
             for broker_addr in broker_addrs:
                 if await self._send_heartbeat_to_broker(broker_addr, heartbeat_data):
@@ -882,16 +873,13 @@ class AsyncBaseConsumer:
     ) -> bool:
         """异步向指定Broker发送心跳"""
         try:
-            if not self._broker_manager:
-                return False
-
             pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
                 broker_addr
             )
             async with pool.get_connection(usage="heartbeat") as conn:
                 from pyrocketmq.broker import AsyncBrokerClient
 
-                broker_client = AsyncBrokerClient(conn)
+                broker_client: AsyncBrokerClient = AsyncBrokerClient(conn)
 
                 # 发送心跳
                 await broker_client.send_heartbeat(heartbeat_data)

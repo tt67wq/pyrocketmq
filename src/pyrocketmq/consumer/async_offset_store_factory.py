@@ -40,14 +40,13 @@ class AsyncOffsetStoreFactory:
     """
 
     @staticmethod
-    async def create_offset_store(
+    def create_offset_store(
         consumer_group: str,
         message_model: str,
         namesrv_manager: AsyncNameServerManager | None = None,
         broker_manager: AsyncBrokerManager | None = None,
         store_path: str = "~/.rocketmq/offsets",
         persist_interval: int = 5000,
-        auto_start: bool = True,
         **kwargs: Any,
     ) -> AsyncOffsetStore:
         """异步创建偏移量存储实例
@@ -86,11 +85,6 @@ class AsyncOffsetStoreFactory:
                 - 间隔越短数据安全性越高，但性能开销越大
                 - 建议范围：1000ms-30000ms
 
-            auto_start (bool, optional): 是否自动启动存储服务，默认True
-                - True: 创建后自动调用start()方法
-                - False: 仅创建实例，需要手动启动
-                - 便于在启动前进行额外配置
-
             **kwargs: 其他特定实现的配置参数
                 - 传递给具体OffsetStore实现类的额外参数
                 - 允许扩展配置而不修改接口
@@ -100,7 +94,6 @@ class AsyncOffsetStoreFactory:
             OffsetStore: 配置完成的偏移量存储实例
                 - 集群模式返回AsyncRemoteOffsetStore实例
                 - 广播模式返回LocalOffsetStore实例
-                - 如果auto_start=True，实例已启动并可使用
 
         Raises:
             ValueError: 当参数配置不合法时抛出：
@@ -110,7 +103,6 @@ class AsyncOffsetStoreFactory:
 
             OSError: 当存储路径创建失败时抛出（广播模式）
 
-            RuntimeError: 当存储实例启动失败时抛出（auto_start=True时）
 
         Examples:
             >>> # 异步创建集群模式存储
@@ -128,7 +120,6 @@ class AsyncOffsetStoreFactory:
             ...     namesrv_addr="localhost:9876",
             ...     message_model=MessageModel.BROADCASTING,
             ...     store_path="/tmp/rocketmq_offsets",
-            ...     auto_start=False  # 手动控制启动时机
             ... )
             >>> await local_store.start()
         """
@@ -170,14 +161,10 @@ class AsyncOffsetStoreFactory:
         else:
             raise ValueError(f"Unsupported message model: {message_model}")
 
-        # 自动启动
-        if auto_start:
-            await offset_store.start()
-
         return offset_store
 
 
-async def create_offset_store(
+def create_offset_store(
     consumer_group: str,
     message_model: str,
     namesrv_manager: AsyncNameServerManager | None = None,
@@ -225,7 +212,7 @@ async def create_offset_store(
         ...     store_path="/tmp/offsets"
         ... )
     """
-    return await AsyncOffsetStoreFactory.create_offset_store(
+    return AsyncOffsetStoreFactory.create_offset_store(
         consumer_group=consumer_group,
         message_model=message_model,
         namesrv_manager=namesrv_manager,
