@@ -406,6 +406,123 @@ class ConcurrentConsumer(BaseConsumer):
 
     # ==================== 内部方法：重平衡管理 ====================
 
+    def _pre_rebalance_check(self) -> bool:
+        """执行重平衡前置检查。
+
+        检查是否可以执行重平衡操作，包括锁获取和订阅状态检查。
+
+        Returns:
+            bool: 如果可以执行重平衡返回True，否则返回False
+
+        Raises:
+            None: 此方法不会抛出异常
+        """
+        # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
+        # 使用可重入锁保护重平衡操作
+        if not self._rebalance_lock.acquire(blocking=False):
+            # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
+            self._stats["rebalance_skipped_count"] += 1
+            logger.debug(
+                "Rebalance already in progress, skipping",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "skipped_count": self._stats["rebalance_skipped_count"],
+                },
+            )
+            return False
+
+        # 检查是否有订阅的Topic
+        topics: set[str] = self._subscription_manager.get_topics()
+        if not topics:
+            logger.debug("No topics subscribed, skipping rebalance")
+            self._rebalance_lock.release()
+            return False
+
+        return True
+
+    def _collect_and_allocate_queues(self) -> list[MessageQueue]:
+        """收集所有Topic的可用队列并执行分配。
+
+        遍历所有订阅的Topic，获取每个Topic的可用队列，
+        并为每个Topic执行队列分配算法。
+
+        Returns:
+            list[MessageQueue]: 分配给当前消费者的所有队列列表
+
+        Raises:
+            Exception: 路由信息更新或队列分配失败时抛出异常
+        """
+        allocated_queues: list[MessageQueue] = []
+        topics = self._subscription_manager.get_topics()
+
+        for topic in topics:
+            try:
+                # 更新Topic路由信息
+                _ = self._update_route_info(topic)
+
+                # 获取Topic的所有可用队列
+                all_queues: list[MessageQueue] = [
+                    x
+                    for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)
+                ]
+
+                if not all_queues:
+                    logger.debug(
+                        "No queues available for subscribed topic",
+                        extra={"topic": topic},
+                    )
+                    continue
+
+                # 执行队列分配
+                topic_allocated_queues = self._allocate_queues(topic, all_queues)
+                allocated_queues.extend(topic_allocated_queues)
+
+                logger.debug(
+                    "Topic queue allocation completed",
+                    extra={
+                        "topic": topic,
+                        "total_queues": len(all_queues),
+                        "allocated_queues": len(topic_allocated_queues),
+                    },
+                )
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to allocate queues for topic {topic}: {e}",
+                    extra={"topic": topic, "error": str(e)},
+                )
+                # 继续处理其他Topic，不中断整个重平衡过程
+                continue
+
+        return allocated_queues
+
+    def _finalize_rebalance(self, total_topics: int, total_queues: int) -> None:
+        """完成重平衡后处理。
+
+        更新重平衡时间戳、统计信息，并记录完成日志。
+
+        Args:
+            total_topics: 重平衡处理的Topic总数
+            total_queues: 分配到的队列总数
+
+        Raises:
+            None: 此方法不会抛出异常
+        """
+        self._last_rebalance_time = time.time()
+
+        # 更新成功统计
+        self._stats["rebalance_success_count"] += 1
+
+        logger.info(
+            "Rebalance completed",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "total_topics": total_topics,
+                "assigned_queues": total_queues,
+                "success_count": self._stats["rebalance_success_count"],
+            },
+        )
+
     def _do_rebalance(self) -> None:
         """执行消费者重平衡操作。
 
@@ -413,11 +530,11 @@ class ConcurrentConsumer(BaseConsumer):
         重平衡是RocketMQ实现负载均衡的核心机制，确保消费者组内的队列分配合理。
 
         执行流程：
-        1. 获取所有已订阅的Topic列表
-        2. 查询每个Topic的完整路由信息
-        3. 为每个Topic执行队列分配算法
-        4. 更新当前消费者的分配队列集合
-        5. 启动新分配队列的拉取任务
+        1. 执行重平衡前置检查
+        2. 收集所有Topic的可用队列
+        3. 执行队列分配算法
+        4. 更新分配的队列并启动拉取任务
+        5. 完成重平衡后处理
 
         重平衡触发条件：
         - 消费者启动时
@@ -437,18 +554,8 @@ class ConcurrentConsumer(BaseConsumer):
             - 被回收的队列会停止拉取并等待当前消息处理完成
             - 重平衡失败不会影响已运行的队列，会在下次重试
         """
-        # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
-        # 使用可重入锁保护重平衡操作
-        if not self._rebalance_lock.acquire(blocking=False):
-            # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
-            self._stats["rebalance_skipped_count"] += 1
-            logger.debug(
-                "Rebalance already in progress, skipping",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "skipped_count": self._stats["rebalance_skipped_count"],
-                },
-            )
+        # 前置检查
+        if not self._pre_rebalance_check():
             return
 
         try:
@@ -460,47 +567,16 @@ class ConcurrentConsumer(BaseConsumer):
             # 更新统计信息
             self._stats["rebalance_count"] += 1
 
-            # 获取所有订阅的Topic
-            topics: set[str] = self._subscription_manager.get_topics()
-            if not topics:
-                logger.debug("No topics subscribed, skipping rebalance")
-                return
-
-            allocated_queues: list[MessageQueue] = []
-            for topic in topics:
-                _ = self._update_route_info(topic)
-                all_queues: list[MessageQueue] = [
-                    x
-                    for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)
-                ]
-
-                if not all_queues:
-                    logger.debug(
-                        "No queues available for subscribed topic",
-                        extra={"topic": topic},
-                    )
-                    continue
-
-                # 执行队列分配（这里简化处理，实际需要获取所有消费者信息）
-                allocated_queues.extend(self._allocate_queues(topic, all_queues))
+            # 收集所有可用队列并执行分配
+            allocated_queues = self._collect_and_allocate_queues()
 
             # 更新分配的队列
             if allocated_queues:
                 self._update_assigned_queues(allocated_queues)
 
-            self._last_rebalance_time = time.time()
-
-            # 更新成功统计
-            self._stats["rebalance_success_count"] += 1
-
-            logger.info(
-                "Rebalance completed",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "total_topics": len(topics),
-                    "assigned_queues": len(allocated_queues),
-                    "success_count": self._stats["rebalance_success_count"],
-                },
+            # 完成重平衡处理
+            self._finalize_rebalance(
+                len(self._subscription_manager.get_topics()), len(allocated_queues)
             )
 
         except Exception as e:
