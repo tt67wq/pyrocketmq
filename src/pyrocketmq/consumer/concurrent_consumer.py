@@ -18,10 +18,11 @@ import queue
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+
+# pyrocketmq导入
 from datetime import datetime
 from typing import Any
 
-# pyrocketmq导入
 from pyrocketmq.broker import BrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateContext,
@@ -1445,73 +1446,27 @@ class ConcurrentConsumer(BaseConsumer):
         while self._is_running:
             try:
                 # 从处理队列获取消息
-                try:
-                    messages: list[MessageExt]
-                    message_queue: MessageQueue
-                    messages, message_queue = self._process_queue.get(timeout=1.0)
-                except queue.Empty:
+                message_data: tuple[list[MessageExt], MessageQueue] | None = (
+                    self._get_messages_from_queue()
+                )
+                if message_data is None:
                     continue
 
+                messages, message_queue = message_data
+
                 # 处理消息
-                start_time: float = time.time()
-                success: bool = self._consume_message(messages, message_queue)
-                duration: float = time.time() - start_time
+                success, duration = self._process_messages_with_timing(
+                    messages, message_queue
+                )
 
-                self._stats["consume_duration_total"] += duration
-
-                if not success:
-                    self._stats["messages_failed"] += len(messages)
-
-                # 更新偏移量
+                # 根据处理结果进行后续处理
                 if success:
-                    try:
-                        # 从缓存中移除已处理的消息，并获取当前最小offset
-                        min_offset = self._remove_messages_from_cache(
-                            message_queue, messages
-                        )
-
-                        # 直接更新最小offset到offset_store，避免重复查询
-                        if min_offset is not None:
-                            try:
-                                self._offset_store.update_offset(
-                                    message_queue, min_offset
-                                )
-                                logger.debug(
-                                    f"Updated offset from cache: {min_offset}",
-                                    extra={
-                                        "consumer_group": self._config.consumer_group,
-                                        "topic": message_queue.topic,
-                                        "queue_id": message_queue.queue_id,
-                                        "offset": min_offset,
-                                        "cache_stats": self._msg_cache.get(
-                                            message_queue, ProcessQueue()
-                                        ).get_stats(),
-                                    },
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to update offset from cache: {e}",
-                                    extra={
-                                        "consumer_group": self._config.consumer_group,
-                                        "topic": message_queue.topic,
-                                        "queue_id": message_queue.queue_id,
-                                        "offset": min_offset,
-                                        "error": str(e),
-                                    },
-                                )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to remove messages from cache: {e}",
-                            extra={
-                                "consumer_group": self._config.consumer_group,
-                                "topic": message_queue.topic,
-                                "queue_id": message_queue.queue_id,
-                                "error": str(e),
-                            },
-                        )
+                    self._handle_successful_consume(messages, message_queue)
                 else:
-                    for message in messages:
-                        self._send_back_message(message_queue, message)
+                    self._handle_failed_consume(messages, message_queue)
+
+                # 更新统计信息
+                self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
@@ -1522,6 +1477,137 @@ class ConcurrentConsumer(BaseConsumer):
                     },
                     exc_info=True,
                 )
+
+    def _get_messages_from_queue(
+        self,
+    ) -> tuple[list[MessageExt], MessageQueue] | None:
+        """
+        从处理队列获取消息
+
+        Returns:
+            消息和队列的元组，如果队列为空则返回None
+        """
+        try:
+            messages: list[MessageExt]
+            message_queue: MessageQueue
+            messages, message_queue = self._process_queue.get(timeout=1.0)
+            return messages, message_queue
+        except queue.Empty:
+            return None
+
+    def _process_messages_with_timing(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> tuple[bool, float]:
+        """
+        处理消息并计时
+
+        Args:
+            messages: 要处理的消息列表
+            message_queue: 消息队列
+
+        Returns:
+            消费结果，包含成功状态和耗时
+        """
+        start_time: float = time.time()
+        success: bool = self._consume_message(messages, message_queue)
+        duration: float = time.time() - start_time
+
+        return success, duration
+
+    def _handle_successful_consume(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> None:
+        """
+        处理成功消费的消息
+
+        Args:
+            messages: 成功消费的消息列表
+            message_queue: 消息队列
+        """
+        try:
+            # 从缓存中移除已处理的消息，并获取当前最小offset
+            min_offset = self._remove_messages_from_cache(message_queue, messages)
+
+            # 直接更新最小offset到offset_store，避免重复查询
+            if min_offset is not None:
+                self._update_offset_to_store(message_queue, min_offset)
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to remove messages from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "error": str(e),
+                },
+            )
+
+    def _update_offset_to_store(
+        self, message_queue: MessageQueue, min_offset: int
+    ) -> None:
+        """
+        更新偏移量到存储
+
+        Args:
+            message_queue: 消息队列
+            min_offset: 最小偏移量
+        """
+        try:
+            self._offset_store.update_offset(message_queue, min_offset)
+            logger.debug(
+                f"Updated offset from cache: {min_offset}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": min_offset,
+                    "cache_stats": self._msg_cache.get(
+                        message_queue, ProcessQueue()
+                    ).get_stats(),
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to update offset from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": min_offset,
+                    "error": str(e),
+                },
+            )
+
+    def _handle_failed_consume(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> None:
+        """
+        处理失败消费的消息
+
+        Args:
+            messages: 消费失败的消息列表
+            message_queue: 消息队列
+        """
+        for message in messages:
+            self._send_back_message(message_queue, message)
+
+    def _update_consume_stats(
+        self, success: bool, duration: float, message_count: int
+    ) -> None:
+        """
+        更新消费统计信息
+
+        Args:
+            consume_result: 消费结果
+            message_count: 消息数量
+        """
+        # 更新总消费时长
+        self._stats["consume_duration_total"] += duration
+
+        # 更新失败消息数
+        if not success:
+            self._stats["messages_failed"] += message_count
 
     def _wait_for_processing_completion(self) -> None:
         """

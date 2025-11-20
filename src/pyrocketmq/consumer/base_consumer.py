@@ -27,6 +27,7 @@ from pyrocketmq.model import (
     HeartbeatData,
     MessageExt,
     MessageModel,
+    MessageProperty,
     MessageQueue,
     MessageSelector,
 )
@@ -1237,6 +1238,30 @@ class BaseConsumer:
                 exc_info=True,
             )
 
+    def _get_retry_topic(self) -> str:
+        """
+        获取消费者组对应的重试主题名称。
+
+        在RocketMQ中，当消息消费失败时，系统会按照重试主题将消息重新投递给消费者。
+        重试主题的命名规则为：%RETRY%{consumer_group}。
+
+        Returns:
+            str: 重试主题名称，格式为 %RETRY%{consumer_group}
+
+        Examples:
+            >>> retry_topic = self._get_retry_topic()
+            >>> print(retry_topic)
+            '%RETRY%order_consumer_group'
+
+        Note:
+            - 重试主题名前缀是固定的 %RETRY%
+            - 重试主题使用消费者组名而不是原始主题名
+            - 重试机制的消息会根据重试次数延迟投递
+            - 默认重试次数为16次，超过后消息会进入死信队列
+            - 每个消费者组都有自己独立的重试主题
+        """
+        return f"%RETRY%{self._config.consumer_group}"
+
     def _subscribe_retry_topic(self) -> None:
         """
         订阅重试主题
@@ -1247,7 +1272,7 @@ class BaseConsumer:
         Note:
             重试主题使用TAG选择器订阅所有消息（"*"），因为重试消息不需要额外过滤
         """
-        retry_topic = f"%RETRY%{self._config.consumer_group}"
+        retry_topic = self._get_retry_topic()
 
         try:
             from pyrocketmq.model.client_data import create_tag_selector
@@ -1350,6 +1375,12 @@ class BaseConsumer:
                 broker_addr
             )
             with pool.get_connection(usage="发送消息回broker") as conn:
+                message.set_property(
+                    MessageProperty.RETRY_TOPIC, self._get_retry_topic()
+                )
+                message.set_property(
+                    MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+                )
                 BrokerClient(conn).consumer_send_msg_back(
                     message,
                     0,  # delay_level: 0 表示立即重试
