@@ -48,6 +48,7 @@ from .allocate_queue_strategy import (
     create_average_strategy,
     create_hash_strategy,
 )
+from .async_base_consumer import AsyncBaseConsumer
 
 # ==================== 消费起始位置管理 ====================
 from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
@@ -59,6 +60,13 @@ from .async_listener import (
     SimpleAsyncMessageListener,
     create_async_message_listener,
 )
+from .async_offset_store_factory import (
+    AsyncOffsetStoreFactory,
+)
+from .async_offset_store_factory import (
+    create_offset_store as create_async_offset_store,
+)
+from .async_remote_offset_store import AsyncRemoteOffsetStore
 from .base_consumer import BaseConsumer
 from .concurrent_consumer import ConcurrentConsumer
 
@@ -136,6 +144,7 @@ from .subscription_manager import (
 __all__ = [
     # 核心消费者类
     "BaseConsumer",
+    "AsyncBaseConsumer",
     "ConcurrentConsumer",
     # 配置管理
     "ConsumerConfig",
@@ -151,8 +160,11 @@ __all__ = [
     "OffsetEntry",
     "LocalOffsetStore",
     "RemoteOffsetStore",
+    "AsyncRemoteOffsetStore",
     "OffsetStoreFactory",
+    "AsyncOffsetStoreFactory",
     "create_offset_store",
+    "create_async_offset_store",
     "validate_offset_store_config",
     # 订阅管理
     "SubscriptionManager",
