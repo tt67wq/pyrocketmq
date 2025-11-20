@@ -51,6 +51,14 @@ from .allocate_queue_strategy import (
 
 # ==================== 消费起始位置管理 ====================
 from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
+
+# ==================== 消息监听器 ====================
+from .async_listener import (
+    AsyncConsumeContext,
+    AsyncMessageListener,
+    SimpleAsyncMessageListener,
+    create_async_message_listener,
+)
 from .base_consumer import BaseConsumer
 from .concurrent_consumer import ConcurrentConsumer
 
@@ -90,8 +98,6 @@ from .errors import (
     create_offset_fetch_error,
     create_timeout_error,
 )
-
-# ==================== 消息监听器 ====================
 from .listener import (
     ConsumeContext,
     ConsumeResult,
@@ -105,10 +111,8 @@ from .local_offset_store import LocalOffsetStore
 from .offset_store import OffsetEntry, OffsetStore, ReadOffsetType
 from .offset_store_factory import (
     OffsetStoreFactory,
-    OffsetStoreManager,
     create_offset_store,
-    get_offset_store_manager,
-    get_offset_store_metrics,
+    validate_offset_store_config,
 )
 from .remote_offset_store import RemoteOffsetStore
 from .subscription_exceptions import (
@@ -148,15 +152,18 @@ __all__ = [
     "LocalOffsetStore",
     "RemoteOffsetStore",
     "OffsetStoreFactory",
-    "OffsetStoreManager",
     "create_offset_store",
-    "get_offset_store_manager",
-    "get_offset_store_metrics",
+    "validate_offset_store_config",
     # 订阅管理
     "SubscriptionManager",
     "SubscriptionEntry",
     "SubscriptionConflict",
-    # 消息监听器
+    # 异步消息监听器
+    "AsyncMessageListener",
+    "AsyncConsumeContext",
+    "SimpleAsyncMessageListener",
+    "create_async_message_listener",
+    # 同步消息监听器
     "MessageListener",
     "SimpleMessageListener",
     "ConsumeResult",
