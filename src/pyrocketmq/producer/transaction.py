@@ -543,7 +543,7 @@ def create_async_simple_transaction_listener(
 
 
 def create_transaction_message(
-    topic: str, body: ..., transaction_id: str, **kwargs
+    topic: str, body: ..., transaction_id: str, **kwargs: Any
 ) -> Message:
     """创建事务消息的便利函数
 

@@ -30,10 +30,11 @@ Consumer模块是pyrocketmq的消息消费者实现，提供完整的RocketMQ消
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    应用接口层                                │
-│  ConcurrentConsumer + 便利函数 + 工厂模式                    │
+│  ConcurrentConsumer + BaseConsumer + 工厂函数                │
 ├─────────────────────────────────────────────────────────────┤
 │                    业务逻辑层                                │
 │  消息处理 + 订阅管理 + 偏移量管理 + 重平衡                    │
+│  ProcessQueue + 消费监听器 + 队列分配策略                     │
 ├─────────────────────────────────────────────────────────────┤
 │                    基础服务层                                │
 │  配置管理 + 监听器体系 + 异常处理 + 监控统计                  │
@@ -48,8 +49,9 @@ Consumer模块是pyrocketmq的消息消费者实现，提供完整的RocketMQ消
 ```
 consumer/
 ├── __init__.py                    # 模块导出和公共接口
-├── concurrent_consumer.py         # 并发消费者核心实现
 ├── base_consumer.py              # 消费者抽象基类
+├── concurrent_consumer.py         # 并发消费者核心实现
+├── process_queue.py              # 消息处理队列实现
 ├── config.py                     # 消费者配置管理
 ├── listener.py                   # 消息监听器接口体系
 ├── subscription_manager.py       # 订阅关系管理器
@@ -59,7 +61,6 @@ consumer/
 ├── offset_store_factory.py       # 偏移量存储工厂
 ├── allocate_queue_strategy.py    # 队列分配策略
 ├── consume_from_where_manager.py # 消费起始位置管理
-├── topic_broker_mapping.py       # Topic-Broker映射管理
 ├── consumer_factory.py           # 消费者创建工厂
 ├── errors.py                     # 消费者专用异常
 ├── subscription_exceptions.py    # 订阅管理专用异常
@@ -210,14 +211,26 @@ class MessageListener(ABC):
     
     @abstractmethod
     def consume_message(self, messages: list[MessageExt], context: ConsumeContext) -> ConsumeResult:
-        """消费消息的抽象方法"""
+        """消费消息的抽象方法
+        
+        Args:
+            messages: 消息列表
+            context: 消费上下文
+            
+        Returns:
+            消费结果
+        """
         pass
 ```
 
 **MessageListenerOrderly** (顺序消费):
 ```python
 class MessageListenerOrderly(MessageListener):
-    """顺序消息监听器接口"""
+    """顺序消息监听器接口
+    
+    用于需要保证消息顺序性的场景，如订单状态更新、
+    用户操作记录等需要按序处理的业务场景。
+    """
     
     @abstractmethod
     def consume_message_orderly(
@@ -225,14 +238,21 @@ class MessageListenerOrderly(MessageListener):
         messages: list[MessageExt], 
         context: ConsumeContext
     ) -> ConsumeResult:
-        """顺序消费消息"""
+        """顺序消费消息
+        
+        注意：顺序消费时，messages中的消息会按照queue_offset排序
+        """
         pass
 ```
 
 **MessageListenerConcurrently** (并发消费):
 ```python
 class MessageListenerConcurrently(MessageListener):
-    """并发消息监听器接口"""
+    """并发消息监听器接口
+    
+    用于高吞吐量的消息消费场景，不保证消息的处理顺序，
+    但能够充分利用多线程并发处理能力。
+    """
     
     @abstractmethod
     def consume_message_concurrently(
@@ -240,7 +260,12 @@ class MessageListenerConcurrently(MessageListener):
         messages: list[MessageExt], 
         context: ConsumeContext
     ) -> ConsumeResult:
-        """并发消费消息"""
+        """并发消费消息
+        
+        注意：
+        - 应该实现幂等性处理，因为消息可能重复消费
+        - 尽量避免长时间阻塞，以免影响整体消费性能
+        """
         pass
 ```
 
@@ -323,6 +348,33 @@ def create_message_listener(
 - **冲突检测**: 自动检测和处理订阅冲突
 - **数据持久化**: 订阅数据的导入导出
 - **监控统计**: 订阅相关的性能指标
+
+**核心数据结构**:
+```python
+@dataclass
+class SubscriptionEntry:
+    """订阅条目数据结构"""
+    topic: str                           # 主题名称
+    selector: MessageSelector             # 消息选择器
+    subscribe_time: datetime              # 订阅时间
+    version: int = 1                      # 版本号
+    
+    def to_dict(self) -> dict[str, Any]:
+        """转换为字典序列化"""
+        
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SubscriptionEntry":
+        """从字典反序列化"""
+
+@dataclass
+class SubscriptionConflict:
+    """订阅冲突记录"""
+    topic: str                           # 冲突的主题
+    existing_selector: MessageSelector    # 已存在的选择器
+    new_selector: MessageSelector         # 新的选择器
+    conflict_time: datetime               # 冲突时间
+    resolution: str = ""                 # 冲突解决方案
+```
 
 **核心方法**:
 ```python
@@ -890,14 +942,14 @@ class ConsumeFromWhereManager:
 **核心特性**:
 - **多线程并发消费**: 基于ThreadPoolExecutor的并发处理
 - **自动重平衡**: 智能队列分配和动态调整
-- **消息缓存**: 高效的消息缓存和排序机制
+- **消息缓存**: 高效的消息缓存和排序机制，基于ProcessQueue实现
 - **故障恢复**: 完善的错误处理和自动重试
 - **监控指标**: 丰富的性能统计和健康状态监控
 
 **核心架构**:
 ```
 ConcurrentConsumer
-├── 生命周期管理
+├── 生命周期管理 (继承自BaseConsumer)
 │   ├── start() - 启动消费者
 │   ├── shutdown() - 优雅关闭
 │   └── _cleanup() - 资源清理
@@ -908,7 +960,7 @@ ConcurrentConsumer
 ├── 消息拉取
 │   ├── _pull_messages_loop() - 拉取消息循环
 │   ├── _get_or_initialize_offset() - 获取偏移量
-│   └── _add_messages_to_cache() - 消息缓存
+│   └── _add_messages_to_cache() - 消息缓存到ProcessQueue
 ├── 消息处理
 │   ├── _consume_messages_loop() - 消费处理循环
 │   ├── _consume_message() - 处理单条消息
