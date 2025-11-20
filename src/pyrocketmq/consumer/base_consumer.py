@@ -12,7 +12,6 @@ BaseConsumer是pyrocketmq消费者模块的核心抽象基类，定义了所有�
 # 标准库导入
 import threading
 import time
-from abc import ABC, abstractmethod
 from typing import Any
 
 # pyrocketmq导入
@@ -43,7 +42,7 @@ from .subscription_manager import SubscriptionManager
 logger = get_logger(__name__)
 
 
-class BaseConsumer(ABC):
+class BaseConsumer:
     """
     消费者抽象基类.
 
@@ -183,7 +182,6 @@ class BaseConsumer(ABC):
 
     # ==================== 核心生命周期方法 ====================
 
-    @abstractmethod
     def start(self) -> None:
         """
         启动消费者.
@@ -219,7 +217,6 @@ class BaseConsumer(ABC):
         if self._config.message_model == MessageModel.CLUSTERING:
             self._subscribe_retry_topic()
 
-    @abstractmethod
     def shutdown(self) -> None:
         """
         停止消费者.

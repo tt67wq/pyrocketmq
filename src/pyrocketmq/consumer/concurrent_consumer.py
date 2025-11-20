@@ -223,9 +223,6 @@ class ConcurrentConsumer(BaseConsumer):
                 # 启动消息处理任务
                 self._start_consume_tasks()
 
-                # 启动消息拉取任务
-                # self._start_pull_tasks()
-
                 self._stats["start_time"] = time.time()
 
                 logger.info(

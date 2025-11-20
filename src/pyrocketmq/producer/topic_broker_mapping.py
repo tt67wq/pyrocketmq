@@ -273,9 +273,6 @@ class TopicBrokerMapping:
 
             # 检查路由信息是否过期
             if route_info.is_expired(self._default_route_timeout):
-                print("!!!!!!!!!!!!!!!!")
-                print(self._default_route_timeout)
-                print(route_info.last_update_time)
                 return []
 
             # 直接返回预构建订阅队列列表的副本

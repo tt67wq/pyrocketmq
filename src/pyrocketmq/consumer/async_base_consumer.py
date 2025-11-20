@@ -13,18 +13,19 @@ AsyncBaseConsumer是pyrocketmq消费者模块的异步抽象基类，定义了�
 
 import asyncio
 import time
-from abc import ABC, abstractmethod
 from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
+from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     ConsumeResult,
     MessageExt,
     MessageSelector,
+    TopicRouteData,
 )
 from pyrocketmq.nameserver.async_manager import (
     AsyncNameServerManager,
@@ -43,7 +44,7 @@ from .subscription_manager import SubscriptionManager
 logger = get_logger(__name__)
 
 
-class AsyncBaseConsumer(ABC):
+class AsyncBaseConsumer:
     """
     异步消费者抽象基类
 
@@ -120,6 +121,32 @@ class AsyncBaseConsumer(ABC):
         self._route_refresh_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
 
+        # 路由刷新和心跳配置
+        self._route_refresh_interval: float = 30000.0  # 30秒
+        self._heartbeat_interval: float = 30000.0  # 30秒
+        self._last_heartbeat_time: float = 0
+
+        # 异步事件
+        self._route_refresh_event: asyncio.Event = asyncio.Event()
+        self._heartbeat_event: asyncio.Event = asyncio.Event()
+
+        # 路由映射
+        self._topic_broker_mapping: ConsumerTopicBrokerMapping | None = (
+            None  # TopicBrokerMapping实例
+        )
+
+        # 统计信息
+        self._stats: dict[str, Any] = {
+            "route_refresh_count": 0,
+            "route_refresh_success_count": 0,
+            "route_refresh_failure_count": 0,
+            "heartbeat_count": 0,
+            "heartbeat_success_count": 0,
+            "heartbeat_failure_count": 0,
+            "last_route_refresh_time": 0,
+            "last_heartbeat_time": 0,
+        }
+
         # 消费者状态
         self._start_time: float = 0
         self._shutdown_time: float = 0
@@ -137,7 +164,6 @@ class AsyncBaseConsumer(ABC):
             },
         )
 
-    @abstractmethod
     async def start(self) -> None:
         """
         异步启动消费者
@@ -148,9 +174,8 @@ class AsyncBaseConsumer(ABC):
         Raises:
             ConsumerError: 启动过程中发生错误时抛出
         """
-        pass
+        await self._async_start()
 
-    @abstractmethod
     async def shutdown(self) -> None:
         """
         异步关闭消费者
@@ -161,29 +186,7 @@ class AsyncBaseConsumer(ABC):
         Raises:
             ConsumerError: 关闭过程中发生错误时抛出
         """
-        pass
-
-    @abstractmethod
-    async def _consume_message(
-        self, messages: list[MessageExt], context: AsyncConsumeContext
-    ) -> ConsumeResult:
-        """
-        异步消费消息
-
-        异步消费一批消息，需要由具体实现类来提供具体的消费逻辑。
-        这是一个抽象方法，定义了消费消息的核心接口。
-
-        Args:
-            messages: 需要消费的消息列表
-            context: 异步消费上下文
-
-        Returns:
-            消费结果，决定消息如何被确认或重试
-
-        Raises:
-            ConsumerError: 消费过程中发生错误时抛出
-        """
-        pass
+        await self._async_shutdown()
 
     async def subscribe(self, topic: str, selector: MessageSelector) -> None:
         """
@@ -422,6 +425,16 @@ class AsyncBaseConsumer(ABC):
             )
             self._logger.info("消费起始位置管理器创建成功")
 
+            # 创建ConsumerTopicBrokerMapping
+
+            self._topic_broker_mapping = ConsumerTopicBrokerMapping()
+
+            # 启动路由刷新任务
+            await self._start_route_refresh_task()
+
+            # 启动心跳任务
+            await self._start_heartbeat_task()
+
             self._start_time = time.time()
             self._is_running = True
 
@@ -453,6 +466,10 @@ class AsyncBaseConsumer(ABC):
 
             self._is_running = False
             self._shutdown_time = time.time()
+
+            # 通知路由刷新和心跳任务退出
+            self._route_refresh_event.set()
+            self._heartbeat_event.set()
 
             # 关闭异步任务
             await self._shutdown_async_tasks()
@@ -551,4 +568,372 @@ class AsyncBaseConsumer(ABC):
             f"message_model='{self._config.message_model}', "
             f"is_running={self._is_running}"
             f")"
+        )
+
+    # ==================== 异步路由刷新任务 ====================
+
+    async def _start_route_refresh_task(self) -> None:
+        """启动异步路由刷新任务"""
+        self._route_refresh_task = asyncio.create_task(self._route_refresh_loop())
+
+    async def _route_refresh_loop(self) -> None:
+        """异步路由刷新循环
+
+        定期刷新所有订阅Topic的路由信息，确保消费者能够感知到集群拓扑的变化。
+        """
+        self._logger.info(
+            "Async route refresh loop started",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "refresh_interval": self._route_refresh_interval,
+            },
+        )
+
+        await self._refresh_all_routes()
+
+        while self._is_running:
+            try:
+                # 等待指定间隔或关闭事件
+                try:
+                    await asyncio.wait_for(
+                        self._route_refresh_event.wait(),
+                        timeout=self._route_refresh_interval / 1000,
+                    )
+                    # 收到事件信号，退出循环
+                    break
+                except asyncio.TimeoutError:
+                    # 超时继续执行路由刷新
+                    pass
+
+                # 检查是否正在关闭
+                if self._route_refresh_event.is_set():
+                    break
+
+                # 执行路由刷新
+                await self._refresh_all_routes()
+                if self._topic_broker_mapping:
+                    self._topic_broker_mapping.clear_expired_routes()
+
+                # 更新统计信息
+                self._stats["route_refresh_count"] += 1
+                self._stats["route_refresh_success_count"] += 1
+                self._stats["last_route_refresh_time"] = time.time()
+
+                self._logger.debug(
+                    "Async route refresh completed",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "refresh_count": self._stats["route_refresh_count"],
+                        "topics_count": (
+                            len(self._topic_broker_mapping.get_all_topics())
+                            if self._topic_broker_mapping
+                            else 0
+                        ),
+                    },
+                )
+
+            except Exception as e:
+                self._stats["route_refresh_failure_count"] += 1
+                self._logger.warning(
+                    f"Error in async route refresh loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                        "refresh_count": self._stats["route_refresh_count"],
+                        "failure_count": self._stats["route_refresh_failure_count"],
+                    },
+                    exc_info=True,
+                )
+
+                # 发生异常时，等待较短时间后重试
+                try:
+                    await asyncio.wait_for(
+                        self._route_refresh_event.wait(), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    pass
+
+        self._logger.info(
+            "Async route refresh loop stopped",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "total_refreshes": self._stats["route_refresh_count"],
+                "success_count": self._stats["route_refresh_success_count"],
+                "failure_count": self._stats["route_refresh_failure_count"],
+            },
+        )
+
+    async def _refresh_all_routes(self) -> None:
+        """异步刷新所有Topic的路由信息"""
+        topics: set[str] = set()
+
+        # 收集所有需要刷新路由的Topic
+        if self._topic_broker_mapping:
+            topics.update(self._topic_broker_mapping.get_all_topics())
+        topics.update(self._subscription_manager.get_topics())
+
+        for topic in topics:
+            try:
+                if (
+                    not self._topic_broker_mapping
+                    or self._topic_broker_mapping.get_route_info(topic) is None
+                ):
+                    await self._update_route_info(topic)
+            except Exception as e:
+                self._logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
+
+    async def _update_route_info(self, topic: str) -> bool:
+        """异步更新Topic路由信息"""
+        self._logger.info(
+            "Updating route info for topic",
+            extra={
+                "topic": topic,
+            },
+        )
+
+        try:
+            if not self._nameserver_manager:
+                return False
+
+            topic_route_data: (
+                TopicRouteData | None
+            ) = await self._nameserver_manager.get_topic_route(topic)
+            if not topic_route_data:
+                self._logger.error(
+                    "Failed to get topic route data",
+                    extra={
+                        "topic": topic,
+                    },
+                )
+                return False
+
+            # 更新TopicBrokerMapping中的路由信息
+            if self._topic_broker_mapping:
+                self._topic_broker_mapping.update_route_info(topic, topic_route_data)
+
+            return True
+
+        except Exception as e:
+            self._logger.error(
+                f"Error updating route info for topic {topic}: {e}",
+                extra={
+                    "topic": topic,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            return False
+
+    # ==================== 异步心跳任务 ====================
+
+    async def _start_heartbeat_task(self) -> None:
+        """启动异步心跳任务"""
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    async def _heartbeat_loop(self) -> None:
+        """异步消费者心跳发送循环"""
+        self._logger.info("Async heartbeat loop started")
+
+        await self._send_heartbeat_to_all_brokers()
+        self._last_heartbeat_time = time.time()
+
+        while self._is_running:
+            try:
+                current_time = time.time()
+
+                # 计算到下一次心跳的等待时间
+                time_until_next_heartbeat = self._heartbeat_interval - (
+                    current_time - self._last_heartbeat_time
+                )
+
+                # 如果还没到心跳时间，等待一小段时间或直到被唤醒
+                if time_until_next_heartbeat > 0:
+                    # 使用Event.wait()替代asyncio.sleep()
+                    wait_timeout = min(time_until_next_heartbeat, 1.0)  # 最多等待1秒
+                    try:
+                        await asyncio.wait_for(
+                            self._heartbeat_event.wait(), timeout=wait_timeout
+                        )
+                        # Event被触发，检查是否需要退出
+                        if not self._is_running:
+                            break
+                        # 重置事件状态
+                        self._heartbeat_event.clear()
+                        continue  # 重新计算等待时间
+                    except asyncio.TimeoutError:
+                        pass  # 超时继续执行心跳逻辑
+
+                # 检查是否需要发送心跳
+                current_time = time.time()  # 重新获取当前时间
+                if current_time - self._last_heartbeat_time >= self._heartbeat_interval:
+                    await self._send_heartbeat_to_all_brokers()
+                    self._last_heartbeat_time = current_time
+
+            except Exception as e:
+                self._logger.error(
+                    f"Error in async heartbeat loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 等待一段时间再重试
+                try:
+                    await asyncio.wait_for(self._heartbeat_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+
+        self._logger.info("Async heartbeat loop stopped")
+
+    async def _send_heartbeat_to_all_brokers(self) -> None:
+        """异步向所有Broker发送心跳"""
+        self._logger.debug("Sending heartbeat to all brokers...")
+
+        try:
+            # 收集所有Broker地址
+            broker_addrs = await self._collect_broker_addresses()
+            if not broker_addrs:
+                return
+
+            # 构建心跳数据
+            heartbeat_data = self._build_heartbeat_data()
+
+            # 向每个Broker发送心跳
+            heartbeat_success_count = 0
+            heartbeat_failure_count = 0
+
+            for broker_addr in broker_addrs:
+                if await self._send_heartbeat_to_broker(broker_addr, heartbeat_data):
+                    heartbeat_success_count += 1
+                else:
+                    heartbeat_failure_count += 1
+
+            # 更新统计信息
+            await self._update_heartbeat_statistics(
+                heartbeat_success_count, heartbeat_failure_count, len(broker_addrs)
+            )
+
+        except Exception as e:
+            self._logger.error(
+                f"Error sending heartbeat to brokers: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
+    async def _collect_broker_addresses(self) -> list[str]:
+        """收集所有Broker地址"""
+        broker_addrs = []
+
+        try:
+            if self._topic_broker_mapping:
+                broker_addrs = self._topic_broker_mapping.get_available_brokers()
+
+            # 如果没有从TopicBrokerMapping获取到地址，尝试从订阅的Topic获取
+            if not broker_addrs and self._nameserver_manager:
+                topics = self._subscription_manager.get_topics()
+                for topic in topics:
+                    try:
+                        route_data = (
+                            await self._nameserver_manager.query_topic_route_info(topic)
+                        )
+                        if route_data and route_data.broker_datas:
+                            for broker_data in route_data.broker_datas:
+                                broker_addrs.extend(broker_data.broker_addresses)
+                    except Exception as e:
+                        self._logger.debug(
+                            f"Failed to get broker addresses for topic {topic}: {e}",
+                            extra={"topic": topic, "error": str(e)},
+                        )
+
+        except Exception as e:
+            self._logger.error(
+                f"Error collecting broker addresses: {e}",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
+
+        return list(set(broker_addrs))  # 去重
+
+    def _build_heartbeat_data(self) -> dict[str, Any]:
+        """构建心跳数据"""
+        return {
+            "consumer_group": self._config.consumer_group,
+            "client_id": self._config.client_id,
+            "subscription_data": [
+                {
+                    "topic": topic,
+                    "sub_string": entry.sub_string,
+                    "expression_type": entry.expression_type,
+                }
+                for topic, entry in self._subscription_manager.get_all_subscriptions().items()
+            ],
+            "heartbeat_time": time.time(),
+        }
+
+    async def _send_heartbeat_to_broker(
+        self, broker_addr: str, heartbeat_data: dict[str, Any]
+    ) -> bool:
+        """异步向指定Broker发送心跳"""
+        try:
+            if not self._broker_manager:
+                return False
+
+            pool = await self._broker_manager.get_connection_pool(broker_addr)
+            async with pool.get_connection("heartbeat") as conn:
+                from pyrocketmq.broker import AsyncBrokerClient
+
+                broker_client = AsyncBrokerClient(conn)
+
+                # 发送心跳
+                result = await broker_client.send_heartbeat(heartbeat_data)
+                if result:
+                    self._logger.debug(
+                        f"Heartbeat sent successfully to {broker_addr}",
+                        extra={"broker_addr": broker_addr},
+                    )
+                else:
+                    self._logger.warning(
+                        f"Failed to send heartbeat to {broker_addr}",
+                        extra={"broker_addr": broker_addr},
+                    )
+                return result
+
+        except Exception as e:
+            self._logger.warning(
+                f"Error sending heartbeat to {broker_addr}: {e}",
+                extra={
+                    "broker_addr": broker_addr,
+                    "error": str(e),
+                },
+            )
+            return False
+
+    async def _update_heartbeat_statistics(
+        self, success_count: int, failure_count: int, total_count: int
+    ) -> None:
+        """更新心跳统计信息"""
+        self._stats["heartbeat_count"] += 1
+        self._stats["heartbeat_success_count"] += success_count
+        self._stats["heartbeat_failure_count"] += failure_count
+        self._stats["last_heartbeat_time"] = time.time()
+
+        self._logger.debug(
+            "Heartbeat statistics updated",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "total_heartbeats": self._stats["heartbeat_count"],
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "total_brokers": total_count,
+            },
         )

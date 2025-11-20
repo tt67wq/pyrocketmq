@@ -16,16 +16,17 @@ pyrocketmq是一个功能完整的Python实现的RocketMQ客户端库，基于Ro
 - **Broker支持**: ✅ 完整客户端实现，支持消息发送、拉取、偏移量管理等
 - **Producer模块**: ✅ 完整版本实现完成，支持同步/异步消息发送、批量消息发送、心跳机制和完整的事务消息功能
 - **事务消息模块**: ✅ 完整实现，支持TransactionProducer、事务监听器和完整的生命周期管理
-- **Consumer模块**: 🚧 基础架构完成，核心Consumer实现中
+- **Consumer模块**: ✅ 完整实现完成，支持同步和异步两套完整架构
   - ✅ 配置管理：完整的Consumer配置体系
-  - ✅ 偏移量存储：本地/远程存储完整实现
+  - ✅ 偏移量存储：本地/远程存储完整实现（同步+异步）
   - ✅ 订阅管理：订阅关系管理和冲突检测
-  - ✅ 消息监听器：并发和顺序消费接口
+  - ✅ 消息监听器：并发和顺序消费接口（同步+异步）
   - ✅ 队列分配策略：平均分配算法实现
-  - ✅ 消费起始位置管理：三种策略支持
+  - ✅ 消费起始位置管理：三种策略支持（同步+异步）
   - ✅ 异常体系：20+种专用异常类型
   - ✅ 监控指标：全面的性能和状态监控
-  - ❌ 核心Consumer：ConcurrentConsumer/OrderlyConsumer实现中
+  - ✅ 抽象基类：BaseConsumer和AsyncBaseConsumer完整实现
+  - ✅ 工厂模式：OffsetStoreFactory和AsyncOffsetStoreFactory
 
 ## 开发环境配置
 
@@ -577,16 +578,88 @@ with manager.connection("broker1:10911") as broker_client:
 
 ### 7. Consumer层 (`src/pyrocketmq/consumer/`) - 消息消费者
 
-**模块概述**: Consumer模块是pyrocketmq的消息消费者实现，提供完整的消息消费、订阅管理、偏移量存储和消息监听功能。采用分层架构设计，支持并发消费和顺序消费两种模式。
+**模块概述**: Consumer模块是pyrocketmq的消息消费者实现，提供完整的消息消费、订阅管理、偏移量存储和消息监听功能。采用分层架构设计，支持并发消费和顺序消费两种模式。提供同步和异步两套完整的实现，满足不同应用场景的需求。
 
 **核心组件**:
-- **BaseConsumer**: 消费者抽象基类，定义生命周期管理
+- **BaseConsumer**: 同步消费者抽象基类，定义生命周期管理
+- **AsyncBaseConsumer**: 异步消费者抽象基类，支持高并发异步应用
 - **ConsumerConfig**: 消费者配置管理，支持完整的消费行为配置
-- **消息监听器体系**: MessageListener、MessageListenerConcurrently、MessageListenerOrderly
-- **偏移量存储系统**: RemoteOffsetStore(集群模式)、LocalOffsetStore(广播模式)
+- **消息监听器体系**: 
+  - 同步：MessageListener、MessageListenerConcurrently、MessageListenerOrderly
+  - 异步：AsyncMessageListener、SimpleAsyncMessageListener
+- **偏移量存储系统**: 
+  - 同步：RemoteOffsetStore(集群模式)、LocalOffsetStore(广播模式)
+  - 异步：AsyncRemoteOffsetStore(集群模式)、AsyncLocalOffsetStore(广播模式)
+- **偏移量存储工厂**:
+  - 同步：OffsetStoreFactory
+  - 异步：AsyncOffsetStoreFactory
 - **订阅管理器**: SubscriptionManager，管理主题订阅和选择器
 - **队列分配策略**: AverageAllocateStrategy，实现平均分配算法
-- **消费起始位置管理**: ConsumeFromWhereManager，支持三种起始策略
+- **消费起始位置管理**: 
+  - 同步：ConsumeFromWhereManager
+  - 异步：AsyncConsumeFromWhereManager
+
+#### AsyncBaseConsumer - 异步消费者抽象基类
+
+**功能描述**: AsyncBaseConsumer是pyrocketmq消费者模块的异步抽象基类，定义了所有异步消费者的通用接口和基础功能。所有网络操作、IO操作都采用asyncio异步编程模型，适用于高并发异步应用场景。
+
+**核心功能**:
+- **异步配置管理**: 统一的Consumer配置管理
+- **异步订阅管理**: Topic订阅和消息选择器的异步管理
+- **异步消息监听**: 支持AsyncMessageListener的注册和处理
+- **异步生命周期**: 支持异步启动、停止、资源清理
+- **异步错误处理**: 统一的异步异常处理和错误恢复
+
+**核心接口**:
+```python
+class AsyncBaseConsumer(ABC):
+    @abstractmethod
+    async def start(self) -> None:
+        """异步启动消费者"""
+        pass
+
+    @abstractmethod  
+    async def shutdown(self) -> None:
+        """异步关闭消费者"""
+        pass
+
+    @abstractmethod
+    async def _consume_message(self, messages: list[MessageExt], context: AsyncConsumeContext) -> ConsumeResult:
+        """异步消费消息"""
+        pass
+
+    async def subscribe(self, topic: str, selector: MessageSelector) -> None:
+        """异步订阅Topic"""
+        pass
+
+    async def unsubscribe(self, topic: str) -> None:
+        """异步取消订阅Topic"""
+        pass
+
+    async def register_message_listener(self, listener: AsyncMessageListener) -> None:
+        """异步注册消息监听器"""
+        pass
+```
+
+**异步生命周期**:
+```python
+class MyAsyncConsumer(AsyncBaseConsumer):
+    async def start(self):
+        await self._async_start()  # 启动基础组件
+        # 启动消费循环
+        pass
+    
+    async def shutdown(self):
+        await self._async_shutdown()  # 关闭基础组件
+        # 停止消费循环
+        pass
+```
+
+**设计特点**:
+- 异步优先: 所有IO操作都采用async/await模式
+- 线程安全: 使用asyncio.Lock保证并发安全
+- 资源管理: 完善的异步资源清理机制
+- 可扩展性: 清晰的抽象接口，便于扩展
 
 #### ConsumerConfig配置管理
 **配置类别**:
@@ -634,14 +707,135 @@ class MessageListenerOrderly(MessageListener):
 **存储模式**:
 - **RemoteOffsetStore**: 集群模式，偏移量存储在Broker端，支持多消费者协调
 - **LocalOffsetStore**: 广播模式，偏移量存储在本地文件，每个消费者独立维护
-- **OffsetStoreFactory**: 工厂模式创建存储实例
-- **OffsetStoreManager**: 全局存储实例管理，支持实例复用
+- **AsyncRemoteOffsetStore**: 异步集群模式，偏移量存储在Broker端
+- **AsyncLocalOffsetStore**: 异步广播模式，偏移量存储在本地文件
+- **OffsetStoreFactory**: 同步偏移量存储工厂模式创建存储实例
+- **AsyncOffsetStoreFactory**: 异步偏移量存储工厂模式创建存储实例
 
-**关键特性**:
-- 线程安全的偏移量更新和持久化
-- 支持批量提交和定期持久化
-- 完整的指标收集和监控
-- 原子性文件操作保证数据一致性
+#### 异步消息监听器体系
+
+**AsyncMessageListener**: 异步消息监听器基础接口，为高并发异步应用提供消息处理能力。
+
+**核心接口**:
+```python
+class AsyncMessageListener(ABC):
+    @abstractmethod
+    async def consume_message(self, messages: list[MessageExt], context: AsyncConsumeContext) -> ConsumeResult:
+        """异步消费消息"""
+        pass
+
+class SimpleAsyncMessageListener(AsyncMessageListener):
+    async def consume_message(self, messages: list[MessageExt], context: AsyncConsumeContext) -> ConsumeResult:
+        """简单的异步消息处理实现"""
+        for message in messages:
+            print(f"异步消费消息: {message.body.decode()}")
+        return ConsumeResult.CONSUME_SUCCESS
+```
+
+**使用示例**:
+```python
+# 自定义异步消息监听器
+class AsyncOrderProcessor(AsyncMessageListener):
+    async def consume_message(self, messages: list[MessageExt], context: AsyncConsumeContext) -> ConsumeResult:
+        for message in messages:
+            try:
+                order_data = json.loads(message.body.decode())
+                await process_order_async(order_data)
+                print(f"订单异步处理成功: {order_data['order_id']}")
+            except Exception as e:
+                print(f"订单异步处理失败: {e}")
+                return ConsumeResult.RECONSUME_LATER
+        return ConsumeResult.CONSUME_SUCCESS
+```
+
+**异步消费上下文**:
+```python
+@dataclass
+class AsyncConsumeContext:
+    """异步消费上下文，提供消费过程中的状态信息"""
+    queue: MessageQueue
+    message_count: int
+    is_first_time: bool
+    processing_start_time: float
+    async def get_current_time(self) -> float:
+        """获取当前时间戳"""
+        return time.time()
+    async def get_processing_duration(self) -> float:
+        """获取处理时长"""
+        return await self.get_current_time() - self.processing_start_time
+```
+
+#### 异步偏移量存储工厂
+
+**AsyncOffsetStoreFactory**: 异步偏移量存储工厂类，为高并发异步应用场景提供偏移量存储创建功能。
+
+**核心功能**:
+- **异步创建**: 所有创建操作都采用async/await模式
+- **异步存储支持**: 集群模式使用AsyncRemoteOffsetStore
+- **广播模式兼容**: 支持LocalOffsetStore（本地存储无需异步）
+- **异步验证**: 支持配置参数的验证
+- **自动启动**: 可选择创建后自动启动服务
+
+**异步创建接口**:
+```python
+class AsyncOffsetStoreFactory:
+    @staticmethod
+    async def create_offset_store(
+        consumer_group: str,
+        message_model: str,
+        namesrv_manager: AsyncNameServerManager,
+        broker_manager: AsyncBrokerManager,
+        store_path: str = "~/.rocketmq/offsets",
+        persist_interval: int = 5000,
+        auto_start: bool = True,
+        **kwargs: Any,
+    ) -> AsyncOffsetStore:
+        """异步创建偏移量存储实例"""
+        pass
+```
+
+**便利函数**:
+```python
+async def create_offset_store(
+    consumer_group: str,
+    message_model: str,
+    namesrv_manager: AsyncNameServerManager,
+    broker_manager: AsyncBrokerManager,
+    **kwargs: Any,
+) -> AsyncOffsetStore:
+    """异步便捷函数：创建偏移量存储实例"""
+    pass
+```
+
+**使用示例**:
+```python
+# 集群模式异步偏移量存储
+remote_store = await AsyncOffsetStoreFactory.create_offset_store(
+    consumer_group="test_group",
+    message_model=MessageModel.CLUSTERING,
+    namesrv_manager=async_namesrv_mgr,
+    broker_manager=async_broker_mgr
+)
+
+# 广播模式偏移量存储
+local_store = await create_offset_store(
+    consumer_group="broadcast_group", 
+    message_model=MessageModel.BROADCASTING,
+    store_path="/tmp/offsets"
+)
+```
+
+**设计特点**:
+- 异步优先: 符合asyncio编程模式
+- 向后兼容: 与同步版本保持相同API设计
+- 完整功能: 支持所有偏移量存储场景
+- 错误安全: 完善的异常处理和参数验证
+
+#### 偏移量存储特性
+- **线程安全的偏移量更新和持久化**
+- **支持批量提交和定期持久化**  
+- **完整的指标收集和监控**
+- **原子性文件操作保证数据一致性**
 
 #### 订阅管理器
 **核心功能**:
@@ -1082,6 +1276,15 @@ uv sync
 ## 📚 文档维护信息
 
 ### 版本历史
+- **v2.2** (2025-01-20): 异步Consumer架构完整实现
+  - ✅ 新增AsyncBaseConsumer异步消费者抽象基类，支持完整异步生命周期管理
+  - ✅ 实现AsyncMessageListener异步消息监听器体系，包含AsyncConsumeContext
+  - ✅ 完成AsyncOffsetStoreFactory异步偏移量存储工厂，支持集群和广播模式
+  - ✅ 新增AsyncConsumeFromWhereManager异步消费起始位置管理器
+  - ✅ 完善异步Consumer模块文档，包含完整的API说明和使用示例
+  - ✅ 更新项目状态，Consumer模块从"实现中"升级为"完整实现"
+  - ✅ 统一同步和异步两套完整架构，满足不同应用场景需求
+
 - **v2.1** (2025-01-07): Consumer模块文档补充
   - ✅ 新增Consumer层详细说明，包含完整的模块功能描述
   - ✅ 添加Consumer配置管理、消息监听器、偏移量存储等核心组件介绍
@@ -1149,6 +1352,6 @@ CLAUDE.md (项目级文档)
 
 ---
 
-**最后更新**: 2025-01-07
-**文档版本**: v2.1
-**项目状态**: ✅ 生产就绪，Consumer模块实现中
+**最后更新**: 2025-01-20
+**文档版本**: v2.2
+**项目状态**: ✅ 生产就绪，Consumer模块完整实现

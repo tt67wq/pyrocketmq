@@ -78,7 +78,7 @@ class TransportConfig:
         """获取地址元组"""
         return (self.host, self.port)
 
-    def copy_with(self, **kwargs) -> "TransportConfig":
+    def copy_with(self, **kwargs: Any) -> "TransportConfig":
         """创建配置副本并更新指定字段"""
         return TransportConfig(
             host=kwargs.get("host", self.host),
