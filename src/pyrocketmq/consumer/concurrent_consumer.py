@@ -819,8 +819,8 @@ class ConcurrentConsumer(BaseConsumer):
                 continue
             try:
                 # 执行单次拉取操作
-                pull_result = self._perform_single_pull(
-                    message_queue, suggest_broker_id
+                pull_result: tuple[list[MessageExt], int, int] | None = (
+                    self._perform_single_pull(message_queue, suggest_broker_id)
                 )
 
                 if pull_result is None:
@@ -1510,7 +1510,6 @@ class ConcurrentConsumer(BaseConsumer):
                             },
                         )
                 else:
-                    # TODO: send msg back
                     for message in messages:
                         self._send_back_message(message_queue, message)
 
@@ -1550,33 +1549,6 @@ class ConcurrentConsumer(BaseConsumer):
                     "consumer_group": self._config.consumer_group,
                     "error": str(e),
                 },
-            )
-
-    def _send_back_message(
-        self, message_queue: MessageQueue, message: MessageExt
-    ) -> None:
-        """
-        将消息发送回broker
-        """
-        broker_addr = self._name_server_manager.get_broker_address(
-            message_queue.broker_name
-        )
-        if not broker_addr:
-            logger.error(
-                "Failed to get broker address ",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "broker_name": message_queue.broker_name,
-                },
-            )
-            return
-        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
-        with pool.get_connection(usage="发送消息回broker") as conn:
-            BrokerClient(conn).consumer_send_msg_back(
-                message,
-                0,
-                self._config.consumer_group,
-                self._config.max_reconsume_times,
             )
 
     # ==================== 内部方法：重平衡任务 ====================

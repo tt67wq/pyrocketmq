@@ -798,57 +798,15 @@ class AsyncBrokerClient:
                 },
             )
 
+            # 解码响应
+            result: PullMessageResult = PullMessageResult.decode_from_cmd(response)
+
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
                 # 成功拉取到消息
-                if response:
-                    result: PullMessageResult = PullMessageResult.decode_from_cmd(
-                        response
-                    )
-                    result.pull_rt = pull_rt
-                    logger.info(
-                        "Successfully pulled messages",
-                        extra={
-                            "client_id": self._client_id,
-                            "async_operation_id": async_operation_id,
-                            "operation_type": "async_pull_message",
-                            "consumer_group": consumer_group,
-                            "topic": topic,
-                            "queue_id": queue_id,
-                            "message_count": result.message_count,
-                            "next_begin_offset": result.next_begin_offset,
-                            "execution_time": pull_rt,
-                            "timestamp": time.time(),
-                        },
-                    )
-                    return result
-                else:
-                    # 没有消息但响应成功
-                    logger.info(
-                        "No messages found",
-                        extra={
-                            "client_id": self._client_id,
-                            "async_operation_id": async_operation_id,
-                            "operation_type": "async_pull_message",
-                            "consumer_group": consumer_group,
-                            "topic": topic,
-                            "queue_id": queue_id,
-                            "execution_time": pull_rt,
-                            "timestamp": time.time(),
-                        },
-                    )
-                    return PullMessageResult(
-                        messages=[],
-                        next_begin_offset=queue_offset,
-                        min_offset=queue_offset,
-                        max_offset=queue_offset,
-                        pull_rt=pull_rt,
-                    )
-
-            elif response.code == ResponseCode.PULL_NOT_FOUND:
-                # 没有找到消息
+                result.pull_rt = pull_rt
                 logger.info(
-                    "No messages found - response code",
+                    "Successfully pulled messages",
                     extra={
                         "client_id": self._client_id,
                         "async_operation_id": async_operation_id,
@@ -856,18 +814,33 @@ class AsyncBrokerClient:
                         "consumer_group": consumer_group,
                         "topic": topic,
                         "queue_id": queue_id,
-                        "response_code": ResponseCode.PULL_NOT_FOUND,
+                        "message_count": result.message_count,
+                        "next_offset": result.next_begin_offset,
                         "execution_time": pull_rt,
+                        "status": "success",
                         "timestamp": time.time(),
                     },
                 )
-                return PullMessageResult(
-                    messages=[],
-                    next_begin_offset=queue_offset,
-                    min_offset=queue_offset,
-                    max_offset=queue_offset,
-                    pull_rt=pull_rt,
+                return result
+
+            elif response.code == ResponseCode.PULL_NOT_FOUND:
+                # 没有找到消息
+                logger.info(
+                    "No messages found",
+                    extra={
+                        "client_id": self._client_id,
+                        "async_operation_id": async_operation_id,
+                        "operation_type": "async_pull_message",
+                        "consumer_group": consumer_group,
+                        "topic": topic,
+                        "queue_id": queue_id,
+                        "response_code": response.code,
+                        "execution_time": pull_rt,
+                        "status": "not_found",
+                        "timestamp": time.time(),
+                    },
                 )
+                return result
 
             elif response.code == ResponseCode.PULL_OFFSET_MOVED:
                 # 偏移量已移动
@@ -880,13 +853,18 @@ class AsyncBrokerClient:
                         "consumer_group": consumer_group,
                         "topic": topic,
                         "queue_id": queue_id,
-                        "response_code": ResponseCode.PULL_OFFSET_MOVED,
+                        "response_code": response.code,
                         "error_message": response.remark,
                         "execution_time": pull_rt,
+                        "status": "offset_moved",
                         "timestamp": time.time(),
                     },
                 )
-                raise MessagePullError(f"Pull offset moved: {response.remark}")
+                raise MessagePullError(
+                    f"Pull offset moved: {response.remark}",
+                    topic=topic,
+                    queue_id=queue_id,
+                )
 
             elif response.code == ResponseCode.PULL_RETRY_IMMEDIATELY:
                 # 需要立即重试
@@ -899,13 +877,14 @@ class AsyncBrokerClient:
                         "consumer_group": consumer_group,
                         "topic": topic,
                         "queue_id": queue_id,
-                        "response_code": ResponseCode.PULL_RETRY_IMMEDIATELY,
+                        "response_code": response.code,
                         "error_message": response.remark,
                         "execution_time": pull_rt,
+                        "status": "retry_immediately",
                         "timestamp": time.time(),
                     },
                 )
-                raise MessagePullError(f"Pull retry immediately: {response.remark}")
+                return result
 
             else:
                 # 其他错误响应
@@ -922,10 +901,14 @@ class AsyncBrokerClient:
                         "response_code": response.code,
                         "error_message": error_msg,
                         "execution_time": pull_rt,
+                        "status": "failed",
                         "timestamp": time.time(),
                     },
                 )
-                raise BrokerResponseError(f"Pull message failed: {error_msg}")
+                raise BrokerResponseError(
+                    f"Pull message failed: {error_msg}",
+                    response_code=response.code,
+                )
 
         except Exception as e:
             if isinstance(

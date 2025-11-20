@@ -113,8 +113,12 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         self._rebalance_task: asyncio.Task[None] | None = None
 
         # 异步信号量控制并发数
-        self._consume_semaphore: asyncio.Semaphore | None = None
-        self._pull_semaphore: asyncio.Semaphore | None = None
+        self._consume_semaphore: asyncio.Semaphore = asyncio.Semaphore(
+            self._config.consume_thread_max
+        )
+        self._pull_semaphore: asyncio.Semaphore = asyncio.Semaphore(
+            min(self._config.consume_thread_max, 10)
+        )
 
         # 处理队列
         self._process_queue: asyncio.Queue[tuple[list[MessageExt], MessageQueue]] = (
@@ -218,14 +222,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
                 # 启动AsyncBaseConsumer
                 await super().start()
-
-                # 创建异步信号量
-                self._consume_semaphore = asyncio.Semaphore(
-                    self._config.consume_thread_max
-                )
-                self._pull_semaphore = asyncio.Semaphore(
-                    min(self._config.consume_thread_max, 10)
-                )
 
                 # 执行重平衡
                 await self._do_rebalance()
@@ -646,17 +642,8 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     # ==================== 内部方法：消息拉取 ====================
 
-    async def _start_pull_tasks(self) -> None:
-        """启动所有队列的消息拉取任务"""
-        if not self._pull_semaphore or not self._assigned_queues:
-            return
-
-        await self._start_pull_tasks_for_queues(set(self._assigned_queues.keys()))
-
     async def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """为指定队列启动拉取任务"""
-        if not self._pull_semaphore:
-            raise ValueError("Pull semaphore is not initialized")
 
         for queue in queues:
             if queue not in self._pull_tasks:
@@ -680,166 +667,192 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         self._pull_tasks.clear()
 
     async def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
-        """持续拉取指定队列的消息"""
+        """持续拉取指定队列的消息。
+
+        为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
+        并放入处理队列。这是消费者消息拉取的核心执行循环。
+
+        执行流程：
+        1. 从队列的当前偏移量开始拉取消息
+        2. 如果拉取到消息，更新本地偏移量记录
+        3. 将消息和处理队列信息提交给消费线程池
+        4. 根据配置的拉取间隔进行休眠控制
+
+        Args:
+            message_queue (MessageQueue): 要持续拉取消息的目标队列
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志，不会中断拉取循环
+
+        Note:
+            - 每个队列有独立的拉取任务，避免队列间相互影响
+            - 偏移量在本地维护，定期或在消息处理成功后更新到Broker
+            - 拉取失败会记录日志并等待重试，不会影响其他队列
+            - 消费者停止时此循环会自动退出
+            - 支持通过配置控制拉取频率
+        """
         suggest_broker_id = 0
-
         while self._is_running:
+            pq: ProcessQueue = await self._get_or_create_process_queue(message_queue)
+            if pq.need_flow_control():
+                await asyncio.sleep(3.0)
+                continue
             try:
-                # 获取处理队列
-                pq = await self._get_or_create_process_queue(message_queue)
-                if pq.need_flow_control():
-                    await asyncio.sleep(3.0)
-                    continue
+                # 执行单次拉取操作
+                pull_result: (
+                    tuple[list[MessageExt], int, int] | None
+                ) = await self._perform_single_pull(message_queue, suggest_broker_id)
 
-                async with self._pull_semaphore:
-                    # 执行单次拉取操作
-                    pull_result = await self._perform_single_pull(
-                        message_queue, suggest_broker_id
+                if pull_result is None:
+                    # 如果返回None，说明没有订阅信息，停止消费
+                    logger.warning(
+                        "No subscription found for topic, stopping pull loop",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                        },
                     )
+                    break
 
-                if pull_result:
-                    # 处理拉取结果
-                    await self._handle_pulled_messages(message_queue, pull_result)
+                messages, next_begin_offset, next_suggest_id = pull_result
+                suggest_broker_id = next_suggest_id
 
-                    # 应用拉取间隔
-                    await self._apply_pull_interval(len(pull_result.msg_found_list) > 0)
+                if messages:
+                    await self._handle_pulled_messages(
+                        message_queue, messages, next_begin_offset
+                    )
                 else:
-                    # 拉取失败或无消息，应用默认间隔
-                    await self._apply_pull_interval(False)
+                    async with self._stats_lock:
+                        self._stats["pull_requests"] += 1
 
-            except asyncio.CancelledError:
-                logger.debug(
-                    f"Pull task for {message_queue} cancelled",
-                    extra={"queue": message_queue},
+                # 控制拉取频率 - 传入是否有消息的标志
+                await self._apply_pull_interval(len(messages) > 0)
+
+            except MessagePullError as e:
+                logger.warning(
+                    "The pull request is illegal",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
+                    },
                 )
                 break
             except Exception as e:
                 logger.error(
-                    f"Error in pull loop for {message_queue}: {e}",
-                    extra={"queue": message_queue, "error": str(e)},
+                    f"Error in pull messages loop for {message_queue}: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
+                    },
                     exc_info=True,
                 )
-                # 出错时等待一段时间再重试
-                await asyncio.sleep(1.0)
+
+                async with self._stats_lock:
+                    self._stats["pull_failures"] += 1
+
+                # 拉取失败时等待一段时间再重试
+                await asyncio.sleep(3.0)
 
     async def _perform_single_pull(
         self, message_queue: MessageQueue, suggest_broker_id: int = 0
-    ) -> PullMessageResult | None:
-        """执行单次消息拉取操作"""
-        try:
-            # 获取当前偏移量
-            offset = await self._get_or_initialize_offset(message_queue)
+    ) -> tuple[list[MessageExt], int, int] | None:
+        """执行单次消息拉取操作。
 
-            # 构建拉取请求
-            sys_flag = await self._build_sys_flag(message_queue)
+        Args:
+            message_queue: 要拉取消息的队列
+            suggest_broker_id: 建议的Broker ID
 
-            subscription_data = self._subscription_manager.get_subscription(
-                message_queue.topic
-            )
-            if not subscription_data:
-                return None
+        Returns:
+            tuple[list[MessageExt], int, int] | None:
+                - messages: 拉取到的消息列表
+                - next_begin_offset: 下次拉取的起始偏移量
+                - next_suggest_id: 下次建议的Broker ID
+            None: 如果没有订阅信息
 
-            # 获取Broker连接
-            broker_addr = await self._namesrv_manager.get_broker_address(
-                message_queue.broker_name
-            )
-            if not broker_addr:
-                logger.warning(
-                    f"No broker address found for {message_queue.broker_name}",
-                    extra={"broker_name": message_queue.broker_name},
-                )
-                return None
+        Raises:
+            MessagePullError: 当拉取请求非法时抛出
+        """
+        # 获取当前偏移量
+        current_offset: int = await self._get_or_initialize_offset(message_queue)
 
-            pool = await self._broker_manager.get_connection_pool(broker_addr)
-            async with pool.get_connection("pull_message") as conn:
-                broker_client = AsyncBrokerClient(conn)
+        # 拉取消息
+        messages, next_begin_offset, next_suggest_id = await self._pull_messages(
+            message_queue,
+            current_offset,
+            suggest_broker_id,
+        )
 
-                # 执行拉取
-                pull_result = await broker_client.pull_message(
-                    consumer_group=self._config.consumer_group,
-                    topic=message_queue.topic,
-                    queue_id=message_queue.queue_id,
-                    offset=offset,
-                    max_nums=self._config.pull_batch_size,
-                    sys_flag=sys_flag,
-                    subscription_data=subscription_data,
-                )
-
-                # 更新统计信息
-                async with self._stats_lock:
-                    self._stats["pull_count"] += 1
-                    self._stats["last_pull_time"] = time.time()
-                    if pull_result.pull_status == ResponseCode.SUCCESS:
-                        self._stats["pull_success_count"] += 1
-                    else:
-                        self._stats["pull_error_count"] += 1
-
-                return pull_result
-
-        except Exception as e:
-            logger.error(
-                f"Failed to pull messages from {message_queue}: {e}",
-                extra={"queue": message_queue, "error": str(e)},
-                exc_info=True,
-            )
-            async with self._stats_lock:
-                self._stats["pull_count"] += 1
-                self._stats["pull_error_count"] += 1
-                self._stats["last_pull_time"] = time.time()
-            return None
-
-    async def _handle_pulled_messages(
-        self, message_queue: MessageQueue, pull_result: PullMessageResult
-    ) -> None:
-        """处理拉取到的消息"""
-        if not pull_result.msg_found_list:
-            return
-
-        try:
-            # 过滤消息
-            messages = await self._filter_messages_by_tags(
-                message_queue, pull_result.msg_found_list
-            )
-
-            if messages:
-                # 添加到缓存
-                await self._add_messages_to_cache(message_queue, messages)
-
-                # 提交处理
-                await self._submit_messages_for_processing(message_queue, messages)
-
-                logger.debug(
-                    f"Submitted {len(messages)} messages for processing",
-                    extra={
-                        "queue": message_queue,
-                        "message_count": len(messages),
-                    },
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Failed to handle pulled messages from {message_queue}: {e}",
-                extra={"queue": message_queue, "error": str(e)},
-                exc_info=True,
-            )
-
-    async def _filter_messages_by_tags(
-        self, message_queue: MessageQueue, messages: list[MessageExt]
-    ) -> list[MessageExt]:
-        """根据标签过滤消息"""
-        subscription_data = self._subscription_manager.get_subscription(
+        # 检查订阅信息
+        sub: SubscriptionEntry | None = self._subscription_manager.get_subscription(
             message_queue.topic
         )
-        if (
-            not subscription_data
-            or subscription_data.expression_type == "TAG_FILTER"
-            and subscription_data.sub_string == "*"
-        ):
-            return messages
+        if sub is None:
+            # 如果没有订阅信息，则停止消费
+            return None
 
-        filtered_messages = []
+        sub_data: SubscriptionData = sub.subscription_data
+
+        # 根据订阅信息过滤消息
+        if sub_data.tags_set:
+            messages = await self._filter_messages_by_tags(messages, sub_data.tags_set)
+
+        return messages, next_begin_offset, next_suggest_id
+
+    async def _handle_pulled_messages(
+        self,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        next_begin_offset: int,
+    ) -> None:
+        """处理拉取到的消息。
+
+        包括更新偏移量、缓存消息、分批处理等。
+
+        Args:
+            message_queue: 消息队列
+            messages: 拉取到的消息列表
+            next_begin_offset: 下次拉取的起始偏移量
+        """
+        # 更新偏移量
+        async with self._cache_lock:
+            self._assigned_queues[message_queue] = next_begin_offset
+
+        # 将消息添加到缓存中（用于解决并发偏移量问题）
+        await self._add_messages_to_cache(message_queue, messages)
+
+        # 将消息按批次放入处理队列
+        await self._submit_messages_for_processing(message_queue, messages)
+
+        # 更新统计信息
+        message_count = len(messages)
+        async with self._stats_lock:
+            self._stats["pull_successes"] += 1
+            self._stats["messages_consumed"] += message_count
+            self._stats["pull_requests"] += 1
+
+    async def _filter_messages_by_tags(
+        self, messages: list[MessageExt], tags_set: list[str]
+    ) -> list[MessageExt]:
+        """根据标签过滤消息。
+
+        Args:
+            messages: 待过滤的消息列表
+            tags_set: 允许的标签集合
+
+        Returns:
+            list[MessageExt]: 过滤后的消息列表
+        """
+        filtered_messages: list[MessageExt] = []
         for message in messages:
-            if self._subscription_manager.is_match(message, subscription_data):
+            if message.get_tags() in tags_set:
                 filtered_messages.append(message)
 
         return filtered_messages
@@ -903,92 +916,333 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     ) -> None:
         """将消息添加到缓存"""
         pq = await self._get_or_create_process_queue(queue)
-        for message in messages:
-            pq.add_message(message)
-
-        # 更新统计信息
-        total_size = sum(msg.body_size for msg in messages)
-        async with self._stats_lock:
-            self._stats["processed_message_count"] += len(messages)
-            self._stats["processed_message_size"] += total_size
+        _ = pq.add_batch_messages(messages)
 
     async def _get_or_initialize_offset(self, queue: MessageQueue) -> int:
-        """获取或初始化队列偏移量"""
-        # 尝试从偏移量存储获取
-        try:
-            offset = await self._offset_store.read_offset(
-                queue, ReadOffsetType.READ_FROM_MEMORY
-            )
-            if offset >= 0:
-                return offset
-        except Exception as e:
-            logger.debug(
-                f"Failed to read offset from memory for {queue}: {e}",
-                extra={"queue": queue, "error": str(e)},
+        """获取或初始化队列偏移量
+
+        如果本地缓存的偏移量为0（首次消费），则根据配置的消费策略
+        从ConsumeFromWhereManager获取正确的初始偏移量。
+
+        Args:
+            queue: 要获取偏移量的消息队列
+
+        Returns:
+            int: 消费偏移量
+        """
+        # 先从_assigned_queues中读取当前偏移量
+        async with self._lock:
+            current_offset = self._assigned_queues.get(queue, 0)
+
+        # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
+        if current_offset == 0:
+            try:
+                current_offset = (
+                    await self._consume_from_where_manager.get_consume_offset(
+                        queue, self._config.consume_from_where
+                    )
+                )
+                # 更新本地缓存的偏移量
+                async with self._lock:
+                    self._assigned_queues[queue] = current_offset
+
+                logger.info(
+                    f"初始化消费偏移量: {current_offset}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": queue.topic,
+                        "queue_id": queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "offset": current_offset,
+                    },
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": queue.topic,
+                        "queue_id": queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 使用默认偏移量0
+                current_offset = 0
+                async with self._lock:
+                    self._assigned_queues[queue] = current_offset
+
+        return current_offset
+
+    async def _build_sys_flag(self, commit_offset: bool) -> int:
+        """构建系统标志位
+
+        根据Go语言实现：
+        - bit 0 (0x1): commitOffset 标志
+        - bit 1 (0x2): suspend 标志
+        - bit 2 (0x4): subscription 标志
+        - bit 3 (0x8): classFilter 标志
+
+        Args:
+            commit_offset (bool): 是否提交偏移量
+
+        Returns:
+            int: 系统标志位
+        """
+        flag = 0
+
+        if commit_offset:
+            flag |= 0x1 << 0  # bit 0: 0x1
+
+        # suspend: always true
+        flag |= 0x1 << 1  # bit 1: 0x2
+
+        # subscription: always true
+        flag |= 0x1 << 2  # bit 2: 0x4
+
+        # class_filter: always false
+        # flag |= 0x1 << 3  # bit 3: 0x8
+
+        return flag
+
+    async def _pull_messages(
+        self, message_queue: MessageQueue, offset: int, suggest_id: int
+    ) -> tuple[list[MessageExt], int, int]:
+        """从指定队列拉取消息，支持偏移量管理和Broker选择。
+
+        该方法是并发消费者的核心拉取逻辑，负责从RocketMQ Broker拉取消息，
+        并处理相关的系统标志位和偏移量管理。支持主备Broker的智能选择
+        和故障转移机制。
+
+        核心功能:
+        - 通过NameServerManager获取最优Broker地址
+        - 构建拉取请求的系统标志位
+        - 处理commit offset的提交逻辑
+        - 支持批量消息拉取以提高效率
+        - 完善的错误处理和重试机制
+
+        拉取策略:
+        1. 获取目标Broker地址，优先连接master
+        2. 读取当前commit offset（如果有）
+        3. 构建包含commit标志的系统标志位
+        4. 发送PULL_MESSAGE请求到Broker
+        5. 解析响应并返回消息列表和下次拉取位置
+
+        返回值说明:
+        - list[MessageExt]: 拉取到的消息列表，可能为空
+        - int: 下一次拉取的起始偏移量
+        - int: 建议下次连接的Broker ID（0=master, 其他=slave）
+
+        Args:
+            message_queue (MessageQueue): 目标消息队列，包含topic、broker名称、队列ID等信息
+            offset (int): 本次拉取的起始偏移量，从该位置开始拉取消息
+            suggest_id (int): 建议的Broker ID，用于连接选择优化，
+                            通常为上次拉取时返回的建议ID
+
+        Returns:
+            tuple[list[MessageExt], int, int]: 三元组包含：
+                                            - 消息列表（可能为空）
+                                            - 下次拉取的起始偏移量
+                                            - 建议的下次Broker ID
+
+        Raises:
+            MessageConsumeError: 当拉取过程中发生错误时抛出，包含详细的错误信息
+            ValueError: 当无法找到指定broker的地址时抛出
+
+        Example:
+            ```python
+            # 拉取消息示例
+            messages, next_offset, suggested_broker = await consumer._pull_messages(
+                message_queue=MessageQueue("test_topic", "broker-a", 0),
+                offset=100,
+                suggest_id=0
             )
 
-        # 从存储中读取
-        try:
-            offset = await self._offset_store.read_offset(
-                queue, ReadOffsetType.READ_FROM_STORE
-            )
-            if offset >= 0:
-                async with self._cache_lock:
-                    self._assigned_queues[queue] = offset
-                return offset
-        except Exception as e:
-            logger.debug(
-                f"Failed to read offset from store for {queue}: {e}",
-                extra={"queue": queue, "error": str(e)},
-            )
+            if messages:
+                for msg in messages:
+                    print(f"消息内容: {msg.body.decode()}")
+                print(f"下次拉取偏移量: {next_offset}")
+                if suggested_broker != 0:
+                    print(f"建议下次连接slave broker: {suggested_broker}")
+            ```
 
-        # 使用消费策略初始化偏移量
+        Note:
+            - 该方法会被_pull_messages_loop循环调用，实现持续的消息拉取
+            - suggest_id参数用于Broker选择的优化，通常来自上次拉取响应
+            - commit_offset只在连接master broker且存在已提交偏移量时使用
+            - 拉取失败时会记录详细的错误信息，便于问题诊断
+            - 返回的empty消息列表并不意味着队列中没有消息，可能是由于网络延迟
+        """
         try:
-            offset = await self._consume_from_where_manager.get_consume_offset(
-                queue, self._config.consume_from_where
-            )
-            async with self._cache_lock:
-                self._assigned_queues[queue] = offset
-            return offset
-        except Exception as e:
-            logger.warning(
-                f"Failed to initialize offset for {queue}: {e}, using 0",
-                extra={"queue": queue, "error": str(e)},
-            )
-            async with self._cache_lock:
-                self._assigned_queues[queue] = 0
-            return 0
+            async with self._stats_lock:
+                self._stats["pull_requests"] += 1
 
-    async def _build_sys_flag(self, message_queue: MessageQueue) -> int:
-        """构建拉取请求的系统标志"""
-        sys_flag = 0
+            broker_info: (
+                tuple[str, bool] | None
+            ) = await self._nameserver_manager.get_broker_address_in_subscription(
+                message_queue.broker_name, suggest_id
+            )
+            if not broker_info:
+                raise ValueError(
+                    f"Broker address not found for {message_queue.broker_name}"
+                )
 
-        # 检查是否需要提交偏移量
-        try:
-            offset = await self._offset_store.read_offset(
+            commit_offset: int = await self._offset_store.read_offset(
                 message_queue, ReadOffsetType.READ_FROM_MEMORY
             )
-            if offset >= 0:
-                sys_flag |= 0x40  # FLAG_COMMIT_OFFSET
-        except Exception:
-            pass
 
-        # 检查订阅信息
-        subscription_data = self._subscription_manager.get_subscription(
-            message_queue.topic
+            broker_address, is_master = broker_info
+
+            # 使用BrokerManager拉取消息
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_address
+            )
+
+            # 注册异步请求处理器
+            await pool.register_request_processor(
+                RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
+                self._on_notify_consumer_ids_changed,
+            )
+            await pool.register_request_processor(
+                RequestCode.CONSUME_MESSAGE_DIRECTLY,
+                self._on_notify_consume_message_directly,
+            )
+
+            async with pool.get_connection(usage="pull_message") as conn:
+                broker_client = AsyncBrokerClient(conn)
+                result: PullMessageResult = await broker_client.pull_message(
+                    consumer_group=self._config.consumer_group,
+                    topic=message_queue.topic,
+                    queue_id=message_queue.queue_id,
+                    queue_offset=offset,
+                    max_msg_nums=self._config.pull_batch_size,
+                    sys_flag=await self._build_sys_flag(
+                        commit_offset=commit_offset > 0 and is_master
+                    ),
+                    commit_offset=commit_offset,
+                )
+
+                if result.messages:
+                    return (
+                        result.messages,
+                        result.next_begin_offset,
+                        result.suggest_which_broker_id or 0,
+                    )
+
+                return [], offset, 0
+
+        except MessagePullError as e:
+            logger.warning(
+                "The pull request is illegal",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": offset,
+                    "error": str(e),
+                },
+            )
+            raise e
+
+        except Exception as e:
+            logger.warning(
+                "Failed to pull messages",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": offset,
+                    "error": str(e),
+                },
+            )
+            raise MessageConsumeError(
+                message_queue.topic,
+                "Failed to pull messages",
+                offset,
+                cause=e,
+            ) from e
+
+    async def _on_notify_consumer_ids_changed(
+        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+    ) -> None:
+        """处理消费者ID变更通知"""
+        logger.info("Received notification of consumer IDs changed")
+        await self._do_rebalance()
+
+    async def _on_notify_consume_message_directly(
+        self, command: RemotingCommand, _addr: tuple[str, int]
+    ) -> RemotingCommand:
+        """处理直接消费消息通知"""
+        header: ConsumeMessageDirectlyHeader = ConsumeMessageDirectlyHeader.decode(
+            command.ext_fields
         )
-        if subscription_data and subscription_data.class_filter_mode:
-            sys_flag |= 0x08  # FLAG_TAG_FILTER
+        if header.client_id == self._config.client_id:
+            return await self._on_notify_consume_message_directly_internal(
+                header, command
+            )
+        else:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark(f"Can't find client ID {header.client_id}")
+                .build()
+            )
 
-        return sys_flag
+    async def _on_notify_consume_message_directly_internal(
+        self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
+    ) -> RemotingCommand:
+        """内部处理直接消费消息的逻辑"""
+        if not command.body:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("No message body")
+                .build()
+            )
+
+        msgs = MessageExt.decode_messages(command.body)
+        if len(msgs) == 0:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("No message")
+                .build()
+            )
+
+        msg: MessageExt = msgs[0]
+
+        q: MessageQueue
+        if msg.queue:
+            q = MessageQueue(msg.topic, header.broker_name, msg.queue.queue_id)
+        else:
+            q = MessageQueue(msg.topic, header.broker_name, 0)
+
+        now = datetime.now()
+
+        if await self._consume_message(msgs, q):
+            res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
+                order=False,
+                auto_commit=True,
+                consume_result=ConsumeResult.SUCCESS,
+                remark="Message consumed",
+                spent_time_mills=int((datetime.now() - now).total_seconds() * 1000),
+            )
+            return (
+                RemotingCommandBuilder(ResponseCode.SUCCESS)
+                .with_remark("Message consumed")
+                .with_body(res.encode())
+                .build()
+            )
+        else:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("Failed to consume message")
+                .build()
+            )
 
     # ==================== 内部方法：消息处理 ====================
 
     async def _start_consume_tasks(self) -> None:
         """启动消息处理任务"""
-        if not self._consume_semaphore:
-            return
-
         self._consume_task = asyncio.create_task(self._consume_messages_loop())
 
     async def _stop_consume_tasks(self) -> None:
@@ -1002,123 +1256,96 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         self._consume_task = None
 
     async def _consume_messages_loop(self) -> None:
-        """持续处理消息"""
+        """
+        持续处理消息的循环
+        """
         while self._is_running:
             try:
                 # 从处理队列获取消息
-                messages, message_queue = await asyncio.wait_for(
-                    self._process_queue.get(), timeout=1.0
-                )
-
-                # 使用信号量控制并发数
-                async with self._consume_semaphore:
-                    # 创建处理任务
-                    asyncio.create_task(
-                        self._process_messages_batch(messages, message_queue)
+                try:
+                    messages: list[MessageExt]
+                    message_queue: MessageQueue
+                    messages, message_queue = await asyncio.wait_for(
+                        self._process_queue.get(), timeout=1.0
                     )
+                except asyncio.TimeoutError:
+                    continue
 
-            except asyncio.TimeoutError:
-                # 超时继续循环，检查是否停止
-                continue
-            except asyncio.CancelledError:
-                logger.debug("Consume messages loop cancelled")
-                break
+                # 处理消息
+                start_time: float = time.time()
+                success: bool = await self._consume_message(messages, message_queue)
+                duration: float = time.time() - start_time
+
+                async with self._stats_lock:
+                    self._stats["consume_duration_total"] += duration
+
+                if not success:
+                    self._stats["messages_failed"] += len(messages)
+
+                # 更新偏移量
+                if success:
+                    try:
+                        # 从缓存中移除已处理的消息，并获取当前最小offset
+                        min_offset = await self._remove_messages_from_cache(
+                            message_queue, messages
+                        )
+
+                        # 直接更新最小offset到offset_store，避免重复查询
+                        if min_offset is not None:
+                            try:
+                                await self._offset_store.update_offset(
+                                    message_queue, min_offset
+                                )
+                                logger.debug(
+                                    f"Updated offset from cache: {min_offset}",
+                                    extra={
+                                        "consumer_group": self._config.consumer_group,
+                                        "topic": message_queue.topic,
+                                        "queue_id": message_queue.queue_id,
+                                        "offset": min_offset,
+                                        "cache_stats": (
+                                            await self._get_or_create_process_queue(
+                                                message_queue
+                                            )
+                                        ).get_stats(),
+                                    },
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to update offset from cache: {e}",
+                                    extra={
+                                        "consumer_group": self._config.consumer_group,
+                                        "topic": message_queue.topic,
+                                        "queue_id": message_queue.queue_id,
+                                        "offset": min_offset,
+                                        "error": str(e),
+                                    },
+                                )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to remove messages from cache: {e}",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "topic": message_queue.topic,
+                                "queue_id": message_queue.queue_id,
+                                "error": str(e),
+                            },
+                        )
+                else:
+                    # TODO: send msg back
+                    for message in messages:
+                        # TODO: implement async send_back_message
+                        pass
+
             except Exception as e:
                 logger.error(
                     f"Error in consume messages loop: {e}",
-                    extra={"error": str(e)},
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
                     exc_info=True,
                 )
-                await asyncio.sleep(1.0)
-
-    async def _process_messages_batch(
-        self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> None:
-        """处理一批消息"""
-        try:
-            # 创建消费上下文
-            context = AsyncConsumeContext(
-                queue=message_queue,
-                message_count=len(messages),
-                is_first_time=False,  # TODO: 实现首次消费检测
-                processing_start_time=time.time(),
-            )
-
-            # 调用监听器处理消息
-            consume_result = await self._message_listener.consume_message(
-                messages, context
-            )
-
-            # 处理消费结果
-            if consume_result == ConsumeResult.SUCCESS:
-                # 消费成功，更新偏移量
-                await self._update_offset_from_cache(
-                    message_queue, messages[-1].queue_offset + 1
-                )
-
-                # 从缓存中移除消息
-                await self._remove_messages_from_cache(message_queue, messages)
-
-                logger.debug(
-                    f"Successfully consumed {len(messages)} messages",
-                    extra={
-                        "queue": message_queue,
-                        "message_count": len(messages),
-                    },
-                )
-            else:
-                # 消费失败，处理重试逻辑
-                await self._handle_consume_failure(
-                    message_queue, messages, consume_result
-                )
-
-            # 更新统计信息
-            async with self._stats_lock:
-                self._stats["consume_count"] += 1
-                self._stats["last_consume_time"] = time.time()
-                if consume_result == ConsumeResult.SUCCESS:
-                    self._stats["consume_success_count"] += 1
-                else:
-                    self._stats["consume_error_count"] += 1
-
-        except Exception as e:
-            logger.error(
-                f"Error processing messages from {message_queue}: {e}",
-                extra={
-                    "queue": message_queue,
-                    "message_count": len(messages),
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
-            # 处理异常情况
-            await self._handle_consume_failure(
-                message_queue, messages, ConsumeResult.RECONSUME_LATER
-            )
-
-    async def _handle_consume_failure(
-        self,
-        message_queue: MessageQueue,
-        messages: list[MessageExt],
-        result: ConsumeResult,
-    ) -> None:
-        """处理消费失败"""
-        if result == ConsumeResult.RECONSUME_LATER:
-            # 稍后重试，将消息重新放回队列
-            await asyncio.sleep(1.0)  # 简单延迟
-            await self._process_queue.put((messages, message_queue))
-        elif result == ConsumeResult.DISCARD:
-            # 丢弃消息，更新偏移量
-            if messages:
-                await self._update_offset_from_cache(
-                    message_queue, messages[-1].queue_offset + 1
-                )
-                await self._remove_messages_from_cache(message_queue, messages)
-        else:
-            # 其他结果，也稍后重试
-            await asyncio.sleep(1.0)
-            await self._process_queue.put((messages, message_queue))
 
     async def _update_offset_from_cache(self, queue: MessageQueue, offset: int) -> None:
         """从缓存更新偏移量"""
@@ -1212,10 +1439,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
             # 清理任务
             self._pull_tasks.clear()
-
-            # 清理信号量
-            self._consume_semaphore = None
-            self._pull_semaphore = None
 
         except Exception as e:
             logger.error(

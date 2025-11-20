@@ -17,6 +17,8 @@ from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
+from pyrocketmq.broker.async_client import AsyncBrokerClient
+from pyrocketmq.consumer.async_listener import AsyncConsumeContext
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
@@ -24,7 +26,10 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
     ConsumerData,
+    ConsumeResult,
     HeartbeatData,
+    MessageExt,
+    MessageQueue,
     MessageSelector,
     TopicRouteData,
 )
@@ -379,6 +384,214 @@ class AsyncBaseConsumer:
             消息监听器实例，如果未注册则返回None
         """
         return self._message_listener
+
+    async def _consume_message(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> bool:
+        """
+        异步处理接收到的消息（内部方法）
+
+        这是异步消息处理的核心方法，由具体的消费者实现调用。
+        它负责创建消费上下文，调用注册的消息监听器，并处理消费结果。
+
+        Args:
+            messages: 要处理的消息列表
+            message_queue: 消息来自的队列
+
+        Returns:
+            bool: 消费处理是否成功
+
+        Raises:
+            ConsumerError: 消息处理过程中发生严重错误时抛出
+        """
+        if not self._message_listener:
+            logger.error(
+                "No message listener registered",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_count": len(messages),
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                },
+            )
+            return False
+
+        if not messages:
+            logger.warning(
+                "Empty message list received",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                },
+            )
+            return True  # 空消息列表视为处理成功
+
+        # 创建异步消费上下文
+        reconsume_times: int = messages[0].reconsume_times if messages else 0
+        context: AsyncConsumeContext = AsyncConsumeContext(
+            consumer_group=self._config.consumer_group,
+            message_queue=message_queue,
+            reconsume_times=reconsume_times,
+        )
+
+        try:
+            logger.info(
+                "Processing messages",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_count": len(messages),
+                    "topic": context.topic,
+                    "queue_id": context.queue_id,
+                    "reconsume_times": reconsume_times,
+                },
+            )
+
+            result: ConsumeResult = await self._message_listener.consume_message(
+                messages, context
+            )
+            if result in [
+                ConsumeResult.COMMIT,
+                ConsumeResult.ROLLBACK,
+                ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT,
+            ]:
+                logger.error(
+                    "Invalid result for async concurrent consumer",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": context.topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                    },
+                )
+                return False
+
+            logger.info(
+                "Message processing completed",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_count": len(messages),
+                    "topic": context.topic,
+                    "queue_id": context.queue_id,
+                    "result": result.value,
+                },
+            )
+
+            return result == ConsumeResult.SUCCESS
+
+        except Exception as e:
+            logger.error(
+                f"Failed to process messages: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_count": len(messages),
+                    "topic": context.topic,
+                    "queue_id": context.queue_id,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
+            # 调用异常回调（如果监听器实现了）
+            if hasattr(self._message_listener, "on_exception"):
+                try:
+                    await self._message_listener.on_exception(messages, context, e)
+                except Exception as callback_error:
+                    logger.error(
+                        f"Exception callback failed: {callback_error}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "error": str(callback_error),
+                        },
+                        exc_info=True,
+                    )
+
+            return False
+
+    async def _send_back_message(
+        self, message_queue: MessageQueue, message: MessageExt
+    ) -> None:
+        """
+        将消费失败的消息异步发送回broker重新消费。
+
+        当消息消费失败时，此方法负责将消息异步发送回原始broker，
+        以便后续重新消费。这是RocketMQ消息重试机制的重要组成部分。
+
+        Args:
+            message_queue (MessageQueue): 消息来自的队列信息
+            message (MessageExt): 需要发送回的消息对象
+
+        处理流程:
+            1. 异步获取目标broker的地址
+            2. 异步建立与broker的连接
+            3. 异步调用broker的消息回退接口
+            4. 记录处理结果和统计信息
+
+        错误处理:
+            - 如果无法获取broker地址，记录错误日志并返回
+            - 如果连接或发送失败，记录错误日志但不抛出异常
+            - 确保消费循环的连续性
+
+        Note:
+            - 该方法在消费失败时被调用
+            - 消息会被重新放入消费队列等待重试
+            - 重试次数受max_reconsume_times配置限制
+            - 使用delay_level=0表示立即重试
+        """
+        broker_addr = await self._nameserver_manager.get_broker_address(
+            message_queue.broker_name
+        )
+        if not broker_addr:
+            logger.error(
+                "Failed to get broker address for message send back",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "broker_name": message_queue.broker_name,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                },
+            )
+            return
+
+        try:
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            async with pool.get_connection(usage="发送消息回broker") as conn:
+                await AsyncBrokerClient(conn).consumer_send_msg_back(
+                    message,
+                    self._config.consumer_group,
+                    0,  # delay_level: 0 表示立即重试
+                    self._config.max_reconsume_times,
+                )
+
+                logger.debug(
+                    "Message sent back to broker for reconsume",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "message_id": message.msg_id,
+                        "topic": message.topic,
+                        "queue_id": message.queue.queue_id if message.queue else 0,
+                        "broker_name": message_queue.broker_name,
+                        "reconsume_times": message.reconsume_times,
+                        "max_reconsume_times": self._config.max_reconsume_times,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to send message back to broker: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                    "broker_name": message_queue.broker_name,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
 
     async def get_status_summary(self) -> dict[str, Any]:
         """

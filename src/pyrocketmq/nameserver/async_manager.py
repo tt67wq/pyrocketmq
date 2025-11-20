@@ -220,6 +220,135 @@ class AsyncNameServerManager:
 
         return route_data
 
+    async def get_broker_address_in_subscription(
+        self, broker_name: str, suggestion: int
+    ) -> tuple[str, bool] | None:
+        """在消费者订阅场景下获取broker地址，返回地址和是否为master的标志。
+
+        该方法专门为消费者订阅场景设计，根据broker名称和订阅信息
+        选择合适的broker地址，同时返回该地址是否为master broker的判断。
+
+        Args:
+            broker_name (str): broker名称
+            subscription (int): 订阅信息，通常用作建议的broker_id。
+                               0表示建议连接master，其他值表示特定slave
+
+        Returns:
+            tuple[str, bool] | None: 元组包含(地址, 是否为master)，
+                                   如果找不到可用地址则返回None
+
+        Example:
+            ```python
+            # 获取broker地址，建议连接master
+            result = await manager.get_broker_address_in_subscription("broker-a", 0)
+            if result:
+                broker_addr, is_master = result
+                print(f"连接到{'master' if is_master else 'slave'}: {broker_addr}")
+
+            # 获取broker地址，建议连接特定slave
+            result = await manager.get_broker_address_in_subscription("broker-a", 1)
+            ```
+
+        Note:
+            - 该方法会查询Topic路由信息来获取broker数据
+            - subscription参数被用作建议的broker_id
+            - 使用灵活的选择策略，允许备选地址选择
+            - 返回的master状态信息对消费者连接管理很重要
+        """
+        self._logger.debug(
+            "查询订阅场景的broker地址",
+            extra={"broker_name": broker_name, "suggestion": suggestion},
+        )
+
+        # 构造缓存键，包含broker_name和suggestion
+        cache_key: str = f"{broker_name}:{suggestion}"
+
+        # 检查缓存
+        async with self._cache_lock:
+            if cache_key in self._broker_addr_cache:
+                cache_entry = self._broker_addr_cache[cache_key]
+                if not cache_entry.is_expired:
+                    self._logger.debug(
+                        "使用缓存的订阅broker地址",
+                        extra={
+                            "broker_name": broker_name,
+                            "suggestion": suggestion,
+                            "address_and_master": cache_entry.data,
+                        },
+                    )
+                    return cache_entry.data
+                else:
+                    # 缓存过期，删除
+                    del self._broker_addr_cache[cache_key]
+                    self._logger.debug(
+                        "订阅broker地址缓存过期",
+                        extra={
+                            "broker_name": broker_name,
+                            "suggestion": suggestion,
+                        },
+                    )
+
+        # 从NameServer查询Topic路由信息来获取broker数据
+        # 这里使用broker_name作为topic来查询，因为broker信息通常在所有topic的路由中
+        topic_route_data: (
+            TopicRouteData | None
+        ) = await self._query_topic_route_from_nameserver(broker_name)
+
+        if not topic_route_data or not topic_route_data.broker_data_list:
+            self._logger.warning(
+                "未找到broker的路由信息",
+                extra={"broker_name": broker_name, "suggestion": suggestion},
+            )
+            return None
+
+        # 查找匹配的broker数据
+        broker_data: BrokerData | None = None
+        for broker in topic_route_data.broker_data_list:
+            if broker.broker_name == broker_name:
+                broker_data = broker
+                break
+
+        if not broker_data:
+            self._logger.warning(
+                "在路由信息中未找到指定broker",
+                extra={"broker_name": broker_name, "suggestion": suggestion},
+            )
+            return None
+
+        # 使用_select_broker_address_in_subscription方法选择地址
+        # 使用灵活策略，允许选择其他可用地址作为备选
+        result = self._select_broker_address_in_subscription(
+            broker_data, suggestion, only_this_broker=False
+        )
+
+        if result:
+            address, is_master = result
+            self._logger.debug(
+                "成功选择订阅broker地址",
+                extra={
+                    "broker_name": broker_name,
+                    "suggestion": suggestion,
+                    "address": address,
+                    "is_master": is_master,
+                },
+            )
+
+            # 更新缓存
+            async with self._cache_lock:
+                self._broker_addr_cache[cache_key] = CacheEntry(
+                    data=result,
+                    timestamp=time.time(),
+                    ttl=self.config.broker_cache_ttl,
+                )
+
+            return result
+        else:
+            self._logger.warning(
+                "无法为订阅选择合适的broker地址",
+                extra={"broker_name": broker_name, "suggestion": suggestion},
+            )
+            return None
+
     async def get_all_broker_addresses(self, topic: str) -> list[str]:
         """异步获取Topic下的所有broker地址.
 
@@ -468,6 +597,90 @@ class AsyncNameServerManager:
         for _broker_id, address in broker_data.broker_addresses.items():
             if address:
                 return address
+
+        return None
+
+    def _select_broker_address_in_subscription(
+        self,
+        broker_data: BrokerData,
+        suggest_id: int,
+        only_this_broker: bool,
+    ) -> tuple[str, bool] | None:
+        """在消费者订阅场景下选择Broker地址，返回地址和是否为master的标志。
+
+        该方法专门为消费者订阅场景设计，在返回Broker地址的同时提供该地址
+        是否为master broker的判断信息，便于消费者模块进行后续的连接管理和
+        负载均衡策略决策。
+
+        选择策略:
+        1. 优先匹配建议ID对应的Broker地址
+        2. 如果only_this_broker为False，允许选择其他可用地址作为备选
+        3. 如果only_this_broker为True，只选择建议ID对应的地址，无匹配时返回None
+
+        返回值说明:
+        - 第一个元素：选中的broker地址，格式为"host:port"
+        - 第二个元素：布尔值，表示选中的地址是否为master broker（broker_id=0）
+
+        消费者场景应用:
+        - 优先连接master broker获取最新的订阅关系
+        - 根据master/slave状态决定消费策略和重连机制
+        - 为负载均衡器提供broker角色信息
+        - 实现主备切换和故障恢复逻辑
+
+        Args:
+            broker_data (BrokerData): Broker数据对象，包含集群名称、
+                                    broker名称和地址映射等信息
+            suggest_id (int): 建议的Broker ID，通常为0表示master，
+                            1+表示slave broker
+            only_this_broker (bool): 是否只选择建议ID对应的broker，
+                                   True表示严格匹配，False表示允许备选
+
+        Returns:
+            tuple[str, bool] | None: 元组包含(地址, 是否为master)，
+                                   如果找不到可用地址则返回None
+
+        Example:
+            ```python
+            # 消费者订阅时选择broker，获取地址和角色信息
+            result = manager._select_broker_address_in_subscription(
+                broker_data, suggest_id=0, only_this_broker=False
+            )
+            if result:
+                broker_addr, is_master = result
+                if is_master:
+                    print(f"连接到master broker: {broker_addr}")
+                else:
+                    print(f"连接到slave broker: {broker_addr}")
+
+            # 强制选择指定broker
+            result = manager._select_broker_address_in_subscription(
+                broker_data, suggest_id=1, only_this_broker=True
+            )
+            ```
+
+        Note:
+            - 返回值比其他选择方法多一个boolean标志，用于标识master状态
+            - is_master=True表示选中的是master broker（broker_id=0）
+            - is_master=False表示选中的是slave broker（broker_id>0）
+            - 该方法主要用于消费者模块的订阅和连接管理
+            - 在消费者负载均衡和主备切换场景中特别有用
+            - broker_data.broker_addresses字典的键为broker_id整数类型
+        """
+        if not broker_data.broker_addresses:
+            return None
+
+        # 优先选择suggest_id
+        addr: str | None = broker_data.broker_addresses.get(suggest_id)
+        if addr:
+            return addr, suggest_id == 0
+
+        if only_this_broker:
+            return None
+
+        # 选择第一个可用地址
+        for broker_id, address in broker_data.broker_addresses.items():
+            if address:
+                return address, broker_id == 0
 
         return None
 

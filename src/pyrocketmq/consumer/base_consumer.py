@@ -1299,6 +1299,91 @@ class BaseConsumer:
             )
             # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
 
+    def _send_back_message(
+        self, message_queue: MessageQueue, message: MessageExt
+    ) -> None:
+        """
+        将消费失败的消息发送回broker重新消费。
+
+        当消息消费失败时，此方法负责将消息发送回原始broker，
+        以便后续重新消费。这是RocketMQ消息重试机制的重要组成部分。
+
+        Args:
+            message_queue (MessageQueue): 消息来自的队列信息
+            message (MessageExt): 需要发送回的消息对象
+
+        处理流程:
+            1. 获取目标broker的地址
+            2. 建立与broker的连接
+            3. 调用broker的消息回退接口
+            4. 记录处理结果和统计信息
+
+        错误处理:
+            - 如果无法获取broker地址，记录错误日志并返回
+            - 如果连接或发送失败，记录错误日志但不抛出异常
+            - 确保消费循环的连续性
+
+        Note:
+            - 该方法在消费失败时被调用
+            - 消息会被重新放入消费队列等待重试
+            - 重试次数受max_reconsume_times配置限制
+            - 使用delay_level=0表示立即重试
+        """
+        broker_addr = self._name_server_manager.get_broker_address(
+            message_queue.broker_name
+        )
+        if not broker_addr:
+            logger.error(
+                "Failed to get broker address for message send back",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "broker_name": message_queue.broker_name,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                },
+            )
+            return
+
+        try:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            with pool.get_connection(usage="发送消息回broker") as conn:
+                BrokerClient(conn).consumer_send_msg_back(
+                    message,
+                    0,  # delay_level: 0 表示立即重试
+                    self._config.consumer_group,
+                    self._config.max_reconsume_times,
+                )
+
+                logger.debug(
+                    "Message sent back to broker for reconsume",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "message_id": message.msg_id,
+                        "topic": message.topic,
+                        "queue_id": message.queue.queue_id if message.queue else 0,
+                        "broker_name": message_queue.broker_name,
+                        "reconsume_times": message.reconsume_times,
+                        "max_reconsume_times": self._config.max_reconsume_times,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to send message back to broker: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                    "broker_name": message_queue.broker_name,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
     # ==================== 字符串表示方法 ====================
 
     def __str__(self) -> str:
