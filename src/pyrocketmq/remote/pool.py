@@ -150,6 +150,9 @@ class ConnectionPool:
         self._expired_connections_count: int = 0
         self._recreated_connections_count: int = 0
 
+        # 请求处理器注册表
+        self._request_processors: dict[int, ClientRequestFunc] = {}
+
         # 创建连接池
         self._initialize_pool()
 
@@ -298,12 +301,19 @@ class ConnectionPool:
                 max_lifetime=self.remote_config.connection_max_lifetime,
             )
 
+            # 为新连接注册所有已注册的请求处理器
+            for request_code, processor_func in self._request_processors.items():
+                new_connection.register_request_processor_lazy(
+                    request_code, processor_func
+                )
+
             self._logger.debug(
                 "成功连接",
                 extra={
                     "address": self.address,
                     "remaining_connections": len(self._pool),
                     "max_lifetime": self.remote_config.connection_max_lifetime,
+                    "registered_processors": len(self._request_processors),
                 },
             )
 
@@ -470,6 +480,9 @@ class ConnectionPool:
             request_code: 请求代码
             processor_func: 处理器函数
         """
+        # 保存处理器到注册表，供新连接使用
+        self._request_processors[request_code] = processor_func
+
         with self._pool_lock:
             for conn_info in self._pool:
                 conn_info.connection.register_request_processor_lazy(
@@ -547,6 +560,9 @@ class AsyncConnectionPool:
         # 统计信息
         self._expired_connections_count: int = 0
         self._recreated_connections_count: int = 0
+
+        # 请求处理器注册表
+        self._request_processors: dict[int, AsyncClientRequestFunc] = {}
 
         # 创建连接池
         self._initialize_task: asyncio.Task[None] | None = None
@@ -716,12 +732,19 @@ class AsyncConnectionPool:
                 max_lifetime=self.remote_config.connection_max_lifetime,
             )
 
+            # 为新连接注册所有已注册的请求处理器
+            for request_code, processor_func in self._request_processors.items():
+                await new_connection.register_request_processor_lazy(
+                    request_code, processor_func
+                )
+
             self._logger.info(
                 "成功异步连接",
                 extra={
                     "address": self.address,
                     "remaining_connections": len(self._pool),
                     "max_lifetime": self.remote_config.connection_max_lifetime,
+                    "registered_processors": len(self._request_processors),
                 },
             )
 
@@ -882,6 +905,9 @@ class AsyncConnectionPool:
             request_code: 请求代码
             processor_func: 处理器函数
         """
+        # 保存处理器到注册表，供新连接使用
+        self._request_processors[request_code] = processor_func
+
         # 确保连接池已初始化
         if self._initialize_task is None or self._initialize_task.done():
             await self.initialize()
