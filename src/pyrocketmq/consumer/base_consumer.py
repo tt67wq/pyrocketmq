@@ -1326,7 +1326,7 @@ class BaseConsumer:
 
     def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
-    ) -> None:
+    ) -> bool:
         """
         将消费失败的消息发送回broker重新消费。
 
@@ -1337,22 +1337,40 @@ class BaseConsumer:
             message_queue (MessageQueue): 消息来自的队列信息
             message (MessageExt): 需要发送回的消息对象
 
+        Returns:
+            bool: 发送成功返回True，发送失败返回False
+
         处理流程:
-            1. 获取目标broker的地址
-            2. 建立与broker的连接
-            3. 调用broker的消息回退接口
-            4. 记录处理结果和统计信息
+            1. 根据队列信息获取目标broker地址
+            2. 验证broker地址有效性
+            3. 建立与broker的连接池
+            4. 设置消息重试相关属性：
+               - RETRY_TOPIC: 设置重试主题名
+               - CONSUME_START_TIME: 记录消费开始时间
+               - reconsume_times: 递增重试次数
+            5. 调用broker的consumer_send_msg_back接口
+            6. 记录处理结果和统计信息
 
         错误处理:
-            - 如果无法获取broker地址，记录错误日志并返回
+            - 如果无法获取broker地址，记录错误日志并返回False
             - 如果连接或发送失败，记录错误日志但不抛出异常
-            - 确保消费循环的连续性
+            - 确保消费循环的连续性，避免单个消息失败影响整体消费
+
+        Examples:
+            >>> # 在消费循环中处理失败消息
+            >>> result = self._consume_message(messages, context)
+            >>> if result == ConsumeResult.RECONSUME_LATER:
+            >>>     for msg in messages:
+            >>>         if not self._send_back_message(msg.queue, msg):
+            >>>             logger.error(f"Failed to send back message: {msg.msg_id}")
 
         Note:
-            - 该方法在消费失败时被调用
-            - 消息会被重新放入消费队列等待重试
-            - 重试次数受max_reconsume_times配置限制
-            - 使用delay_level=0表示立即重试
+            - 该方法在消费失败时被调用，用于实现消息重试机制
+            - 消息会被重新放入重试队列等待重新消费
+            - 重试次数受max_reconsume_times配置限制，默认16次
+            - 超过最大重试次数后，消息会进入死信队列(%DLQ%{consumer_group})
+            - reconsume_times属性会递增，用于跟踪消息重试次数
+            - 方法不会抛出异常，确保消费循环的稳定性
         """
         broker_addr = self._name_server_manager.get_broker_address(
             message_queue.broker_name
@@ -1368,7 +1386,7 @@ class BaseConsumer:
                     "queue_id": message.queue.queue_id if message.queue else 0,
                 },
             )
-            return
+            return False
 
         try:
             pool: ConnectionPool = self._broker_manager.must_connection_pool(
@@ -1381,9 +1399,10 @@ class BaseConsumer:
                 message.set_property(
                     MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
                 )
+                message.reconsume_times += 1
                 BrokerClient(conn).consumer_send_msg_back(
                     message,
-                    0,  # delay_level: 0 表示立即重试
+                    message.reconsume_times,
                     self._config.consumer_group,
                     self._config.max_reconsume_times,
                 )
@@ -1414,6 +1433,9 @@ class BaseConsumer:
                 },
                 exc_info=True,
             )
+            return False
+        else:
+            return True
 
     # ==================== 字符串表示方法 ====================
 

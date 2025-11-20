@@ -1455,19 +1455,22 @@ class ConcurrentConsumer(BaseConsumer):
 
                 messages, message_queue = message_data
 
-                # 处理消息
-                success, duration = self._process_messages_with_timing(
-                    messages, message_queue
-                )
+                while messages:
+                    # 处理消息
+                    success, duration = self._process_messages_with_timing(
+                        messages, message_queue
+                    )
 
-                # 根据处理结果进行后续处理
-                if success:
-                    self._handle_successful_consume(messages, message_queue)
-                else:
-                    self._handle_failed_consume(messages, message_queue)
+                    # 根据处理结果进行后续处理
+                    if success:
+                        self._handle_successful_consume(messages, message_queue)
+                        messages = []
+                    else:
+                        messages = self._handle_failed_consume(messages, message_queue)
+                        time.sleep(5)
 
-                # 更新统计信息
-                self._update_consume_stats(success, duration, len(messages))
+                    # 更新统计信息
+                    self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
@@ -1582,7 +1585,7 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _handle_failed_consume(
         self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> None:
+    ) -> list[MessageExt]:
         """
         处理失败消费的消息
 
@@ -1590,8 +1593,13 @@ class ConcurrentConsumer(BaseConsumer):
             messages: 消费失败的消息列表
             message_queue: 消息队列
         """
-        for message in messages:
-            self._send_back_message(message_queue, message)
+        if self._config.message_model == MessageModel.CLUSTERING:
+            return [
+                msg for msg in messages if self._send_back_message(message_queue, msg)
+            ]
+        # 广播模式，直接丢掉消息
+        logger.warning("Broadcast mode, discard failed messages")
+        return []
 
     def _update_consume_stats(
         self, success: bool, duration: float, message_count: int
