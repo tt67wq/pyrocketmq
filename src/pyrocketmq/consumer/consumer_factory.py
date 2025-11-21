@@ -14,9 +14,8 @@ Consumer便利函数模块
 
 from typing import Any
 
-from pyrocketmq.consumer import ConcurrentConsumer
+from pyrocketmq.consumer import AsyncConcurrentConsumer, ConcurrentConsumer
 from pyrocketmq.consumer.config import ConsumerConfig, create_consumer_config
-from pyrocketmq.consumer.listener import MessageListener
 from pyrocketmq.logging import get_logger
 
 logger: Any = get_logger(__name__)
@@ -25,36 +24,40 @@ logger: Any = get_logger(__name__)
 def create_consumer(
     consumer_group: str,
     namesrv_addr: str,
-    message_listener: MessageListener | None = None,
     **kwargs: Any,
 ) -> ConcurrentConsumer:
-    """
-    创建并发消费者的便利函数
+    """创建并发消费者的便利函数。
 
     使用默认配置创建一个并发消费者实例，可以通过kwargs覆盖默认参数。
 
     Args:
-        consumer_group: 消费者组名称
-        namesrv_addr: NameServer地址
-        message_listener: 可选的消息监听器
-        **kwargs: 其他配置参数
+        consumer_group (str): 消费者组名称，用于标识属于同一组的消费者实例
+        namesrv_addr (str): NameServer地址，格式为"host:port"，用于获取路由信息
+        **kwargs (Any): 其他可选配置参数，包括consume_thread_max、pull_batch_size等，
+                       具体参数参考ConsumerConfig类定义
 
     Returns:
-        ConcurrentConsumer: 创建的消费者实例
+        ConcurrentConsumer: 创建的并发消费者实例，用于消息消费
+
+    Raises:
+        ValueError: 当consumer_group或namesrv_addr为空或格式不正确时
+        ConfigurationError: 当消费者配置参数无效时
+        ConnectionError: 当无法连接到NameServer时
 
     Examples:
         >>> # 基本使用
-        >>> from pyrocketmq.consumer import create_consumer, MessageListener, ConsumeResult
+        >>> from pyrocketmq.consumer import create_consumer
+        >>> from pyrocketmq.consumer.listener import MessageListenerConcurrently, ConsumeResult
         >>>
-        >>> class MyListener(MessageListener):
-        ...     def consume_message(self, messages, context):
+        >>> class MyListener(MessageListenerConcurrently):
+        ...     def consume_message_concurrently(self, messages, context):
         ...         for msg in messages:
         ...             print(f"Processing: {msg.body.decode()}")
-        ...         return ConsumeResult.SUCCESS
+        ...         return ConsumeResult.CONSUME_SUCCESS
         >>>
-        >>> consumer = create_consumer("my_group", "localhost:9876", MyListener())
+        >>> consumer = create_consumer("my_group", "localhost:9876", message_listener=MyListener())
         >>> consumer.start()
-        >>> consumer.subscribe("test_topic", create_tag_selector("*"))
+        >>> consumer.subscribe("test_topic", "*")
 
         >>> # 使用自定义配置
         >>> consumer = create_consumer(
@@ -74,16 +77,11 @@ def create_consumer(
         # 创建消费者
         consumer: ConcurrentConsumer = ConcurrentConsumer(config)
 
-        # 注册消息监听器（如果提供）
-        if message_listener:
-            consumer.register_message_listener(message_listener)
-
         logger.info(
             "Consumer created successfully",
             extra={
                 "consumer_group": consumer_group,
                 "namesrv_addr": namesrv_addr,
-                "has_listener": message_listener is not None,
                 "config_overrides": list(kwargs.keys()),
             },
         )
@@ -103,52 +101,101 @@ def create_consumer(
         raise
 
 
-def create_consumer_with_config(
-    config: ConsumerConfig,
-    message_listener: MessageListener | None = None,
+def create_concurrent_consumer(
+    consumer_group: str,
+    namesrv_addr: str,
+    **kwargs: Any,
 ) -> ConcurrentConsumer:
-    """
-    使用现有配置创建消费者
+    """创建并发消费者的别名函数。
+
+    这是为了向后兼容性和更明确的命名而提供的别名函数，功能与create_consumer完全相同。
 
     Args:
-        config: 消费者配置
-        message_listener: 可选的消息监听器
+        consumer_group (str): 消费者组名称，用于标识属于同一组的消费者实例
+        namesrv_addr (str): NameServer地址，格式为"host:port"，用于获取路由信息
+        **kwargs (Any): 其他可选配置参数，包括consume_thread_max、pull_batch_size等，
+                       具体参数参考ConsumerConfig类定义
 
     Returns:
-        ConcurrentConsumer: 创建的消费者实例
+        ConcurrentConsumer: 创建的并发消费者实例，用于消息消费
+
+    Raises:
+        ValueError: 当consumer_group或namesrv_addr为空或格式不正确时
+        ConfigurationError: 当消费者配置参数无效时
+        ConnectionError: 当无法连接到NameServer时
+    """
+    return create_consumer(consumer_group, namesrv_addr, **kwargs)
+
+
+def create_async_consumer(
+    consumer_group: str,
+    namesrv_addr: str,
+    **kwargs: Any,
+) -> AsyncConcurrentConsumer:
+    """创建异步并发消费者的便利函数。
+
+    使用默认配置创建一个异步并发消费者实例，可以通过kwargs覆盖默认参数。
+
+    Args:
+        consumer_group (str): 消费者组名称，用于标识属于同一组的消费者实例
+        namesrv_addr (str): NameServer地址，格式为"host:port"，用于获取路由信息
+        **kwargs (Any): 其他可选配置参数，包括consume_thread_max、pull_batch_size等，
+                       具体参数参考ConsumerConfig类定义
+
+    Returns:
+        AsyncConcurrentConsumer: 创建的异步并发消费者实例，用于异步消息消费
+
+    Raises:
+        ValueError: 当consumer_group或namesrv_addr为空或格式不正确时
+        ConfigurationError: 当消费者配置参数无效时
+        ConnectionError: 当无法连接到NameServer时
 
     Examples:
-        >>> from pyrocketmq.consumer import create_consumer_config, create_consumer_with_config
-        >>> from pyrocketmq.model import MessageModel
+        >>> # 基本使用
+        >>> from pyrocketmq.consumer import create_async_consumer
+        >>> from pyrocketmq.consumer.listener import AsyncMessageListenerConcurrently, ConsumeResult
+        >>> import asyncio
         >>>
-        >>> config = create_consumer_config(
-        ...     consumer_group="my_group",
-        ...     namesrv_addr="localhost:9876",
-        ...     message_model=MessageModel.CLUSTERING,
-        ...     consume_thread_max=30
+        >>> class MyAsyncListener(AsyncMessageListenerConcurrently):
+        ...     async def consume_message_concurrently(self, messages, context):
+        ...         for msg in messages:
+        ...             print(f"Processing: {msg.body.decode()}")
+        ...         return ConsumeResult.CONSUME_SUCCESS
+        >>>
+        >>> async def main():
+        ...     consumer = await create_async_consumer("my_group", "localhost:9876", message_listener=MyAsyncListener())
+        ...     await consumer.start()
+        ...     await consumer.subscribe("test_topic", "*")
+        ...     # 保持消费者运行
+        ...     await asyncio.sleep(60)
+        ...     await consumer.shutdown()
+        >>>
+        >>> asyncio.run(main())
+
+        >>> # 使用自定义配置
+        >>> consumer = await create_async_consumer(
+        ...     "my_group",
+        ...     "localhost:9876",
+        ...     message_listener=MyAsyncListener(),
+        ...     consume_thread_max=20,
+        ...     pull_batch_size=64
         ... )
-        >>>
-        >>> consumer = create_consumer_with_config(config, my_listener)
-        >>> consumer.start()
     """
     try:
-        if not config:
-            raise ValueError("ConsumerConfig cannot be None")
+        # 创建配置
+        config: ConsumerConfig = create_consumer_config(
+            consumer_group, namesrv_addr, **kwargs
+        )
 
-        # 创建消费者
-        consumer: ConcurrentConsumer = ConcurrentConsumer(config)
-
-        # 注册消息监听器（如果提供）
-        if message_listener:
-            consumer.register_message_listener(message_listener)
+        # 创建异步消费者
+        consumer: AsyncConcurrentConsumer = AsyncConcurrentConsumer(config)
 
         logger.info(
-            "Consumer created with custom config",
+            "Async consumer created successfully",
             extra={
-                "consumer_group": config.consumer_group,
-                "namesrv_addr": config.namesrv_addr,
-                "message_model": config.message_model,
-                "has_listener": message_listener is not None,
+                "consumer_group": consumer_group,
+                "namesrv_addr": namesrv_addr,
+                "config_overrides": list(kwargs.keys()),
             },
         )
 
@@ -156,8 +203,10 @@ def create_consumer_with_config(
 
     except Exception as e:
         logger.error(
-            f"Failed to create consumer with config: {e}",
+            f"Failed to create async consumer: {e}",
             extra={
+                "consumer_group": consumer_group,
+                "namesrv_addr": namesrv_addr,
                 "error": str(e),
             },
             exc_info=True,
@@ -165,17 +214,27 @@ def create_consumer_with_config(
         raise
 
 
-# 便利函数别名
-def create_concurrent_consumer(
+def create_async_concurrent_consumer(
     consumer_group: str,
     namesrv_addr: str,
-    message_listener: MessageListener | None = None,
     **kwargs: Any,
-) -> ConcurrentConsumer:
-    """
-    创建并发消费者的别名函数
+) -> AsyncConcurrentConsumer:
+    """创建异步并发消费者的别名函数。
 
-    这是为了向后兼容性和更明确的命名而提供的别名函数。
-    功能与create_consumer完全相同。
+    这是为了向后兼容性和更明确的命名而提供的别名函数，功能与create_async_consumer完全相同。
+
+    Args:
+        consumer_group (str): 消费者组名称，用于标识属于同一组的消费者实例
+        namesrv_addr (str): NameServer地址，格式为"host:port"，用于获取路由信息
+        **kwargs (Any): 其他可选配置参数，包括consume_thread_max、pull_batch_size等，
+                       具体参数参考ConsumerConfig类定义
+
+    Returns:
+        AsyncConcurrentConsumer: 创建的异步并发消费者实例，用于异步消息消费
+
+    Raises:
+        ValueError: 当consumer_group或namesrv_addr为空或格式不正确时
+        ConfigurationError: 当消费者配置参数无效时
+        ConnectionError: 当无法连接到NameServer时
     """
-    return create_consumer(consumer_group, namesrv_addr, message_listener, **kwargs)
+    return create_async_consumer(consumer_group, namesrv_addr, **kwargs)

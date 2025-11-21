@@ -47,6 +47,7 @@ store = await create_offset_store(
 # ==================== 异步消费者工厂函数 ====================
 
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
+from pyrocketmq.consumer.async_concurrent_consumer import AsyncConcurrentConsumer
 from pyrocketmq.consumer.async_listener import AsyncMessageListener
 from pyrocketmq.consumer.config import ConsumerConfig
 from pyrocketmq.logging import get_logger
@@ -88,9 +89,10 @@ from .consume_from_where_manager import ConsumeFromWhereManager
 
 # ==================== Consumer便利工厂函数 ====================
 from .consumer_factory import (
+    create_async_concurrent_consumer,
+    create_async_consumer,
     create_concurrent_consumer,
     create_consumer,
-    create_consumer_with_config,
 )
 
 # ==================== 异常类 ====================
@@ -172,6 +174,7 @@ __all__ = [
     # 核心消费者类
     "BaseConsumer",
     "AsyncBaseConsumer",
+    "AsyncConcurrentConsumer",
     "ConcurrentConsumer",
     # 配置管理
     "ConsumerConfig",
@@ -179,8 +182,9 @@ __all__ = [
     "create_config",
     # Consumer便利工厂函数
     "create_consumer",
-    "create_consumer_with_config",
     "create_concurrent_consumer",
+    "create_async_consumer",
+    "create_async_concurrent_consumer",
     # 偏移量存储
     "OffsetStore",
     "ReadOffsetType",
