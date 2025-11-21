@@ -415,21 +415,25 @@ class AsyncBaseConsumer:
     async def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
-        """
-        异步处理接收到的消息（内部方法）
+        """异步处理接收到的消息的内部方法。
 
-        这是异步消息处理的核心方法，由具体的消费者实现调用。
-        它负责创建消费上下文，调用注册的消息监听器，并处理消费结果。
+        这是异步并发消费者的核心消息处理方法，负责根据消息的topic选择对应的监听器来处理消息。
+        支持为不同topic配置不同的异步监听器，实现灵活的业务逻辑处理。同时支持重试主题的智能路由。
 
         Args:
-            messages: 要处理的消息列表
-            message_queue: 消息来自的队列
+            messages (list[MessageExt]): 要处理的消息列表，可以包含多条消息
+            message_queue (MessageQueue): 消息来自的队列信息，包含topic、broker名称和队列ID
 
         Returns:
             bool: 消费处理是否成功
+                - True: 消息处理成功（ConsumeResult.SUCCESS），可以更新偏移量
+                - False: 消息处理失败或发生异常，消息将进入重试流程
 
         Raises:
-            ConsumerError: 消息处理过程中发生严重错误时抛出
+            ConsumerError: 当消息处理过程中发生严重错误时抛出，例如：
+                - 监听器调用失败且无法重试
+                - 消息上下文创建失败
+                - 其他无法恢复的系统错误
         """
         if not messages:
             logger.warning(
@@ -445,6 +449,13 @@ class AsyncBaseConsumer:
         # 获取对应Topic的监听器
         topic: str = message_queue.topic
         listener: AsyncMessageListener | None = self._message_listeners.get(topic)
+        if not listener and self._is_retry_topic(topic):
+            origin_topic: str | None = messages[0].get_property(
+                MessageProperty.RETRY_TOPIC
+            )
+            listener = (
+                self._message_listeners.get(origin_topic) if origin_topic else None
+            )
 
         if not listener:
             logger.error(
@@ -542,18 +553,22 @@ class AsyncBaseConsumer:
     async def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
     ) -> bool:
-        """
-        将消费失败的消息异步发送回broker重新消费。
+        """将消费失败的消息异步发送回broker重新消费。
 
         当消息消费失败时，此方法负责将消息异步发送回原始broker，
-        以便后续重新消费。这是RocketMQ消息重试机制的重要组成部分。
+        以便后续重新消费。这是RocketMQ异步消息重试机制的重要组成部分。
 
         Args:
-            message_queue (MessageQueue): 消息来自的队列信息
-            message (MessageExt): 需要发送回的消息对象
+            message_queue (MessageQueue): 消息来自的队列信息，包含broker名称和队列ID
+            message (MessageExt): 需要发送回的消息对象，包含消息内容和属性
 
         Returns:
-            bool: 发送成功返回True，发送失败返回False
+            bool: 发送操作是否成功
+                - True: 消息成功发送回broker，将进入重试流程
+                - False: 发送失败，消息可能丢失或需要其他处理
+
+        Raises:
+            该方法不抛出异常，所有错误都会被捕获并记录日志
 
         异步处理流程:
             1. 异步获取目标broker地址
@@ -670,7 +685,7 @@ class AsyncBaseConsumer:
             msg (MessageExt): 需要重置重试属性的消息对象
 
         设置的属性:
-            - RETRY_TOPIC: 设置重试主题名，格式为%RETRY%{consumer_group}
+            - RETRY_TOPIC: 检查并设置重试主题名（如果存在）
             - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
 
         属性说明:
@@ -678,33 +693,54 @@ class AsyncBaseConsumer:
                 - 指示消息在消费失败时应该发送到的重试主题
                 - 由消费者组名唯一确定，确保重试消息的隔离性
                 - RocketMQ会根据该属性将失败消息投递到正确的重试主题
+                - 格式为：%RETRY%{consumer_group}
 
             CONSUME_START_TIME:
                 - 记录消息开始消费的时间戳（毫秒）
                 - 用于监控消费延迟和性能分析
                 - 帮助判断消息处理的耗时情况
+                - 格式为Unix时间戳的毫秒表示
+
+        执行逻辑:
+            1. 检查消息是否包含RETRY_TOPIC属性
+            2. 如果存在，将该属性值设置为消息的topic字段
+            3. 设置当前时间戳作为CONSUME_START_TIME属性
 
         使用场景:
             - 消息处理前的属性初始化
             - 消息重新消费前的属性重置
             - 重试机制中的属性设置
             - 异步消息处理过程中的属性维护
+            - 从重试队列中消费的消息处理
 
         Examples:
             >>> # 在异步消息处理前调用
             >>> message = MessageExt()
+            >>> message.set_property("RETRY_TOPIC", "%RETRY%my_group")
             >>> self._reset_retry(message)
-            >>> # 现在消息具备了完整的重试属性
+            >>> # 现在消息topic已更新为重试主题，并具备消费时间戳
+            >>> print(f"Topic: {message.topic}")  # %RETRY%my_group
+            >>> print(f"Start time: {message.get_property('CONSUME_START_TIME')}")
             >>> await self._concurrent_consume_message([message], queue)
 
-        Note:
-            - 该方法是消息重试机制的重要组成部分
-            - 确保所有重试消息都具有一致的属性格式
-            - 时间戳使用毫秒级精度，便于性能监控
-            - 重试主题名遵循RocketMQ标准命名规范
+        重要注意事项:
+            - 该方法只处理已有的RETRY_TOPIC属性，不会创建新的重试主题
+            - 时间戳使用当前时刻，确保每次调用都更新为最新的消费开始时间
+            - 与同步版本功能完全一致，确保异步环境下的行为一致性
+            - 重试主题的切换是RocketMQ重试机制的关键环节
             - 在异步环境中安全使用，无IO阻塞风险
+
+        RocketMQ重试流程:
+            1. 消费失败的消息调用_send_back_message发送回broker
+            2. Broker将消息投递到对应的重试主题
+            3. 消费者从重试主题拉取消息
+            4. 调用_reset_retry将消息topic重置为重试主题
+            5. 设置消费开始时间戳
+            6. 再次尝试消费处理
         """
-        msg.set_property(MessageProperty.RETRY_TOPIC, self._get_retry_topic())
+        retry_topic: str | None = msg.get_property(MessageProperty.RETRY_TOPIC)
+        if retry_topic:
+            msg.topic = retry_topic
         msg.set_property(
             MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
         )
@@ -735,14 +771,18 @@ class AsyncBaseConsumer:
         }
 
     async def _async_start(self) -> None:
-        """
-        异步启动基础组件
+        """异步启动异步消费者的基础组件。
 
-        异步启动NameServer管理器、Broker管理器、偏移量存储等基础组件。
+        异步启动NameServer管理器、Broker管理器、偏移量存储等基础组件，
         这是所有异步消费者启动过程中的通用逻辑。
 
         Raises:
-            ConsumerError: 启动基础组件失败时抛出
+            ConsumerError: 当启动基础组件失败时抛出，例如：
+                - NameServer管理器启动失败
+                - Broker管理器启动失败
+                - 偏移量存储启动失败
+                - 路由刷新任务启动失败
+                - 心跳任务启动失败
         """
         try:
             self._logger.info("开始启动异步消费者基础组件")
@@ -778,14 +818,17 @@ class AsyncBaseConsumer:
             raise ConsumerError(f"启动异步消费者基础组件失败: {e}") from e
 
     async def _async_shutdown(self) -> None:
-        """
-        异步关闭基础组件
+        """异步关闭异步消费者的基础组件。
 
-        异步关闭NameServer管理器、Broker管理器、偏移量存储等基础组件。
+        异步关闭NameServer管理器、Broker管理器、偏移量存储等基础组件，
         这是所有异步消费者关闭过程中的通用逻辑。
 
         Raises:
-            ConsumerError: 关闭基础组件失败时抛出
+            ConsumerError: 当关闭基础组件失败时抛出，例如：
+                - 异步任务关闭失败
+                - 资源清理失败
+                - 连接关闭失败
+                - 偏移量持久化失败
         """
         try:
             self._logger.info("开始关闭异步消费者基础组件")
@@ -838,6 +881,39 @@ class AsyncBaseConsumer:
             - 每个消费者组都有自己独立的重试主题
         """
         return f"%RETRY%{self._config.consumer_group}"
+
+    def _is_retry_topic(self, topic: str) -> bool:
+        """
+        判断指定主题是否是重试主题
+
+        检查给定的主题名是否符合重试主题的命名规范。
+        重试主题的格式为：%RETRY%+consumer_group
+
+        Args:
+            topic (str): 要检查的主题名
+
+        Returns:
+            bool: 如果是重试主题返回True，否则返回False
+
+        Examples:
+            >>> consumer = AsyncBaseConsumer(config)
+            >>> consumer.is_retry_topic("%RETRY%my_consumer_group")
+            True
+            >>> consumer.is_retry_topic("normal_topic")
+            False
+            >>> consumer.is_retry_topic("%DLQ%my_consumer_group")
+            False
+
+        Note:
+            - 此方法与同步版本的功能完全一致
+            - 使用精确字符串匹配确保准确性
+            - 包含输入参数的安全检查
+        """
+        if not topic or not isinstance(topic, str):
+            return False
+
+        retry_topic_prefix = f"%RETRY%{self._config.consumer_group}"
+        return topic == retry_topic_prefix
 
     def _subscribe_retry_topic(self) -> None:
         """
@@ -996,13 +1072,36 @@ class AsyncBaseConsumer:
     # ==================== 异步路由刷新任务 ====================
 
     async def _start_route_refresh_task(self) -> None:
-        """启动异步路由刷新任务"""
+        """启动异步路由刷新任务。
+
+        创建并启动一个异步任务来执行路由刷新循环，
+        确保消费者能够及时感知到集群拓扑的变化。
+
+        Returns:
+            None: 无返回值
+
+        Note:
+            - 任务会在后台持续运行，直到消费者关闭
+            - 使用asyncio.create_task创建异步任务
+            - 任务会自动处理异常和退出
+        """
         self._route_refresh_task = asyncio.create_task(self._route_refresh_loop())
 
     async def _route_refresh_loop(self) -> None:
-        """异步路由刷新循环
+        """异步路由刷新循环。
 
         定期刷新所有订阅Topic的路由信息，确保消费者能够感知到集群拓扑的变化。
+        这是RocketMQ消费者高可用性的关键机制。
+
+        Returns:
+            None: 无返回值
+
+        Note:
+            - 启动时立即执行一次路由刷新
+            - 按配置间隔定期执行刷新（默认30秒）
+            - 支持通过事件信号优雅退出
+            - 每次刷新都会更新TopicBrokerMapping缓存
+            - 异常不会中断循环，会继续下次刷新
         """
         self._logger.info(
             "Async route refresh loop started",
@@ -1145,11 +1244,37 @@ class AsyncBaseConsumer:
     # ==================== 异步心跳任务 ====================
 
     async def _start_heartbeat_task(self) -> None:
-        """启动异步心跳任务"""
+        """启动异步心跳任务。
+
+        创建并启动一个异步任务来执行心跳发送循环，
+        确保消费者与Broker保持活跃连接状态。
+
+        Returns:
+            None: 无返回值
+
+        Note:
+            - 任务会在后台持续运行，直到消费者关闭
+            - 使用asyncio.create_task创建异步任务
+            - 心跳机制是RocketMQ消费者存活状态的关键
+        """
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def _heartbeat_loop(self) -> None:
-        """异步消费者心跳发送循环"""
+        """异步消费者心跳发送循环。
+
+        定期向所有Broker发送心跳信息，维持消费者的存活状态。
+        这是RocketMQ消费者高可用性和负载均衡的基础机制。
+
+        Returns:
+            None: 无返回值
+
+        Note:
+            - 按配置间隔定期发送心跳（默认30秒）
+            - 支持通过事件信号优雅退出
+            - 心跳失败不会中断循环，会继续下次心跳
+            - 包含消费者组、订阅关系等关键信息
+            - 统计心跳成功和失败次数用于监控
+        """
         self._logger.info("Async heartbeat loop started")
 
         await self._send_heartbeat_to_all_brokers()

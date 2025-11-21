@@ -1982,8 +1982,6 @@ class ConcurrentConsumer(BaseConsumer):
     def _on_notify_consume_message_directly_internal(
         self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
     ) -> RemotingCommand:
-        print("!!!" * 10)
-        print("consume message directly!!!!!!!!!!!!!!!")
         if not command.body:
             return (
                 RemotingCommandBuilder(ResponseCode.ERROR)

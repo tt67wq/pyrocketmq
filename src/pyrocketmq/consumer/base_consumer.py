@@ -452,64 +452,83 @@ class BaseConsumer:
         并发消费消息的核心处理方法。
 
         这是并发消费者消息处理的核心方法，根据消息的topic选择对应的监听器来处理消息。
-        支持为不同topic配置不同的监听器，实现灵活的业务逻辑处理。
+        支持为不同topic配置不同的监听器，实现灵活的业务逻辑处理。同时支持重试主题的智能路由。
 
         Args:
-            messages (list[MessageExt]): 要处理的消息列表
-            message_queue (MessageQueue): 消息来自的队列信息
+            messages (list[MessageExt]): 要处理的消息列表，可以包含多条消息
+            message_queue (MessageQueue): 消息来自的队列信息，包含topic、broker名称和队列ID
 
         Returns:
             bool: 消费处理是否成功
-                - True: 消息处理成功（ConsumeResult.SUCCESS）
-                - False: 消息处理失败或发生异常
+                - True: 消息处理成功（ConsumeResult.SUCCESS），可以更新偏移量
+                - False: 消息处理失败或发生异常，消息将进入重试流程
 
-        处理流程:
-            1. 验证消息列表的有效性
-            2. 根据消息的topic获取对应的监听器
-            3. 创建消费上下文（ConsumeContext），包含重试次数等信息
-            4. 调用对应topic的消息监听器的consume_message方法处理消息
-            5. 验证消费结果的有效性（并发消费者只能返回SUCCESS或RECONSUME_LATER）
-            6. 处理异常情况并调用异常回调（如果实现）
-            7. 记录详细的处理日志和统计信息
+        核心处理流程:
+            1. **消息验证**: 检查消息列表是否为空（空列表视为处理成功）
+            2. **监听器选择**:
+               - 首先根据消息topic获取对应的监听器
+               - 如果是重试主题且没有找到监听器，尝试使用原始topic的监听器
+               - 最后尝试使用默认监听器
+            3. **上下文创建**: 创建ConsumeContext，包含消费者组、队列信息、重试次数等
+            4. **消息处理**: 调用监听器的consume_message方法处理消息
+            5. **结果验证**: 验证消费结果的有效性（并发消费者只支持SUCCESS/RECONSUME_LATER）
+            6. **异常处理**: 捕获处理异常并调用监听器的异常回调
+            7. **日志记录**: 记录详细的处理过程和结果日志
 
-        监听器选择策略:
-            - 优先使用topic特定的监听器（通过subscribe_with_listener注册）
-            - 如果没有找到topic特定的监听器，则使用默认监听器（通过register_message_listener注册）
-            - 如果都没有找到，则记录错误并返回处理失败
+        监听器选择策略（优先级从高到低）:
+            1. **主题特定监听器**: 通过subscribe_with_listener注册的topic监听器
+            2. **重试主题原始监听器**: 对于重试主题，使用RETRY_TOPIC属性找到原始topic的监听器
+            3. **默认监听器**: 通过register_message_listener注册的默认监听器
+            4. **无监听器**: 记录错误并返回处理失败
 
         消费结果处理:
-            - ConsumeResult.SUCCESS: 返回True，消息处理成功
-            - ConsumeResult.RECONSUME_LATER: 返回False，消息需要重新消费
-            - 其他结果（COMMIT、ROLLBACK、SUSPEND_CURRENT_QUEUE_A_MOMENT）:
-              视为无效结果，返回False并记录错误日志
+            - ConsumeResult.SUCCESS: 返回True，消息处理成功，可以更新消费偏移量
+            - ConsumeResult.RECONSUME_LATER: 返回False，消息处理失败，将触发重试机制
+            - 无效结果（COMMIT、ROLLBACK、SUSPEND_CURRENT_QUEUE_A_MOMENT）:
+              记录错误日志，返回False，触发消息重试
 
-        异常处理:
+        重试主题支持:
+            - 自动识别重试主题（格式：%RETRY%{consumer_group}）
+            - 智能路由到原始topic的监听器进行业务处理
+            - 使用RETRY_TOPIC属性确定消息的原始业务主题
+            - 支持重试次数统计和监控
+
+        异常处理机制:
             - 捕获消息处理过程中的所有异常
             - 调用消息监听器的on_exception回调方法（如果实现）
-            - 回调异常不会影响主处理流程
-            - 异常情况下返回False，触发消息重试机制
+            - 回调异常不影响主处理流程的返回结果
+            - 异常情况下统一返回False，触发消息重试
 
-        状态检查:
-            - 验证消息列表不为空（空列表视为处理成功）
-            - 检查是否存在对应的监听器
-            - 记录所有状态检查的警告和错误信息
+        监控和日志:
+            - 记录处理开始的消息信息（topic、数量、重试次数等）
+            - 记录处理结果和耗时统计
+            - 记录监听器选择过程和失败原因
+            - 提供详细的错误上下文信息
 
         Examples:
-            >>> # 该方法由消费者内部调用，不建议外部直接使用
+            >>> # 该方法由消费者内部调用，通常不需要外部直接使用
             >>> success = self._concurrent_consume_message(messages, queue)
             >>> if success:
-            >>>     # 更新偏移量等后续处理
+            >>>     # 消息处理成功，可以更新偏移量
+            >>>     offset_store.update_offset(queue, next_offset)
             >>> else:
-            >>>     # 处理失败消息的重试逻辑
+            >>>     # 消息处理失败，将触发重试机制
+            >>>     failed_messages.extend(messages)
             >>>     pass
 
-        Note:
-            - 这是并发消费者的核心消息处理逻辑
-            - 支持多监听器模式，每个topic可以有独立的处理逻辑
-            - 与顺序消费者不同，并发消费者不支持COMMIT/ROLLBACK等结果
+        Important Notes:
+            - 这是ConcurrentConsumer的核心消息处理逻辑
+            - 支持多监听器模式，实现不同topic的独立业务逻辑
+            - 与OrderlyConsumer不同，不支持事务性的COMMIT/ROLLBACK操作
             - 适用于高并发、无序消息处理场景
-            - 提供完整的异常处理和回调机制
-            - 处理结果直接影响消息的重试策略
+            - 每次调用可能处理多条消息，监听器需要支持批量处理
+            - 重试机制是自动的，无需手动管理重试队列
+
+        RocketMQ集成特性:
+            - 完全兼容RocketMQ的消息重试机制
+            - 支持消费失败消息的自动延迟重试
+            - 集成死信队列处理（超过最大重试次数）
+            - 支持消息轨迹和监控统计
         """
         if not messages:
             logger.warning(
@@ -526,7 +545,16 @@ class BaseConsumer:
         topic = messages[0].topic if messages else message_queue.topic
 
         # 根据topic获取对应的监听器
-        listener = self._message_listeners.get(topic)
+
+        listener: MessageListener | None = self._message_listeners.get(topic)
+        if not listener and self._is_retry_topic(topic):
+            origin_topic: str | None = messages[0].get_property(
+                MessageProperty.RETRY_TOPIC
+            )
+            listener = (
+                self._message_listeners.get(origin_topic) if origin_topic else None
+            )
+
         if not listener:
             # 如果没有找到topic特定的监听器，使用默认监听器
             logger.error(
@@ -543,6 +571,10 @@ class BaseConsumer:
 
         # 创建消费上下文
         reconsume_times: int = messages[0].reconsume_times if messages else 0
+        # if reconsume_times > 0:
+        #     print("!!!!!!" * 10)
+        #     print(f"我的亲妈啊，重试次数为{reconsume_times}")
+        #     print("!!!!!!" * 10)
         context: ConsumeContext = ConsumeContext(
             consumer_group=self._config.consumer_group,
             message_queue=message_queue,
@@ -558,7 +590,6 @@ class BaseConsumer:
                     "message_count": len(messages),
                     "queue_id": context.queue_id,
                     "reconsume_times": reconsume_times,
-                    "listener_type": type(listener).__name__,
                 },
             )
 
@@ -588,7 +619,6 @@ class BaseConsumer:
                     "queue_id": context.queue_id,
                     "result": result.value,
                     "duration": context.get_consume_duration(),
-                    "listener_type": type(listener).__name__,
                 },
             )
 
@@ -602,7 +632,6 @@ class BaseConsumer:
                     "topic": topic,
                     "message_count": len(messages),
                     "queue_id": context.queue_id,
-                    "listener_type": type(listener).__name__,
                     "error": str(e),
                 },
                 exc_info=True,
@@ -1300,6 +1329,33 @@ class BaseConsumer:
         """
         return f"%RETRY%{self._config.consumer_group}"
 
+    def _is_retry_topic(self, topic: str) -> bool:
+        """
+        判断指定主题是否是重试主题
+
+        检查给定的主题名是否符合重试主题的命名规范。
+        重试主题的格式为：%RETRY%+consumer_group
+
+        Args:
+            topic (str): 要检查的主题名
+
+        Returns:
+            bool: 如果是重试主题返回True，否则返回False
+
+        Examples:
+            >>> self._is_retry_topic("%RETRY%my_consumer_group")
+            True
+            >>> self._is_retry_topic("normal_topic")
+            False
+            >>> self._is_retry_topic("%DLQ%my_consumer_group")
+            False
+        """
+        if not topic or not isinstance(topic, str):
+            return False
+
+        retry_topic_prefix = f"%RETRY%{self._config.consumer_group}"
+        return topic == retry_topic_prefix
+
     def _subscribe_retry_topic(self) -> None:
         """
         订阅重试主题
@@ -1481,7 +1537,7 @@ class BaseConsumer:
             msg (MessageExt): 需要重置重试属性的消息对象
 
         设置的属性:
-            - RETRY_TOPIC: 设置重试主题名，格式为%RETRY%{consumer_group}
+            - RETRY_TOPIC: 检查并设置重试主题名（如果存在）
             - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
 
         属性说明:
@@ -1489,30 +1545,57 @@ class BaseConsumer:
                 - 指示消息在消费失败时应该发送到的重试主题
                 - 由消费者组名唯一确定，确保重试消息的隔离性
                 - RocketMQ会根据该属性将失败消息投递到正确的重试主题
+                - 格式为：%RETRY%{consumer_group}
 
             CONSUME_START_TIME:
                 - 记录消息开始消费的时间戳（毫秒）
                 - 用于监控消费延迟和性能分析
                 - 帮助判断消息处理的耗时情况
+                - 格式为Unix时间戳的毫秒表示
+
+        执行逻辑:
+            1. 检查消息是否包含RETRY_TOPIC属性
+            2. 如果存在，将该属性值设置为消息的topic字段
+            3. 设置当前时间戳作为CONSUME_START_TIME属性
 
         使用场景:
             - 消息处理前的属性初始化
             - 消息重新消费前的属性重置
             - 重试机制中的属性设置
+            - 从重试队列中消费的消息处理
 
         Examples:
             >>> # 在消息处理前调用
             >>> message = MessageExt()
+            >>> message.set_property("RETRY_TOPIC", "%RETRY%my_group")
             >>> self._reset_retry(message)
-            >>> # 现在消息具备了完整的重试属性
+            >>> # 现在消息topic已更新为重试主题，并具备消费时间戳
+            >>> print(f"Topic: {message.topic}")  # %RETRY%my_group
+            >>> print(f"Start time: {message.get_property('CONSUME_START_TIME')}")
 
-        Note:
-            - 该方法是消息重试机制的重要组成部分
+        重要注意事项:
+            - 该方法只处理已有的RETRY_TOPIC属性，不会创建新的重试主题
+            - 时间戳使用当前时刻，确保每次调用都更新为最新的消费开始时间
+            - 重试主题的切换是RocketMQ重试机制的关键环节
             - 确保所有重试消息都具有一致的属性格式
-            - 时间戳使用毫秒级精度，便于性能监控
-            - 重试主题名遵循RocketMQ标准命名规范
+
+        RocketMQ重试流程:
+            1. 消费失败的消息调用_send_back_message发送回broker
+            2. Broker将消息投递到对应的重试主题
+            3. 消费者从重试主题拉取消息
+            4. 调用_reset_retry将消息topic重置为重试主题
+            5. 设置消费开始时间戳
+            6. 再次尝试消费处理
+
+        监控和调试:
+            - CONSUME_START_TIME用于计算消息处理延迟
+            - RETRY_TOPIC属性帮助追踪消息的重试路径
+            - 时间戳精度为毫秒级，支持细粒度性能分析
+            - 可通过消息属性查询重试次数和处理时长
         """
-        msg.set_property(MessageProperty.RETRY_TOPIC, self._get_retry_topic())
+        retry_topic: str | None = msg.get_property(MessageProperty.RETRY_TOPIC)
+        if retry_topic:
+            msg.topic = retry_topic
         msg.set_property(
             MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
         )
