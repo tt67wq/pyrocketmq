@@ -14,8 +14,11 @@ class ConsumeResult(Enum):
     如何处理这条消息以及后续的消费行为。
     """
 
+    # --------- for concurrent conumser -----------
     SUCCESS = "CONSUME_SUCCESS"  # 消费成功，消息确认
     RECONSUME_LATER = "RECONSUME_LATER"  # 稍后重试消费
+
+    # --------- for orderly conumser -----------
     COMMIT = "COMMIT"  # 提交消费
     ROLLBACK = "ROLLBACK"  # 回滚消费
     SUSPEND_CURRENT_QUEUE_A_MOMENT = (

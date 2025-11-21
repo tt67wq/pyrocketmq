@@ -193,13 +193,6 @@ class ConcurrentConsumer(BaseConsumer):
                     },
                 )
 
-                # 验证必要条件
-                if not self._message_listener:
-                    raise ConsumerStartError(
-                        "No message listener registered",
-                        context={"consumer_group": self._config.consumer_group},
-                    )
-
                 # 启动BaseConsumer
                 super().start()
 
@@ -1989,6 +1982,8 @@ class ConcurrentConsumer(BaseConsumer):
     def _on_notify_consume_message_directly_internal(
         self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
     ) -> RemotingCommand:
+        print("!!!" * 10)
+        print("consume message directly!!!!!!!!!!!!!!!")
         if not command.body:
             return (
                 RemotingCommandBuilder(ResponseCode.ERROR)

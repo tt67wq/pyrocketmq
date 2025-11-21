@@ -689,79 +689,6 @@ class BaseConsumer:
         """
         return self._message_listeners.copy()
 
-    # ==================== 向后兼容的方法 ====================
-
-    def register_message_listener(self, listener: MessageListener) -> None:
-        """
-        注册默认消息监听器（兼容性方法）。
-
-        设置用于处理接收到的消息的默认回调函数。当消费者接收到消息时，
-        如果没有找到topic特定的监听器，则会使用此默认监听器。
-
-        注意：这是兼容性保留的方法，建议使用新的subscribe_with_listener方法，
-        该方法可以为每个topic指定独立的监听器。
-
-        Args:
-            listener: 消息监听器实例，必须继承自MessageListener
-
-        Raises:
-            ConsumerError: 当消费者正在运行或注册失败时抛出
-            ValueError: 当listener为None或不是MessageListener实例时抛出
-
-        Example:
-            >>> # 使用新的API（推荐）
-            >>> consumer.subscribe_with_listener("order_topic", selector, OrderListener())
-            >>> consumer.subscribe_with_listener("log_topic", selector, LogListener())
-            >>>
-            >>> # 使用默认监听器（兼容性）
-            >>> from pyrocketmq.consumer.listener import MessageListener, ConsumeResult
-            >>> class DefaultListener(MessageListener):
-            ...     def consume_message(self, messages, context):
-            ...         for msg in messages:
-            ...             print(f"Processing message: {msg.body.decode()}")
-            ...         return ConsumeResult.SUCCESS
-            >>> consumer.register_message_listener(DefaultListener())
-            >>> consumer.subscribe("fallback_topic", selector)
-
-        Note:
-            - 必须在消费者启动前调用此方法
-            - 默认监听器会被用作所有未注册特定监听器的topic的备选
-            - 推荐使用subscribe_with_listener方法获得更好的API体验
-        """
-        if self._is_running:
-            raise ConsumerError(
-                "Cannot register message listener while consumer is running. Please shutdown first or register before starting.",
-                context={"consumer_group": self._config.consumer_group},
-            )
-
-        if not isinstance(listener, MessageListener):
-            raise ValueError("Listener must be an instance of MessageListener")
-
-        try:
-            self._message_listener = listener
-            logger.info(
-                "Default message listener registered successfully",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "listener_type": type(listener).__name__,
-                },
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to register message listener: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "listener_type": type(listener).__name__,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            raise ConsumerError(
-                "Failed to register message listener",
-                context={"consumer_group": self._config.consumer_group},
-                cause=e,
-            ) from e
-
     # ==================== 状态摘要方法 ====================
 
     def get_status_summary(self) -> dict[str, Any]:
@@ -921,11 +848,6 @@ class BaseConsumer:
                         logger.info("NameServerManager stopped successfully")
                     except Exception as e:
                         logger.warning(f"Error stopping name_server_manager: {e}")
-
-                # 6. 清理消息监听器引用
-                self._message_listeners.clear()
-                if hasattr(self, "_message_listener"):
-                    self._message_listener = None
 
                 # 7. 重置运行状态
                 self._is_running = False

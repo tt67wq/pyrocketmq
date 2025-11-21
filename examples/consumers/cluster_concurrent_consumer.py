@@ -12,9 +12,16 @@ from pyrocketmq.model import (
 
 
 def message_listener(messages: list[MessageExt]) -> ConsumeResult:
+    import random
+
+    # 1/6的概率返回RECONSUME_LATER，模拟消费失败需要重试的场景
+    if random.randint(1, 6) == 1:
+        print(f"模拟消费失败，返回RECONSUME_LATER进行重试，消息数量: {len(messages)}")
+        return ConsumeResult.RECONSUME_LATER
+
     for message in messages:
         print(
-            "!!!!!!!!!!!!!!!",
+            "【收到消息：】",
             str(message.body),
             "tags:",
             message.get_tags(),
