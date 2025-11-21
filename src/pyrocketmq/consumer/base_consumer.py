@@ -279,11 +279,11 @@ class BaseConsumer:
             - 必须在消费者启动前调用此方法
             - 支持为不同topic注册不同类型的listener（并发、顺序等）
         """
-        if self._is_running:
-            raise ConsumerError(
-                "Cannot subscribe to topics while consumer is running",
-                context={"consumer_group": self._config.consumer_group},
-            )
+        # if self._is_running:
+        #     raise ConsumerError(
+        #         "Cannot subscribe to topics while consumer is running",
+        #         context={"consumer_group": self._config.consumer_group},
+        #     )
 
         if not topic or not topic.strip():
             raise ValueError("Topic cannot be empty")
@@ -354,11 +354,11 @@ class BaseConsumer:
         Note:
             必须在消费者停止后调用此方法。如果Topic未订阅，此方法不会抛出异常。
         """
-        if self._is_running:
-            raise ConsumerError(
-                "Cannot unsubscribe while consumer is running. Please shutdown first.",
-                context={"consumer_group": self._config.consumer_group},
-            )
+        # if self._is_running:
+        #     raise ConsumerError(
+        #         "Cannot unsubscribe while consumer is running. Please shutdown first.",
+        #         context={"consumer_group": self._config.consumer_group},
+        #     )
 
         if not topic:
             raise ValueError("Topic must be a non-empty string")

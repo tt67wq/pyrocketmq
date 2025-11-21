@@ -46,7 +46,6 @@ from pyrocketmq.model import (
     MessageExt,
     MessageModel,
     MessageQueue,
-    MessageSelector,
     PullMessageResult,
     RemotingCommand,
     RemotingCommandBuilder,
@@ -346,64 +345,6 @@ class ConcurrentConsumer(BaseConsumer):
                     cause=e,
                     context={"consumer_group": self._config.consumer_group},
                 ) from e
-
-    def subscribe(self, topic: str, selector: MessageSelector) -> None:
-        """订阅指定Topic的消息。
-
-        将消费者注册为指定Topic的订阅者，并设置消息选择器来过滤消息。
-        如果消费者已经运行，会自动触发重平衡来分配新的队列。
-
-        Args:
-            topic (str): 要订阅的Topic名称，不能为空或None
-            selector (MessageSelector): 消息选择器，用于过滤消息
-                - TAG选择器：基于消息标签进行过滤
-                - SQL选择器：基于消息属性进行复杂过滤
-
-        Returns:
-            None
-
-        Raises:
-            ValueError: 当topic为空或无效时
-            SubscriptionConflict: 当订阅与现有订阅冲突时
-
-        Note:
-            - 可以多次调用此方法订阅多个Topic
-            - 相同Topic的重复订阅会更新选择器
-            - 消费者运行时调用会触发重平衡
-            - 订阅会在消费者重启后保持（如果偏移量已持久化）
-        """
-        super().subscribe(topic, selector)
-
-        # 如果消费者正在运行，触发重平衡
-        if self._is_running:
-            self._trigger_rebalance()
-
-    def unsubscribe(self, topic: str) -> None:
-        """取消订阅指定Topic。
-
-        移除对指定Topic的订阅，停止拉取该Topic的消息，
-        并释放相关的队列资源。如果消费者正在运行，会触发重平衡。
-
-        Args:
-            topic (str): 要取消订阅的Topic名称
-
-        Returns:
-            None
-
-        Raises:
-            None: 此方法不会抛出异常，失败的取消订阅会被记录但不会中断执行
-
-        Note:
-            - 如果Topic未被订阅，此方法不会产生任何效果
-            - 消费者运行时调用会触发重平衡，可能导致其他队列重新分配
-            - 取消订阅不会删除已持久化的偏移量，可以通过重新订阅恢复
-            - 建议在取消订阅前确保相关业务逻辑已处理完毕
-        """
-        super().unsubscribe(topic)
-
-        # 如果消费者正在运行，触发重平衡
-        if self._is_running:
-            self._trigger_rebalance()
 
     # ==================== 内部方法：重平衡管理 ====================
 

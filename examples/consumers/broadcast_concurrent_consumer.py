@@ -9,7 +9,6 @@ from pyrocketmq.model import (
     ConsumeResult,
     MessageExt,
     MessageModel,
-    create_tag_selector,
 )
 
 
@@ -35,9 +34,9 @@ def main():
         "d1-dmq-namesrv.shizhuang-inc.net:31110",
         message_model=MessageModel.BROADCASTING,
     )
-    consumer.subscribe("test_im_015", SUBSCRIBE_ALL)
-
-    consumer.register_message_listener(create_message_listener(message_listener))
+    consumer.subscribe(
+        "test_im_015", SUBSCRIBE_ALL, create_message_listener(message_listener)
+    )
 
     try:
         # 启动consumer

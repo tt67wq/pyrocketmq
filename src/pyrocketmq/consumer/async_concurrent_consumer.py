@@ -27,13 +27,11 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
 )
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.async_listener import (
-    AsyncMessageListener,
     ConsumeResult,
 )
 from pyrocketmq.consumer.config import ConsumerConfig
 from pyrocketmq.consumer.errors import (
     ConsumerShutdownError,
-    ConsumerStartError,
     MessageConsumeError,
 )
 from pyrocketmq.consumer.offset_store import ReadOffsetType
@@ -45,7 +43,6 @@ from pyrocketmq.model import (
     MessageExt,
     MessageModel,
     MessageQueue,
-    MessageSelector,
     PullMessageResult,
     RemotingCommand,
     RemotingCommandBuilder,
@@ -201,19 +198,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                         "namesrv_addr": self._config.namesrv_addr,
                     },
                 )
-
-                # 验证必要条件
-                if not self._message_listener:
-                    raise ConsumerStartError(
-                        "No async message listener registered",
-                        context={"consumer_group": self._config.consumer_group},
-                    )
-
-                if not isinstance(self._message_listener, AsyncMessageListener):
-                    raise ConsumerStartError(
-                        "Message listener must be AsyncMessageListener for AsyncConcurrentConsumer",
-                        context={"consumer_group": self._config.consumer_group},
-                    )
 
                 # 启动AsyncBaseConsumer
                 await super().start()
@@ -441,33 +425,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             finally:
                 # 清理资源
                 await self._cleanup_resources()
-
-    async def subscribe(self, topic: str, selector: MessageSelector) -> None:
-        """订阅指定主题。
-
-        Args:
-            topic (str): 要订阅的主题名称
-            selector (MessageSelector): 消息选择器，用于过滤消息
-
-        Raises:
-            SubscribeError: 当订阅失败时抛出
-        """
-        await super().subscribe(topic, selector)
-
-        # 如果消费者已启动，触发重平衡
-        if self._is_running:
-            await self._trigger_rebalance()
-
-    async def unsubscribe(self, topic: str) -> None:
-        """取消订阅指定主题。
-
-        Args:
-            topic (str): 要取消订阅的主题名称
-
-        Raises:
-            UnsubscribeError: 当取消订阅失败时抛出
-        """
-        await super().unsubscribe(topic)
 
         # 如果消费者已启动，触发重平衡
         if self._is_running:
@@ -1323,6 +1280,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             q = MessageQueue(msg.topic, header.broker_name, 0)
 
         now = datetime.now()
+
+        for msg in msgs:
+            self._reset_retry(msg)
 
         if await self._concurrent_consume_message(msgs, q):
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
