@@ -36,7 +36,7 @@ from pyrocketmq.remote import ConnectionPool, RemoteConfig
 
 # 本地模块导入
 from .config import ConsumerConfig
-from .errors import ConsumerError, SubscribeError
+from .errors import ConsumerError
 from .listener import ConsumeContext, MessageListener
 from .subscription_manager import SubscriptionManager
 
@@ -113,7 +113,8 @@ class BaseConsumer:
 
         self._config: ConsumerConfig = config
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
-        self._message_listener: MessageListener | None = None
+        # 改为支持多个listener，每个topic对应一个listener
+        self._message_listeners: dict[str, MessageListener] = {}
         self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
             ConsumerTopicBrokerMapping()
         )
@@ -245,73 +246,82 @@ class BaseConsumer:
 
     # ==================== 订阅管理方法 ====================
 
-    def subscribe(self, topic: str, selector: MessageSelector) -> None:
+    def subscribe(
+        self, topic: str, selector: MessageSelector, listener: MessageListener
+    ) -> None:
         """
-        订阅Topic.
+        订阅Topic并注册对应的消息监听器。
 
-        向消费者注册对指定Topic的订阅关系。消费者只会接收到订阅Topic的消息，
-        可以通过MessageSelector进行消息过滤。
+        这是简化的API设计，将订阅topic和注册listener合并为一个方法。
+        每个topic可以有独立的message listener，支持不同业务逻辑处理。
 
         Args:
             topic: 要订阅的Topic名称，不能为空字符串
             selector: 消息选择器，用于过滤消息，不能为None
+            listener: 消息监听器，用于处理该topic的消息，不能为None
 
         Raises:
             ConsumerError: 当消费者正在运行或订阅失败时抛出
-            ValueError: 当topic为空或selector为None时抛出
+            ValueError: 当参数为空时抛出
 
         Example:
-            >>> # 使用TAG过滤
+            >>> # 为订单topic注册专门的处理逻辑
             >>> from pyrocketmq.model.client_data import create_tag_selector
-            >>> consumer.subscribe("order_topic", create_tag_selector("pay||ship"))
+            >>> order_listener = OrderMessageListener()
+            >>> consumer.subscribe_with_listener("order_topic", create_tag_selector("pay||ship"), order_listener)
             >>>
-            >>> # 使用SQL92过滤（如果支持）
-            >>> consumer.subscribe("order_topic", create_sql_selector("amount > 100"))
-            >>>
-            >>> # 订阅所有消息
-            >>> consumer.subscribe("log_topic", create_tag_selector("*"))
+            >>> # 为日志topic注册不同的处理逻辑
+            >>> log_listener = LogMessageListener()
+            >>> consumer.subscribe_with_listener("log_topic", create_tag_selector("*"), log_listener)
 
         Note:
-            必须在消费者启动前调用此方法。
+            - 每个topic只能有一个listener，重复注册会覆盖之前的listener
+            - 必须在消费者启动前调用此方法
+            - 支持为不同topic注册不同类型的listener（并发、顺序等）
         """
         if self._is_running:
             raise ConsumerError(
-                "Cannot subscribe while consumer is running. Please shutdown first or subscribe before starting.",
+                "Cannot subscribe to topics while consumer is running",
+                context={"consumer_group": self._config.consumer_group},
             )
 
-        if not topic:
-            raise ValueError("Topic must be a non-empty string")
+        if not topic or not topic.strip():
+            raise ValueError("Topic cannot be empty")
 
         if not selector:
-            raise ValueError("MessageSelector cannot be None")
+            raise ValueError("Message selector cannot be None")
+
+        if not isinstance(listener, MessageListener):
+            raise ValueError("Listener must be an instance of MessageListener")
 
         try:
+            # 1. 注册到订阅管理器
+            success = self._subscription_manager.subscribe(topic, selector)
+            if not success:
+                raise ConsumerError(
+                    f"Failed to subscribe to topic: {topic}",
+                    context={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                    },
+                )
+
+            # 2. 注册消息监听器
+            self._message_listeners[topic] = listener
+
             logger.info(
-                f"Subscribing to topic: {topic}",
+                f"Successfully subscribed to topic with listener: {topic}",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "topic": topic,
-                    "selector_type": selector.type,
-                    "selector_expression": selector.expression,
+                    "selector_type": type(selector).__name__,
+                    "listener_type": type(listener).__name__,
                 },
             )
 
-            success: bool = self._subscription_manager.subscribe(topic, selector)
-            if success:
-                logger.info(
-                    f"Successfully subscribed to topic: {topic}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": topic,
-                        "total_subscriptions": self._subscription_manager.get_subscription_count(),
-                    },
-                )
-            else:
-                raise SubscribeError(topic, "Failed to subscribe to topic")
-
         except Exception as e:
             logger.error(
-                f"Failed to subscribe to topic {topic}: {e}",
+                f"Failed to subscribe with listener for topic {topic}: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "topic": topic,
@@ -319,7 +329,11 @@ class BaseConsumer:
                 },
                 exc_info=True,
             )
-            raise e
+            raise ConsumerError(
+                f"Failed to subscribe to topic: {topic}",
+                context={"consumer_group": self._config.consumer_group, "topic": topic},
+                cause=e,
+            ) from e
 
     def unsubscribe(self, topic: str) -> None:
         """
@@ -360,12 +374,16 @@ class BaseConsumer:
 
             success: bool = self._subscription_manager.unsubscribe(topic)
             if success:
+                # 同时清理消息监听器
+                removed_listener = self._message_listeners.pop(topic, None)
+
                 logger.info(
                     f"Successfully unsubscribed from topic: {topic}",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "topic": topic,
                         "total_subscriptions": self._subscription_manager.get_subscription_count(),
+                        "listener_removed": removed_listener is not None,
                     },
                 )
             else:
@@ -425,73 +443,6 @@ class BaseConsumer:
         """
         return self._subscription_manager.is_subscribed(topic)
 
-    # ==================== 消息监听器管理 ====================
-
-    def register_message_listener(self, listener: MessageListener) -> None:
-        """
-        注册消息监听器.
-
-        设置用于处理接收到的消息的回调函数。当消费者接收到消息时，
-        会调用监听器的consume_message方法进行处理。
-
-        Args:
-            listener: 消息监听器实例，必须继承自MessageListener
-
-        Raises:
-            ConsumerError: 当消费者正在运行或注册失败时抛出
-            ValueError: 当listener为None或不是MessageListener实例时抛出
-
-        Example:
-            >>> from pyrocketmq.consumer.listener import MessageListener, ConsumeResult
-            >>>
-            >>> class MyListener(MessageListener):
-            ...     def consume_message(self, messages, context):
-            ...         for msg in messages:
-            ...             print(f"Processing message: {msg.body.decode()}")
-            ...         return ConsumeResult.SUCCESS
-            >>>
-            >>> consumer.register_message_listener(MyListener())
-
-        Note:
-            必须在消费者启动前调用此方法。一个消费者只能注册一个监听器。
-        """
-        if self._is_running:
-            raise ConsumerError(
-                "Cannot register message listener while consumer is running. Please shutdown first or register before starting.",
-                context={"consumer_group": self._config.consumer_group},
-            )
-
-        if not listener:
-            raise ValueError("MessageListener cannot be None")
-
-        if not isinstance(listener, MessageListener):
-            raise ValueError("Listener must be an instance of MessageListener")
-
-        try:
-            self._message_listener = listener
-            logger.info(
-                "Message listener registered successfully",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "listener_type": type(listener).__name__,
-                },
-            )
-        except Exception as e:
-            logger.error(
-                f"Failed to register message listener: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "listener_type": type(listener).__name__,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            raise ConsumerError(
-                "Failed to register message listener",
-                context={"consumer_group": self._config.consumer_group},
-                cause=e,
-            ) from e
-
     # ==================== 消息处理核心方法 ====================
 
     def _concurrent_consume_message(
@@ -500,8 +451,8 @@ class BaseConsumer:
         """
         并发消费消息的核心处理方法。
 
-        这是并发消费者消息处理的核心方法，负责调用用户注册的消息监听器来处理消息。
-        该方法提供完整的消费上下文信息，并处理各种异常情况和回调机制。
+        这是并发消费者消息处理的核心方法，根据消息的topic选择对应的监听器来处理消息。
+        支持为不同topic配置不同的监听器，实现灵活的业务逻辑处理。
 
         Args:
             messages (list[MessageExt]): 要处理的消息列表
@@ -513,12 +464,18 @@ class BaseConsumer:
                 - False: 消息处理失败或发生异常
 
         处理流程:
-            1. 验证消息监听器和消息列表的有效性
-            2. 创建消费上下文（ConsumeContext），包含重试次数等信息
-            3. 调用消息监听器的consume_message方法处理消息
-            4. 验证消费结果的有效性（并发消费者只能返回SUCCESS或RECONSUME_LATER）
-            5. 处理异常情况并调用异常回调（如果实现）
-            6. 记录详细的处理日志和统计信息
+            1. 验证消息列表的有效性
+            2. 根据消息的topic获取对应的监听器
+            3. 创建消费上下文（ConsumeContext），包含重试次数等信息
+            4. 调用对应topic的消息监听器的consume_message方法处理消息
+            5. 验证消费结果的有效性（并发消费者只能返回SUCCESS或RECONSUME_LATER）
+            6. 处理异常情况并调用异常回调（如果实现）
+            7. 记录详细的处理日志和统计信息
+
+        监听器选择策略:
+            - 优先使用topic特定的监听器（通过subscribe_with_listener注册）
+            - 如果没有找到topic特定的监听器，则使用默认监听器（通过register_message_listener注册）
+            - 如果都没有找到，则记录错误并返回处理失败
 
         消费结果处理:
             - ConsumeResult.SUCCESS: 返回True，消息处理成功
@@ -533,8 +490,8 @@ class BaseConsumer:
             - 异常情况下返回False，触发消息重试机制
 
         状态检查:
-            - 检查消息监听器是否已注册
             - 验证消息列表不为空（空列表视为处理成功）
+            - 检查是否存在对应的监听器
             - 记录所有状态检查的警告和错误信息
 
         Examples:
@@ -548,23 +505,12 @@ class BaseConsumer:
 
         Note:
             - 这是并发消费者的核心消息处理逻辑
+            - 支持多监听器模式，每个topic可以有独立的处理逻辑
             - 与顺序消费者不同，并发消费者不支持COMMIT/ROLLBACK等结果
             - 适用于高并发、无序消息处理场景
             - 提供完整的异常处理和回调机制
             - 处理结果直接影响消息的重试策略
         """
-        if not self._message_listener:
-            logger.error(
-                "No message listener registered",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                },
-            )
-            return False
-
         if not messages:
             logger.warning(
                 "Empty message list received",
@@ -575,6 +521,25 @@ class BaseConsumer:
                 },
             )
             return True  # 空消息列表视为处理成功
+
+        # 获取消息的topic
+        topic = messages[0].topic if messages else message_queue.topic
+
+        # 根据topic获取对应的监听器
+        listener = self._message_listeners.get(topic)
+        if not listener:
+            # 如果没有找到topic特定的监听器，使用默认监听器
+            logger.error(
+                f"No message listener registered for topic: {topic}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": message_queue.queue_id,
+                    "available_topics": list(self._message_listeners.keys()),
+                },
+            )
+            return False
 
         # 创建消费上下文
         reconsume_times: int = messages[0].reconsume_times if messages else 0
@@ -589,16 +554,15 @@ class BaseConsumer:
                 "Processing messages",
                 extra={
                     "consumer_group": self._config.consumer_group,
+                    "topic": topic,
                     "message_count": len(messages),
-                    "topic": context.topic,
                     "queue_id": context.queue_id,
                     "reconsume_times": reconsume_times,
+                    "listener_type": type(listener).__name__,
                 },
             )
 
-            result: ConsumeResult = self._message_listener.consume_message(
-                messages, context
-            )
+            result: ConsumeResult = listener.consume_message(messages, context)
             if result in [
                 ConsumeResult.COMMIT,
                 ConsumeResult.ROLLBACK,
@@ -608,7 +572,7 @@ class BaseConsumer:
                     "Invalid result for concurrent consumer",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "topic": context.topic,
+                        "topic": topic,
                         "queue_id": context.queue_id,
                         "result": result.value,
                     },
@@ -619,11 +583,12 @@ class BaseConsumer:
                 "Message processing completed",
                 extra={
                     "consumer_group": self._config.consumer_group,
+                    "topic": topic,
                     "message_count": len(messages),
-                    "topic": context.topic,
                     "queue_id": context.queue_id,
                     "result": result.value,
                     "duration": context.get_consume_duration(),
+                    "listener_type": type(listener).__name__,
                 },
             )
 
@@ -634,23 +599,25 @@ class BaseConsumer:
                 f"Failed to process messages: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
+                    "topic": topic,
                     "message_count": len(messages),
-                    "topic": context.topic,
                     "queue_id": context.queue_id,
+                    "listener_type": type(listener).__name__,
                     "error": str(e),
                 },
                 exc_info=True,
             )
 
             # 调用异常回调（如果监听器实现了）
-            if hasattr(self._message_listener, "on_exception"):
+            if hasattr(listener, "on_exception"):
                 try:
-                    self._message_listener.on_exception(messages, context, e)
+                    listener.on_exception(messages, context, e)
                 except Exception as callback_error:
                     logger.error(
                         f"Exception callback failed: {callback_error}",
                         extra={
                             "consumer_group": self._config.consumer_group,
+                            "topic": topic,
                             "error": str(callback_error),
                         },
                         exc_info=True,
@@ -687,14 +654,113 @@ class BaseConsumer:
         """
         return self._subscription_manager
 
-    def get_message_listener(self) -> MessageListener | None:
+    def get_message_listener(self, topic: str | None = None) -> MessageListener | None:
         """
-        获取当前注册的消息监听器
+        获取指定topic或默认的消息监听器。
+
+        Args:
+            topic (str | None): 指定的topic名称，如果为None则返回默认监听器
 
         Returns:
-            MessageListener | None: 当前注册的监听器，如果未注册则返回None
+            MessageListener | None: 对应的监听器，如果未找到则返回None
+
+        Examples:
+            >>> # 获取特定topic的监听器
+            >>> order_listener = consumer.get_message_listener("order_topic")
+            >>> # 获取默认监听器
+            >>> default_listener = consumer.get_message_listener()
         """
-        return self._message_listener
+        if topic:
+            return self._message_listeners.get(topic)
+        else:
+            return getattr(self, "_message_listener", None)
+
+    def get_all_listeners(self) -> dict[str, MessageListener]:
+        """
+        获取所有注册的消息监听器。
+
+        Returns:
+            dict[str, MessageListener]: topic到监听器的映射字典
+
+        Examples:
+            >>> listeners = consumer.get_all_listeners()
+            >>> for topic, listener in listeners.items():
+            >>>     print(f"Topic: {topic}, Listener: {type(listener).__name__}")
+        """
+        return self._message_listeners.copy()
+
+    # ==================== 向后兼容的方法 ====================
+
+    def register_message_listener(self, listener: MessageListener) -> None:
+        """
+        注册默认消息监听器（兼容性方法）。
+
+        设置用于处理接收到的消息的默认回调函数。当消费者接收到消息时，
+        如果没有找到topic特定的监听器，则会使用此默认监听器。
+
+        注意：这是兼容性保留的方法，建议使用新的subscribe_with_listener方法，
+        该方法可以为每个topic指定独立的监听器。
+
+        Args:
+            listener: 消息监听器实例，必须继承自MessageListener
+
+        Raises:
+            ConsumerError: 当消费者正在运行或注册失败时抛出
+            ValueError: 当listener为None或不是MessageListener实例时抛出
+
+        Example:
+            >>> # 使用新的API（推荐）
+            >>> consumer.subscribe_with_listener("order_topic", selector, OrderListener())
+            >>> consumer.subscribe_with_listener("log_topic", selector, LogListener())
+            >>>
+            >>> # 使用默认监听器（兼容性）
+            >>> from pyrocketmq.consumer.listener import MessageListener, ConsumeResult
+            >>> class DefaultListener(MessageListener):
+            ...     def consume_message(self, messages, context):
+            ...         for msg in messages:
+            ...             print(f"Processing message: {msg.body.decode()}")
+            ...         return ConsumeResult.SUCCESS
+            >>> consumer.register_message_listener(DefaultListener())
+            >>> consumer.subscribe("fallback_topic", selector)
+
+        Note:
+            - 必须在消费者启动前调用此方法
+            - 默认监听器会被用作所有未注册特定监听器的topic的备选
+            - 推荐使用subscribe_with_listener方法获得更好的API体验
+        """
+        if self._is_running:
+            raise ConsumerError(
+                "Cannot register message listener while consumer is running. Please shutdown first or register before starting.",
+                context={"consumer_group": self._config.consumer_group},
+            )
+
+        if not isinstance(listener, MessageListener):
+            raise ValueError("Listener must be an instance of MessageListener")
+
+        try:
+            self._message_listener = listener
+            logger.info(
+                "Default message listener registered successfully",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "listener_type": type(listener).__name__,
+                },
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to register message listener: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "listener_type": type(listener).__name__,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            raise ConsumerError(
+                "Failed to register message listener",
+                context={"consumer_group": self._config.consumer_group},
+                cause=e,
+            ) from e
 
     # ==================== 状态摘要方法 ====================
 
@@ -717,9 +783,17 @@ class BaseConsumer:
             "message_model": self._config.message_model,
             "consume_from_where": self._config.consume_from_where,
             "allocate_queue_strategy": self._config.allocate_queue_strategy,
-            "has_listener": self._message_listener is not None,
-            "listener_type": type(self._message_listener).__name__
-            if self._message_listener
+            "has_listeners": len(self._message_listeners) > 0,
+            "topic_listeners": {
+                topic: type(listener).__name__
+                for topic, listener in self._message_listeners.items()
+            },
+            "has_default_listener": getattr(self, "_message_listener", None)
+            is not None,
+            "default_listener_type": type(
+                getattr(self, "_message_listener", None)
+            ).__name__
+            if getattr(self, "_message_listener", None)
             else None,
             "subscription_status": subscription_status,
         }
@@ -849,7 +923,9 @@ class BaseConsumer:
                         logger.warning(f"Error stopping name_server_manager: {e}")
 
                 # 6. 清理消息监听器引用
-                self._message_listener = None
+                self._message_listeners.clear()
+                if hasattr(self, "_message_listener"):
+                    self._message_listener = None
 
                 # 7. 重置运行状态
                 self._is_running = False
@@ -1552,6 +1628,7 @@ class BaseConsumer:
             f"model='{self._config.message_model}', "
             f"status='{status}', "
             f"subscriptions={self._subscription_manager.get_subscription_count()}, "
-            f"listener={'Registered' if self._message_listener else 'None'}"
+            f"topic_listeners={len(self._message_listeners)}, "
+            f"default_listener={'Registered' if getattr(self, '_message_listener', None) else 'None'}"
             f")"
         )

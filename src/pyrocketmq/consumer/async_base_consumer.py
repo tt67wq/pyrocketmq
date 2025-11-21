@@ -77,7 +77,7 @@ class AsyncBaseConsumer:
     Attributes:
         _config: 消费者配置实例
         _subscription_manager: 订阅关系管理器
-        _message_listener: 异步消息监听器实例
+        _message_listeners: 异步消息监听器字典，按Topic存储监听器
         _is_running: 消费者运行状态标志
         _lock: 异步线程安全锁
 
@@ -116,7 +116,7 @@ class AsyncBaseConsumer:
 
         self._config: ConsumerConfig = config
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
-        self._message_listener: AsyncMessageListener | None = None
+        self._message_listeners: dict[str, AsyncMessageListener] = {}
         self._is_running: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
 
@@ -220,22 +220,34 @@ class AsyncBaseConsumer:
         """
         await self._async_shutdown()
 
-    async def subscribe(self, topic: str, selector: MessageSelector) -> None:
+    async def subscribe(
+        self, topic: str, selector: MessageSelector, listener: AsyncMessageListener
+    ) -> None:
         """
-        异步订阅Topic
+        异步订阅Topic并注册消息监听器
 
-        异步订阅指定Topic并设置消息选择器。支持基于TAG和SQL92的消息过滤。
+        异步订阅指定Topic并设置消息选择器和对应的监听器。支持基于TAG和SQL92的消息过滤。
+        每个Topic只能注册一个监听器，如果重复订阅同一Topic，新的监听器会覆盖旧的监听器。
 
         Args:
-            topic: 要订阅的Topic名称
-            selector: 消息选择器，用于过滤消息
+            topic: 要订阅的Topic名称，不能为空
+            selector: 消息选择器，用于过滤消息，不能为None
+            listener: 消息监听器实例，用于处理该Topic的消息，不能为None
 
         Raises:
             SubscribeError: 订阅失败时抛出
-            ValueError: 参数无效时抛出
+            ValueError: 当参数无效时抛出
         """
+        if not topic:
+            raise ValueError("Topic cannot be empty")
+        if not selector:
+            raise ValueError("Message selector cannot be None")
+        if not listener:
+            raise ValueError("Message listener cannot be None")
+
         try:
             async with self._lock:
+                # 验证订阅参数
                 if not self._subscription_manager.validate_subscription(
                     topic, selector
                 ):
@@ -243,16 +255,23 @@ class AsyncBaseConsumer:
                         topic, f"无效的订阅参数: topic={topic}, selector={selector}"
                     )
 
+                # 订阅Topic
                 success: bool = self._subscription_manager.subscribe(topic, selector)
                 if not success:
                     raise SubscribeError(topic, f"订阅失败: topic={topic}")
 
+                # 注册消息监听器
+                old_listener = self._message_listeners.get(topic)
+                self._message_listeners[topic] = listener
+
                 self._logger.info(
-                    "订阅Topic成功",
+                    "订阅Topic并注册监听器成功",
                     extra={
                         "topic": topic,
                         "selector": str(selector),
+                        "listener_type": type(listener).__name__,
                         "consumer_group": self._config.consumer_group,
+                        "listener_replaced": old_listener is not None,
                     },
                 )
 
@@ -262,6 +281,7 @@ class AsyncBaseConsumer:
                 extra={
                     "topic": topic,
                     "selector": str(selector),
+                    "listener_type": type(listener).__name__ if listener else "None",
                     "error": str(e),
                 },
                 exc_info=True,
@@ -272,25 +292,38 @@ class AsyncBaseConsumer:
         """
         异步取消订阅Topic
 
-        异步取消指定Topic的订阅。
+        异步取消指定Topic的订阅，并移除对应的消息监听器。
 
         Args:
-            topic: 要取消订阅的Topic名称
+            topic: 要取消订阅的Topic名称，不能为空
 
         Raises:
             SubscribeError: 取消订阅失败时抛出
+            ValueError: 当topic为空时抛出
         """
+        if not topic:
+            raise ValueError("Topic cannot be empty")
+
         try:
             async with self._lock:
+                # 取消订阅Topic
                 success: bool = self._subscription_manager.unsubscribe(topic)
-                if not success:
-                    raise UnsubscribeError(topic, f"取消订阅失败: topic={topic}")
+
+                # 同时移除对应的监听器
+                removed_listener = self._message_listeners.pop(topic, None)
+
+                if not success and removed_listener is None:
+                    raise UnsubscribeError(
+                        topic, f"Topic未订阅且无监听器: topic={topic}"
+                    )
 
                 self._logger.info(
                     "取消订阅Topic成功",
                     extra={
                         "topic": topic,
                         "consumer_group": self._config.consumer_group,
+                        "subscription_removed": success,
+                        "listener_removed": removed_listener is not None,
                     },
                 )
 
@@ -329,28 +362,6 @@ class AsyncBaseConsumer:
         """
         return self._subscription_manager.is_subscribed(topic)
 
-    async def register_message_listener(self, listener: AsyncMessageListener) -> None:
-        """
-        异步注册消息监听器
-
-        异步注册消息监听器，用于处理消费到的消息。
-
-        Args:
-            listener: 消息监听器实例
-
-        Raises:
-            ValueError: 当listener为None时抛出
-        """
-        async with self._lock:
-            self._message_listener = listener
-            self._logger.info(
-                "注册消息监听器成功",
-                extra={
-                    "listener_type": type(listener).__name__,
-                    "consumer_group": self._config.consumer_group,
-                },
-            )
-
     async def is_running(self) -> bool:
         """
         异步检查消费者是否正在运行
@@ -378,14 +389,28 @@ class AsyncBaseConsumer:
         """
         return self._subscription_manager
 
-    async def get_message_listener(self) -> AsyncMessageListener | None:
+    async def get_message_listener(self, topic: str) -> AsyncMessageListener | None:
         """
-        异步获取消息监听器
+        异步获取指定Topic的消息监听器
+
+        Args:
+            topic: Topic名称，不能为空
 
         Returns:
-            消息监听器实例，如果未注册则返回None
+            指定Topic的消息监听器实例，如果未注册则返回None
         """
-        return self._message_listener
+        if not topic:
+            raise ValueError("Topic cannot be empty")
+        return self._message_listeners.get(topic)
+
+    async def get_all_listeners(self) -> dict[str, AsyncMessageListener]:
+        """
+        异步获取所有Topic的消息监听器
+
+        Returns:
+            包含所有Topic监听器的字典副本
+        """
+        return self._message_listeners.copy()
 
     async def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -406,18 +431,6 @@ class AsyncBaseConsumer:
         Raises:
             ConsumerError: 消息处理过程中发生严重错误时抛出
         """
-        if not self._message_listener:
-            logger.error(
-                "No message listener registered",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                },
-            )
-            return False
-
         if not messages:
             logger.warning(
                 "Empty message list received",
@@ -428,6 +441,23 @@ class AsyncBaseConsumer:
                 },
             )
             return True  # 空消息列表视为处理成功
+
+        # 获取对应Topic的监听器
+        topic: str = message_queue.topic
+        listener: AsyncMessageListener | None = self._message_listeners.get(topic)
+
+        if not listener:
+            logger.error(
+                f"No message listener registered for topic: {topic}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_count": len(messages),
+                    "topic": topic,
+                    "queue_id": message_queue.queue_id,
+                    "available_topics": list(self._message_listeners.keys()),
+                },
+            )
+            return False
 
         # 创建异步消费上下文
         reconsume_times: int = messages[0].reconsume_times if messages else 0
@@ -446,12 +476,11 @@ class AsyncBaseConsumer:
                     "topic": context.topic,
                     "queue_id": context.queue_id,
                     "reconsume_times": reconsume_times,
+                    "listener_type": type(listener).__name__,
                 },
             )
 
-            result: ConsumeResult = await self._message_listener.consume_message(
-                messages, context
-            )
+            result: ConsumeResult = await listener.consume_message(messages, context)
             if result in [
                 ConsumeResult.COMMIT,
                 ConsumeResult.ROLLBACK,
@@ -495,9 +524,9 @@ class AsyncBaseConsumer:
             )
 
             # 调用异常回调（如果监听器实现了）
-            if hasattr(self._message_listener, "on_exception"):
+            if hasattr(listener, "on_exception"):
                 try:
-                    await self._message_listener.on_exception(messages, context, e)
+                    await listener.on_exception(messages, context, e)
                 except Exception as callback_error:
                     logger.error(
                         f"Exception callback failed: {callback_error}",
@@ -700,7 +729,9 @@ class AsyncBaseConsumer:
             "shutdown_time": self._shutdown_time,
             "uptime": uptime,
             "subscriptions": subscriptions,
-            "has_message_listener": self._message_listener is not None,
+            "has_message_listener": len(self._message_listeners) > 0,
+            "listener_count": len(self._message_listeners),
+            "topics_with_listeners": list(self._message_listeners.keys()),
         }
 
     async def _async_start(self) -> None:
