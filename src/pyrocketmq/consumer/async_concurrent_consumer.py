@@ -27,10 +27,8 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
 )
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.async_consume_from_where_manager import (
-    AsyncConsumeFromWhereManager,
 )
 from pyrocketmq.consumer.async_listener import (
-    AsyncConsumeContext,
     AsyncMessageListener,
     ConsumeResult,
 )
@@ -1218,7 +1216,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
         now = datetime.now()
 
-        if await self._consume_message(msgs, q):
+        if await self._concurrent_consume_message(msgs, q):
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
                 order=False,
                 auto_commit=True,
@@ -1273,7 +1271,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
                 # 处理消息
                 start_time: float = time.time()
-                success: bool = await self._consume_message(messages, message_queue)
+                success: bool = await self._concurrent_consume_message(messages, message_queue)
                 duration: float = time.time() - start_time
 
                 async with self._stats_lock:
@@ -1333,7 +1331,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                         )
                 else:
                     # TODO: send msg back
-                    for message in messages:
+                    for _ in messages:
                         # TODO: implement async send_back_message
                         pass
 
@@ -1351,15 +1349,14 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         """从缓存更新偏移量"""
         async with self._cache_lock:
             self._assigned_queues[queue] = offset
-        await self._offset_store.update_offset(queue, offset, increase_only=False)
+        await self._offset_store.update_offset(queue, offset)
 
     async def _remove_messages_from_cache(
         self, queue: MessageQueue, messages: list[MessageExt]
     ) -> None:
         """从缓存中移除消息"""
         pq = await self._get_or_create_process_queue(queue)
-        for message in messages:
-            pq.remove_message(message)
+        _ = pq.remove_batch_messages([m.queue_offset for m in messages if m.queue_offset is not None])
 
     async def _wait_for_processing_completion(self) -> None:
         """等待正在处理的消息完成"""
@@ -1473,10 +1470,10 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         async with self._cache_lock:
             stats["assigned_queue_count"] = len(self._assigned_queues)
             stats["cached_message_count"] = sum(
-                pq.get_message_count() for pq in self._msg_cache.values()
+                pq.get_count() for pq in self._msg_cache.values()
             )
             stats["cached_message_size"] = sum(
-                pq.get_message_size() for pq in self._msg_cache.values()
+                pq.get_total_size() for pq in self._msg_cache.values()
             )
 
         # 添加任务统计

@@ -29,6 +29,8 @@ from pyrocketmq.model import (
     ConsumeResult,
     HeartbeatData,
     MessageExt,
+    MessageModel,
+    MessageProperty,
     MessageQueue,
     MessageSelector,
     TopicRouteData,
@@ -385,7 +387,7 @@ class AsyncBaseConsumer:
         """
         return self._message_listener
 
-    async def _consume_message(
+    async def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
         """
@@ -510,7 +512,7 @@ class AsyncBaseConsumer:
 
     async def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
-    ) -> None:
+    ) -> bool:
         """
         将消费失败的消息异步发送回broker重新消费。
 
@@ -521,22 +523,50 @@ class AsyncBaseConsumer:
             message_queue (MessageQueue): 消息来自的队列信息
             message (MessageExt): 需要发送回的消息对象
 
-        处理流程:
-            1. 异步获取目标broker的地址
-            2. 异步建立与broker的连接
-            3. 异步调用broker的消息回退接口
-            4. 记录处理结果和统计信息
+        Returns:
+            bool: 发送成功返回True，发送失败返回False
+
+        异步处理流程:
+            1. 异步获取目标broker地址
+            2. 验证broker地址有效性
+            3. 异步建立与broker的连接池
+            4. 使用异步上下文管理器获取连接
+            5. 设置消息重试相关属性：
+               - RETRY_TOPIC: 设置重试主题名
+               - CONSUME_START_TIME: 记录消费开始时间
+               - reconsume_times: 递增重试次数
+            6. 异步调用broker的consumer_send_msg_back接口
+            7. 记录处理结果和统计信息
+
+        异步特性:
+            - 所有IO操作都使用async/await模式
+            - 使用AsyncConnectionPool进行异步连接管理
+            - 使用AsyncBrokerClient进行异步通信
+            - 异步上下文管理器确保资源正确释放
+            - 不阻塞事件循环，支持高并发场景
 
         错误处理:
-            - 如果无法获取broker地址，记录错误日志并返回
+            - 如果无法获取broker地址，记录错误日志并返回False
             - 如果连接或发送失败，记录错误日志但不抛出异常
-            - 确保消费循环的连续性
+            - 确保异步消费循环的连续性，避免单个消息失败影响整体消费
+
+        Examples:
+            >>> # 在异步消费循环中处理失败消息
+            >>> result = await self._consume_message(messages, context)
+            >>> if result == ConsumeResult.RECONSUME_LATER:
+            >>>     for msg in messages:
+            >>>         success = await self._send_back_message(msg.queue, msg)
+            >>>         if not success:
+            >>>             logger.error(f"Failed to send back message: {msg.msg_id}")
 
         Note:
-            - 该方法在消费失败时被调用
-            - 消息会被重新放入消费队列等待重试
-            - 重试次数受max_reconsume_times配置限制
-            - 使用delay_level=0表示立即重试
+            - 该方法在消费失败时被调用，用于实现异步消息重试机制
+            - 消息会被重新放入重试队列等待重新消费
+            - 重试次数受max_reconsume_times配置限制，默认16次
+            - 超过最大重试次数后，消息会进入死信队列(%DLQ%{consumer_group})
+            - reconsume_times属性会递增，用于跟踪消息重试次数
+            - 方法不会抛出异常，确保异步消费循环的稳定性
+            - 使用异步方式提升并发性能，适合高吞吐量场景
         """
         broker_addr = await self._nameserver_manager.get_broker_address(
             message_queue.broker_name
@@ -552,17 +582,24 @@ class AsyncBaseConsumer:
                     "queue_id": message.queue.queue_id if message.queue else 0,
                 },
             )
-            return
+            return False
 
         try:
             pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
                 broker_addr
             )
             async with pool.get_connection(usage="发送消息回broker") as conn:
+                message.set_property(
+                    MessageProperty.RETRY_TOPIC, self._get_retry_topic()
+                )
+                message.set_property(
+                    MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+                )
+                message.reconsume_times += 1
                 await AsyncBrokerClient(conn).consumer_send_msg_back(
                     message,
                     self._config.consumer_group,
-                    0,  # delay_level: 0 表示立即重试
+                    message.reconsume_times,
                     self._config.max_reconsume_times,
                 )
 
@@ -578,6 +615,7 @@ class AsyncBaseConsumer:
                         "max_reconsume_times": self._config.max_reconsume_times,
                     },
                 )
+                return True
 
         except Exception as e:
             logger.error(
@@ -592,6 +630,7 @@ class AsyncBaseConsumer:
                 },
                 exc_info=True,
             )
+            return False
 
     async def get_status_summary(self) -> dict[str, Any]:
         """
@@ -644,6 +683,10 @@ class AsyncBaseConsumer:
 
             self._logger.info("异步消费者基础组件启动完成")
 
+            # 订阅重试主题
+            if self._config.message_model == MessageModel.CLUSTERING:
+                self._subscribe_retry_topic()
+
         except Exception as e:
             self._logger.error(
                 "启动异步消费者基础组件失败",
@@ -692,6 +735,102 @@ class AsyncBaseConsumer:
                 exc_info=True,
             )
             raise ConsumerError(f"关闭异步消费者基础组件失败: {e}") from e
+
+    def _get_retry_topic(self) -> str:
+        """
+        获取消费者组对应的重试主题名称。
+
+        在RocketMQ中，当消息消费失败时，系统会按照重试主题将消息重新投递给消费者。
+        重试主题的命名规则为：%RETRY%{consumer_group}。
+
+        Returns:
+            str: 重试主题名称，格式为 %RETRY%{consumer_group}
+
+        Examples:
+            >>> retry_topic = self._get_retry_topic()
+            >>> print(retry_topic)
+            '%RETRY%order_consumer_group'
+
+        Note:
+            - 重试主题名前缀是固定的 %RETRY%
+            - 重试主题使用消费者组名而不是原始主题名
+            - 重试机制的消息会根据重试次数延迟投递
+            - 默认重试次数为16次，超过后消息会进入死信队列
+            - 每个消费者组都有自己独立的重试主题
+        """
+        return f"%RETRY%{self._config.consumer_group}"
+
+    def _subscribe_retry_topic(self) -> None:
+        """
+        异步订阅重试主题。
+
+        自动订阅该消费者组的重试主题，格式为：%RETRY%+consumer_group。
+        重试主题用于接收消费失败需要重试的消息。
+
+        该方法使用异步方式执行订阅操作，避免阻塞其他异步任务的执行。
+
+        异常处理:
+            - 如果订阅失败，记录错误日志但不抛出异常
+            - 重试主题订阅失败不应该影响消费者正常启动
+            - 提供详细的错误上下文信息用于问题排查
+
+        Note:
+            - 重试主题使用TAG选择器订阅所有消息（"*"），因为重试消息不需要额外过滤
+            - 使用异步方式避免阻塞消费者启动过程
+            - 检查重复订阅，避免资源浪费
+        """
+        retry_topic = self._get_retry_topic()
+
+        try:
+            from pyrocketmq.model.client_data import create_tag_selector
+
+            # 创建订阅所有消息的选择器
+            retry_selector = create_tag_selector("*")
+
+            # 检查是否已经订阅了重试主题，避免重复订阅
+            is_subscribed: bool = self._subscription_manager.is_subscribed(retry_topic)
+            if not is_subscribed:
+                success = self._subscription_manager.subscribe(
+                    retry_topic, retry_selector
+                )
+
+                if success:
+                    logger.info(
+                        f"Successfully subscribed to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                            "max_retry_times": self._config.max_retry_times,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to subscribe to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                        },
+                    )
+            else:
+                logger.debug(
+                    f"Retry topic already subscribed: {retry_topic}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "retry_topic": retry_topic,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error subscribing to retry topic {retry_topic}: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "retry_topic": retry_topic,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
 
     async def _shutdown_async_tasks(self) -> None:
         """

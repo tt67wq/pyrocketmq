@@ -494,24 +494,64 @@ class BaseConsumer:
 
     # ==================== 消息处理核心方法 ====================
 
-    def _consume_message(
+    def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
         """
-        处理接收到的消息（内部方法）
+        并发消费消息的核心处理方法。
 
-        这是消息处理的核心方法，由具体的消费者实现调用。
-        它负责创建消费上下文，调用注册的消息监听器，并处理消费结果。
+        这是并发消费者消息处理的核心方法，负责调用用户注册的消息监听器来处理消息。
+        该方法提供完整的消费上下文信息，并处理各种异常情况和回调机制。
 
         Args:
-            messages: 要处理的消息列表
-            message_queue: 消息来自的队列
+            messages (list[MessageExt]): 要处理的消息列表
+            message_queue (MessageQueue): 消息来自的队列信息
 
         Returns:
             bool: 消费处理是否成功
+                - True: 消息处理成功（ConsumeResult.SUCCESS）
+                - False: 消息处理失败或发生异常
 
-        Raises:
-            ConsumerError: 消息处理过程中发生严重错误时抛出
+        处理流程:
+            1. 验证消息监听器和消息列表的有效性
+            2. 创建消费上下文（ConsumeContext），包含重试次数等信息
+            3. 调用消息监听器的consume_message方法处理消息
+            4. 验证消费结果的有效性（并发消费者只能返回SUCCESS或RECONSUME_LATER）
+            5. 处理异常情况并调用异常回调（如果实现）
+            6. 记录详细的处理日志和统计信息
+
+        消费结果处理:
+            - ConsumeResult.SUCCESS: 返回True，消息处理成功
+            - ConsumeResult.RECONSUME_LATER: 返回False，消息需要重新消费
+            - 其他结果（COMMIT、ROLLBACK、SUSPEND_CURRENT_QUEUE_A_MOMENT）:
+              视为无效结果，返回False并记录错误日志
+
+        异常处理:
+            - 捕获消息处理过程中的所有异常
+            - 调用消息监听器的on_exception回调方法（如果实现）
+            - 回调异常不会影响主处理流程
+            - 异常情况下返回False，触发消息重试机制
+
+        状态检查:
+            - 检查消息监听器是否已注册
+            - 验证消息列表不为空（空列表视为处理成功）
+            - 记录所有状态检查的警告和错误信息
+
+        Examples:
+            >>> # 该方法由消费者内部调用，不建议外部直接使用
+            >>> success = self._concurrent_consume_message(messages, queue)
+            >>> if success:
+            >>>     # 更新偏移量等后续处理
+            >>> else:
+            >>>     # 处理失败消息的重试逻辑
+            >>>     pass
+
+        Note:
+            - 这是并发消费者的核心消息处理逻辑
+            - 与顺序消费者不同，并发消费者不支持COMMIT/ROLLBACK等结果
+            - 适用于高并发、无序消息处理场景
+            - 提供完整的异常处理和回调机制
+            - 处理结果直接影响消息的重试策略
         """
         if not self._message_listener:
             logger.error(

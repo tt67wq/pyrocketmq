@@ -1557,7 +1557,7 @@ class ConcurrentConsumer(BaseConsumer):
             消费结果，包含成功状态和耗时
         """
         start_time: float = time.time()
-        success: bool = self._consume_message(messages, message_queue)
+        success: bool = self._concurrent_consume_message(messages, message_queue)
         duration: float = time.time() - start_time
 
         return success, duration
@@ -2080,7 +2080,7 @@ class ConcurrentConsumer(BaseConsumer):
                 MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
             )
 
-        if self._consume_message(msgs, q):
+        if self._concurrent_consume_message(msgs, q):
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
                 order=False,
                 auto_commit=True,
