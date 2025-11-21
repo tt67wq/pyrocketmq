@@ -1433,12 +1433,7 @@ class BaseConsumer:
                 broker_addr
             )
             with pool.get_connection(usage="发送消息回broker") as conn:
-                message.set_property(
-                    MessageProperty.RETRY_TOPIC, self._get_retry_topic()
-                )
-                message.set_property(
-                    MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
-                )
+                self._reset_retry(message)
                 message.reconsume_times += 1
                 BrokerClient(conn).consumer_send_msg_back(
                     message,
@@ -1476,6 +1471,53 @@ class BaseConsumer:
             return False
         else:
             return True
+
+    def _reset_retry(self, msg: MessageExt) -> None:
+        """
+        重置消息的重试相关属性。
+
+        当消息需要重新消费时，此方法负责重置或设置消息的重试相关属性，
+        确保消息能够正确地参与重试机制。这通常在消息处理前或需要重新处理时调用。
+
+        Args:
+            msg (MessageExt): 需要重置重试属性的消息对象
+
+        设置的属性:
+            - RETRY_TOPIC: 设置重试主题名，格式为%RETRY%{consumer_group}
+            - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
+
+        属性说明:
+            RETRY_TOPIC:
+                - 指示消息在消费失败时应该发送到的重试主题
+                - 由消费者组名唯一确定，确保重试消息的隔离性
+                - RocketMQ会根据该属性将失败消息投递到正确的重试主题
+
+            CONSUME_START_TIME:
+                - 记录消息开始消费的时间戳（毫秒）
+                - 用于监控消费延迟和性能分析
+                - 帮助判断消息处理的耗时情况
+
+        使用场景:
+            - 消息处理前的属性初始化
+            - 消息重新消费前的属性重置
+            - 重试机制中的属性设置
+
+        Examples:
+            >>> # 在消息处理前调用
+            >>> message = MessageExt()
+            >>> self._reset_retry(message)
+            >>> # 现在消息具备了完整的重试属性
+
+        Note:
+            - 该方法是消息重试机制的重要组成部分
+            - 确保所有重试消息都具有一致的属性格式
+            - 时间戳使用毫秒级精度，便于性能监控
+            - 重试主题名遵循RocketMQ标准命名规范
+        """
+        msg.set_property(MessageProperty.RETRY_TOPIC, self._get_retry_topic())
+        msg.set_property(
+            MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+        )
 
     # ==================== 字符串表示方法 ====================
 
