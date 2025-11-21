@@ -7,7 +7,7 @@ Logger工厂类
 import logging
 import sys
 
-from pyrocketmq.logging.json_formatter import JsonFormatter
+from pyrocketmq.logging.json_formatter import ExtraAwareFormatter, JsonFormatter
 
 from .config import LoggingConfig
 
@@ -90,6 +90,9 @@ class LoggerFactory:
 
             if config.json_output:
                 file_handler.setFormatter(json_formatter)
+            else:
+                # 为文件处理器也使用支持extra字段的格式化器
+                file_handler.setFormatter(cls._default_formatter)
 
         # 重置已配置的logger集合
         cls._configured_loggers.clear()
@@ -134,12 +137,12 @@ class LoggerFactory:
         Returns:
             logging.Formatter: 格式化器实例
         """
-        if config.colored_output and config.console_output:
-            # 彩色输出格式
-            return ColoredFormatter(config.format, datefmt=config.date_format)
-        else:
-            # 普通格式
-            return logging.Formatter(config.format, datefmt=config.date_format)
+        # 使用支持extra字段的格式化器
+        return ExtraAwareFormatter(
+            fmt=config.format,
+            datefmt=config.date_format,
+            colored_output=config.colored_output and config.console_output,
+        )
 
     @classmethod
     def _create_console_handler(cls, config: LoggingConfig) -> logging.Handler:
@@ -154,7 +157,11 @@ class LoggerFactory:
         """
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(getattr(logging, config.level))
-        handler.setFormatter(cls._default_formatter)
+
+        # 只有在非JSON模式下才设置默认格式化器
+        if not config.json_output:
+            handler.setFormatter(cls._default_formatter)
+
         return handler
 
     @classmethod

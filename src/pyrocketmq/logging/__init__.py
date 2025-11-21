@@ -7,10 +7,9 @@ pyrocketmq 日志模块
 
 import logging
 
-
 from .config import LoggingConfig
+from .json_formatter import ExtraAwareFormatter, JsonFormatter, StructuredJsonFormatter
 from .logger import LoggerFactory
-from .json_formatter import JsonFormatter, StructuredJsonFormatter
 
 __all__ = [
     "LoggingConfig",
@@ -20,6 +19,7 @@ __all__ = [
     "get_config",
     "JsonFormatter",
     "StructuredJsonFormatter",
+    "ExtraAwareFormatter",
 ]
 
 

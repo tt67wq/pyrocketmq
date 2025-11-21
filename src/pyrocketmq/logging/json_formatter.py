@@ -7,7 +7,7 @@ JSON格式化器
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 
 class JsonFormatter(logging.Formatter):
@@ -29,7 +29,7 @@ class JsonFormatter(logging.Formatter):
         indent: bool = False,
         ensure_ascii: bool = False,
         **extra_fields: Any,
-    ):
+    ) -> None:
         """
         初始化JSON格式化器
 
@@ -46,16 +46,16 @@ class JsonFormatter(logging.Formatter):
             **extra_fields: 额外的固定字段
         """
         super().__init__()
-        self.include_extra = include_extra
-        self.include_timestamp = include_timestamp
-        self.include_level = include_level
-        self.include_logger = include_logger
-        self.include_module = include_module
-        self.include_function = include_function
-        self.include_line = include_line
-        self.indent = indent
-        self.ensure_ascii = ensure_ascii
-        self.extra_fields = extra_fields
+        self.include_extra: bool = include_extra
+        self.include_timestamp: bool = include_timestamp
+        self.include_level: bool = include_level
+        self.include_logger: bool = include_logger
+        self.include_module: bool = include_module
+        self.include_function: bool = include_function
+        self.include_line: bool = include_line
+        self.indent: bool = indent
+        self.ensure_ascii: bool = ensure_ascii
+        self.extra_fields: dict[str, Any] = extra_fields
 
     def format(self, record: logging.LogRecord) -> str:
         """
@@ -117,56 +117,147 @@ class JsonFormatter(logging.Formatter):
         # 添加额外字段
         if self.include_extra and hasattr(record, "__dict__"):
             # 过滤掉标准字段
-            extra_fields = {
-                k: v
-                for k, v in record.__dict__.items()
-                if k
-                not in {
-                    "name",
-                    "msg",
-                    "args",
-                    "levelname",
-                    "levelno",
-                    "pathname",
-                    "filename",
-                    "module",
-                    "lineno",
-                    "funcName",
-                    "created",
-                    "msecs",
-                    "relativeCreated",
-                    "thread",
-                    "threadName",
-                    "processName",
-                    "process",
-                    "getMessage",
-                    "exc_info",
-                    "exc_text",
-                    "stack_info",
-                    "exc_info",
-                    "message",
-                }
+            excluded_fields: set[str] = {
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                "exc_info",
+                "message",
+            }
+            extra_fields: dict[str, Any] = {
+                k: v for k, v in record.__dict__.items() if k not in excluded_fields
             }
             log_entry.update(extra_fields)
 
         # 序列化为JSON
         try:
+            indent_value: int | None = 2 if self.indent else None
+            separators_value: tuple[str, str] | None = (
+                (",", ":") if not self.indent else None
+            )
+
             return json.dumps(
                 log_entry,
                 ensure_ascii=self.ensure_ascii,
-                indent=2 if self.indent else None,
-                separators=(",", ":") if not self.indent else None,
+                indent=indent_value,
+                separators=separators_value,
                 default=str,
             )
         except (TypeError, ValueError) as e:
             # 如果序列化失败，回退到基本格式
-            fallback_entry = {
+            fallback_entry: dict[str, Any] = {
                 "timestamp": record.created,
                 "level": record.levelname,
                 "message": record.getMessage(),
                 "serialization_error": str(e),
             }
             return json.dumps(fallback_entry, ensure_ascii=self.ensure_ascii)
+
+
+class ExtraAwareFormatter(logging.Formatter):
+    """
+    支持extra字段的普通格式化器
+
+    在普通文本格式中也能显示extra信息，同时支持彩色输出。
+    """
+
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        style: Literal["%"] = "%",
+        colored_output: bool = True,
+    ) -> None:
+        """
+        初始化支持extra字段的格式化器
+
+        Args:
+            fmt: 日志格式字符串
+            datefmt: 日期格式
+            style: 格式风格
+            colored_output: 是否启用彩色输出
+        """
+        super().__init__(fmt, datefmt, style)
+        self.colored_output: bool = colored_output
+
+    def format(self, record: logging.LogRecord) -> str:
+        """
+        格式化日志记录，包含extra字段
+
+        Args:
+            record: 日志记录
+
+        Returns:
+            str: 格式化后的日志字符串
+        """
+        # 调用父类格式化
+        formatted: str = super().format(record)
+
+        # 检查是否有extra字段
+        extra_fields: dict[str, Any] = {}
+        if hasattr(record, "__dict__"):
+            # 过滤掉标准logging字段，只保留用户自定义的extra字段
+            standard_fields: set[str] = {
+                # 基础字段
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "message",
+                # 位置信息
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                # 时间信息
+                "created",
+                "msecs",
+                "relativeCreated",
+                "asctime",
+                # 线程进程信息
+                "thread",
+                "threadName",
+                "process",
+                "processName",
+                # 异常和堆栈信息
+                "exc_info",
+                "exc_text",
+                "stack_info",
+                # 方法引用
+                "getMessage",
+            }
+            extra_fields = {
+                k: v
+                for k, v in record.__dict__.items()
+                if k not in standard_fields and v is not None
+            }
+
+        # 如果有extra字段，追加到格式化消息后面
+        if extra_fields:
+            extra_str: str = " | ".join([f"{k}={v}" for k, v in extra_fields.items()])
+            formatted = f"{formatted} [{extra_str}]"
+
+        return formatted
 
 
 class StructuredJsonFormatter(JsonFormatter):
@@ -187,7 +278,7 @@ class StructuredJsonFormatter(JsonFormatter):
             str: 结构化JSON格式的日志字符串
         """
         # 创建基础结构
-        log_entry = {
+        log_entry: dict[str, Any] = {
             "@timestamp": time.strftime(
                 "%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(record.created)
             ),
@@ -217,33 +308,31 @@ class StructuredJsonFormatter(JsonFormatter):
 
         # 添加额外字段
         if self.include_extra and hasattr(record, "__dict__"):
-            extra_fields = {
-                k: v
-                for k, v in record.__dict__.items()
-                if k
-                not in {
-                    "name",
-                    "msg",
-                    "args",
-                    "levelname",
-                    "levelno",
-                    "pathname",
-                    "filename",
-                    "module",
-                    "lineno",
-                    "funcName",
-                    "created",
-                    "msecs",
-                    "relativeCreated",
-                    "thread",
-                    "threadName",
-                    "processName",
-                    "process",
-                    "getMessage",
-                    "exc_info",
-                    "exc_text",
-                    "stack_info",
-                }
+            excluded_fields: set[str] = {
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+                "exc_info",
+                "exc_text",
+                "stack_info",
+            }
+            extra_fields: dict[str, Any] = {
+                k: v for k, v in record.__dict__.items() if k not in excluded_fields
             }
             if extra_fields:
                 log_entry["fields"] = extra_fields
@@ -262,7 +351,7 @@ class StructuredJsonFormatter(JsonFormatter):
             )
         except (TypeError, ValueError) as e:
             # 如果序列化失败，回退到基本格式
-            fallback_entry = {
+            fallback_entry: dict[str, Any] = {
                 "@timestamp": time.strftime(
                     "%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime(record.created)
                 ),
