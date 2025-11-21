@@ -1442,7 +1442,47 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _consume_messages_loop(self) -> None:
         """
-        持续处理消息的循环
+        持续处理消息的消费循环。
+
+        这是并发消费者核心的消息处理循环，运行在独立的消费线程池中。
+        该循环负责从消息处理队列中获取消息并调用用户注册的消息监听器进行处理。
+
+        主要功能:
+            - 从处理队列阻塞式获取消息批次
+            - 调用用户消息监听器进行业务处理
+            - 根据处理结果执行成功/失败后的处理逻辑
+            - 更新消费统计信息
+            - 处理重试机制和异常情况
+
+        处理流程:
+            1. 从处理队列获取消息批次 (_get_messages_from_queue)
+            2. 调用消息监听器处理消息 (_process_messages_with_timing)
+            3. 根据处理结果执行后续操作：
+               - 成功: 更新偏移量，清理处理队列
+               - 失败: 发送回broker进行重试
+            4. 更新消费统计信息 (_update_consume_stats)
+            5. 对发送回broker失败的消息进行延迟重试
+
+        重试机制:
+            - 消费失败的消息会尝试发送回broker进行重试
+            - 发送回broker失败的消息会在本地延迟5秒后重试
+            - 避免因broker连接问题导致的消息丢失
+
+        线程模型:
+            - 运行在消费线程池中，线程数量由consume_thread_max配置
+            - 多个消费线程并行处理不同队列的消息
+            - 每个线程独立运行，互不干扰
+
+        异常处理:
+            - 捕获所有异常，确保单个消息处理失败不影响整个循环
+            - 记录详细的错误日志和异常堆栈信息
+            - 保持循环继续运行，确保消费者服务可用
+
+        Note:
+            - 该方法是消费者消息处理的核心逻辑，不应被外部调用
+            - 循环会在消费者关闭时(_is_running=False)自动退出
+            - 消费延迟主要取决于消息处理时间和队列深度
+            - 统计信息用于监控消费性能和健康状态
         """
         while self._is_running:
             try:
@@ -1466,8 +1506,12 @@ class ConcurrentConsumer(BaseConsumer):
                         self._handle_successful_consume(messages, message_queue)
                         messages = []
                     else:
-                        messages = self._handle_failed_consume(messages, message_queue)
-                        time.sleep(5)
+                        back_failed_messages: list[MessageExt] = (
+                            self._handle_failed_consume(messages, message_queue)
+                        )
+                        if back_failed_messages:
+                            messages = back_failed_messages
+                            time.sleep(5)
 
                     # 更新统计信息
                     self._update_consume_stats(success, duration, len(messages))
@@ -1597,16 +1641,17 @@ class ConcurrentConsumer(BaseConsumer):
             message_queue (MessageQueue): 消息所属的队列信息
 
         Returns:
-            list[MessageExt]: 需要重新消费的消息列表
+            list[MessageExt]: 发送回broker失败的消息列表（集群模式）或空列表（广播模式）
 
         处理策略:
             集群模式 (MessageModel.CLUSTERING):
                 - 尝试将失败的消息发送回broker进行重试
-                - 只有成功发送回broker的消息才会被保留用于重新消费
-                - 发送失败的消息会被丢弃（可能导致消息丢失，需谨慎处理）
+                - 只有发送回broker失败的消息才会被返回（需要本地处理）
+                - 成功发送回broker的消息由broker负责重试，不在返回列表中
+                - 发送失败的消息可能会导致消息丢失，需要业务方关注
 
             广播模式 (MessageModel.BROADCASTING):
-                - 直接丢弃所有失败的消息
+                - 直接丢弃所有失败的消息，返回空列表
                 - 广播模式下每个消费者独立消费，不需要重试机制
                 - 记录警告日志，便于问题排查
 
@@ -1616,21 +1661,30 @@ class ConcurrentConsumer(BaseConsumer):
             >>> try:
             >>>     result = await self._consume_message(messages, context)
             >>>     if result == ConsumeResult.RECONSUME_LATER:
+            >>>         # 返回的是发送到broker失败的消息，需要特殊处理
             >>>         failed_messages = self._handle_failed_consume(messages, queue)
+            >>>         if failed_messages:
+            >>>             logger.error(f"Failed to send {len(failed_messages)} messages back to broker")
             >>> except Exception as e:
             >>>     failed_messages = self._handle_failed_consume(messages, queue)
             >>>     logger.error(f"Message processing failed: {e}")
+            >>>     if failed_messages:
+            >>>         # 可能需要记录到死信队列或进行其他补偿处理
+            >>>         pass
 
         Note:
             - 集群模式下，重试次数受max_reconsume_times配置限制
             - 重试消息会被发送到重试主题(%RETRY%{consumer_group})
             - 超过最大重试次数的消息会进入死信队列(%DLQ%{consumer_group})
             - 广播模式的消息丢失风险需要业务方考虑补偿机制
-            - 返回的消息列表会被用于后续的重新消费处理
+            - 返回的消息列表是发送回broker失败的消息，可能需要特殊的处理逻辑
+            - 成功发送回broker的消息将由broker负责重试调度，不需要本地处理
         """
         if self._config.message_model == MessageModel.CLUSTERING:
             return [
-                msg for msg in messages if self._send_back_message(message_queue, msg)
+                msg
+                for msg in messages
+                if not self._send_back_message(message_queue, msg)
             ]
         # 广播模式，直接丢掉消息
         logger.warning("Broadcast mode, discard failed messages")
