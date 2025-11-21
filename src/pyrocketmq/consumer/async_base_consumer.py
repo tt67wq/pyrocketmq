@@ -169,6 +169,7 @@ class AsyncBaseConsumer:
 
         # 统计信息
         self._stats: dict[str, Any] = {
+            "start_time": 0,
             "route_refresh_count": 0,
             "route_refresh_success_count": 0,
             "route_refresh_failure_count": 0,
@@ -479,7 +480,7 @@ class AsyncBaseConsumer:
         )
 
         try:
-            logger.info(
+            logger.debug(
                 "Processing messages",
                 extra={
                     "consumer_group": self._config.consumer_group,
@@ -642,20 +643,6 @@ class AsyncBaseConsumer:
                     self._config.max_reconsume_times,
                 )
 
-                logger.debug(
-                    "Message sent back to broker for reconsume",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "message_id": message.msg_id,
-                        "topic": message.topic,
-                        "queue_id": message.queue.queue_id if message.queue else 0,
-                        "broker_name": message_queue.broker_name,
-                        "reconsume_times": message.reconsume_times,
-                        "max_reconsume_times": self._config.max_reconsume_times,
-                    },
-                )
-                return True
-
         except Exception as e:
             logger.error(
                 f"Failed to send message back to broker: {e}",
@@ -670,6 +657,20 @@ class AsyncBaseConsumer:
                 exc_info=True,
             )
             return False
+        else:
+            logger.debug(
+                "Message sent back to broker for reconsume",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                    "broker_name": message_queue.broker_name,
+                    "reconsume_times": message.reconsume_times,
+                    "max_reconsume_times": self._config.max_reconsume_times,
+                },
+            )
+            return True
 
     def _reset_retry(self, msg: MessageExt) -> None:
         """

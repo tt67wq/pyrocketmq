@@ -20,7 +20,9 @@ def message_listener(messages: list[MessageExt]) -> ConsumeResult:
 
     # 概率返回RECONSUME_LATER，模拟消费失败需要重试的场景
     if random.randint(1, 6) == 1:
-        print(f"模拟消费失败，返回RECONSUME_LATER进行重试，消息数量: {len(messages)}")
+        print(
+            f"模拟消费失败，返回RECONSUME_LATER进行重试，消息数量: {len(messages)}, reconsume_time: {messages[0].reconsume_times}"
+        )
         return ConsumeResult.RECONSUME_LATER
 
     for message in messages:

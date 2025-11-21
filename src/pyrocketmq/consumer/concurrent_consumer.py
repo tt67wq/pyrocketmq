@@ -1439,11 +1439,10 @@ class ConcurrentConsumer(BaseConsumer):
                         self._handle_successful_consume(messages, message_queue)
                         messages = []
                     else:
-                        back_failed_messages: list[MessageExt] = (
-                            self._handle_failed_consume(messages, message_queue)
+                        messages: list[MessageExt] = self._handle_failed_consume(
+                            messages, message_queue
                         )
-                        if back_failed_messages:
-                            messages = back_failed_messages
+                        if messages:
                             time.sleep(5)
 
                     # 更新统计信息

@@ -19,6 +19,8 @@ async def main():
     while True:
         try:
             message = Message(topic="test_im_015", body=b"Hello, RocketMQ From Python!")
+            message.set_tags("TAG1")
+            message.set_keys("KEYS")
             ret = await producer.send(message)
             print("Message sent ret:", ret)
         except ProducerError as e:

@@ -582,7 +582,7 @@ class BaseConsumer:
         )
 
         try:
-            logger.info(
+            logger.debug(
                 "Processing messages",
                 extra={
                     "consumer_group": self._config.consumer_group,

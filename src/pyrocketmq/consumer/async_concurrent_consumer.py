@@ -127,24 +127,16 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         # 统计信息
         self._stats.update(
             {
-                "start_time": 0,
                 "pull_count": 0,
                 "pull_failures": 0,
-                "pull_success_count": 0,
-                "pull_error_count": 0,
+                "pull_successes": 0,
                 "pull_requests": 0,
-                "consume_count": 0,
-                "consume_success_count": 0,
-                "consume_error_count": 0,
-                "processed_message_count": 0,
-                "processed_message_size": 0,
+                "rebalance_failure_count": 0,
                 "rebalance_count": 0,
                 "rebalance_success_count": 0,
-                "rebalance_failure_count": 0,
-                "rebalance_skipped_count": 0,
-                "last_pull_time": 0,
-                "last_consume_time": 0,
-                "last_rebalance_time": 0,
+                "messages_consumed": 0,
+                "consume_duration_total": 0,
+                "messages_failed": 0,
             }
         )
 
@@ -1399,13 +1391,11 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     if success:
                         await self._handle_successful_consume(messages, message_queue)
                     else:
-                        back_failed_messages: list[
-                            MessageExt
-                        ] = await self._handle_failed_consume(messages, message_queue)
-                        if back_failed_messages:
-                            messages = back_failed_messages
+                        messages = await self._handle_failed_consume(
+                            messages, message_queue
+                        )
+                        if messages:
                             await asyncio.sleep(5)  # 异步延迟
-                            # 重新处理失败的消息
                             continue  # 跳过后续处理，直接重试
 
                     # 更新统计信息
