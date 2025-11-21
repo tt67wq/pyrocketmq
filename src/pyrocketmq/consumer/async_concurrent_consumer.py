@@ -681,7 +681,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         Args:
             new_assigned_queues: 新分配的队列集合
         """
-        async with self._lock:
+        async with self._cache_lock:
             # 记录旧队列集合
             old_queues = set(self._assigned_queues.keys())
 

@@ -154,8 +154,8 @@ class AsyncBaseConsumer:
         self._heartbeat_task: asyncio.Task[None] | None = None
 
         # 路由刷新和心跳配置
-        self._route_refresh_interval: float = 30000.0  # 30秒
-        self._heartbeat_interval: float = 30000.0  # 30秒
+        self._route_refresh_interval: float = 30.0  # 30秒
+        self._heartbeat_interval: float = 30.0  # 30秒
         self._last_heartbeat_time: float = 0
 
         # 异步事件
@@ -1119,7 +1119,7 @@ class AsyncBaseConsumer:
                 try:
                     await asyncio.wait_for(
                         self._route_refresh_event.wait(),
-                        timeout=self._route_refresh_interval / 1000,
+                        timeout=self._route_refresh_interval,
                     )
                     # 收到事件信号，退出循环
                     break
@@ -1268,17 +1268,6 @@ class AsyncBaseConsumer:
         """
         return self._heartbeat_interval - (current_time - self._last_heartbeat_time)
 
-    def _should_wait_for_event(self, wait_time: float) -> bool:
-        """判断是否需要等待事件。
-
-        Args:
-            wait_time (float): 等待时间
-
-        Returns:
-            bool: 如果需要等待返回True，否则返回False
-        """
-        return wait_time > 0
-
     async def _wait_for_heartbeat_event_or_timeout(self, timeout: float) -> bool:
         """等待心跳事件或超时。
 
@@ -1368,7 +1357,7 @@ class AsyncBaseConsumer:
                 wait_time = self._calculate_wait_time(current_time)
 
                 # 如果需要等待，处理等待逻辑
-                if self._should_wait_for_event(wait_time):
+                if wait_time > 0:
                     # 限制最大等待时间为1秒，以便及时响应退出信号
                     wait_timeout = min(wait_time, 1.0)
                     event_triggered = await self._wait_for_heartbeat_event_or_timeout(
