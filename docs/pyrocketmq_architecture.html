@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pyrocketmq 架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            animation: fadeIn 1s ease-in;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .architecture-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 1200px;
+            width: 100%;
+            animation: slideUp 0.8s ease-out;
+        }
+
+        .layer {
+            margin-bottom: 25px;
+            position: relative;
+        }
+
+        .layer-title {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 15px rgba(79, 172, 254, 0.3);
+            position: relative;
+            z-index: 10;
+        }
+
+        .modules-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-left: 20px;
+            position: relative;
+        }
+
+        .module {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            min-width: 180px;
+            flex: 1;
+            box-shadow: 0 8px 25px rgba(240, 147, 251, 0.3);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .module::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .module:hover::before {
+            left: 100%;
+        }
+
+        .module:hover {
+            transform: translateY(-5px) scale(1.02);
+            box-shadow: 0 12px 35px rgba(240, 147, 251, 0.4);
+        }
+
+        .module.app-layer {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+
+        .module.client-layer {
+            background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);
+        }
+
+        .module.communication-layer {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        }
+
+        .module.transport-layer {
+            background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+        }
+
+        .module.protocol-layer {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        }
+
+        .module.utils-layer {
+            background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);
+        }
+
+        .module.logging-layer {
+            background: linear-gradient(135deg, #cfd9df 0%, #e2ebf0 100%);
+        }
+
+        .module h3 {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .module p {
+            font-size: 0.9rem;
+            opacity: 0.95;
+            line-height: 1.4;
+        }
+
+        .module-details {
+            display: none;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255,255,255,0.3);
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .module.expanded .module-details {
+            display: block;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .components {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .component {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            backdrop-filter: blur(5px);
+        }
+
+        .flow-arrow {
+            text-align: center;
+            color: #666;
+            font-size: 1.5rem;
+            margin: 15px 0;
+            animation: pulse 2s infinite;
+        }
+
+        .legend {
+            margin-top: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #e0f7fa 0%, #e1bee7 100%);
+            border-radius: 10px;
+            color: #333;
+        }
+
+        .legend h4 {
+            margin-bottom: 10px;
+            color: #5e35b1;
+        }
+
+        .legend-items {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+
+        .info-panel {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            max-width: 300px;
+            display: none;
+            z-index: 1000;
+            animation: slideInRight 0.3s ease-out;
+        }
+
+        .info-panel.active {
+            display: block;
+        }
+
+        .info-panel h3 {
+            margin-bottom: 10px;
+            color: #5e35b1;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #f44336;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            animation: fadeIn 1s ease-in;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #5e35b1;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            .architecture-container {
+                padding: 20px;
+            }
+
+            .modules-container {
+                flex-direction: column;
+                margin-left: 0;
+            }
+
+            .module {
+                min-width: 100%;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .info-panel {
+                position: static;
+                max-width: 100%;
+                margin-top: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 pyrocketmq 架构图</h1>
+        <p>功能完整的 Python RocketMQ 客户端库 - 分层架构设计</p>
+    </div>
+
+    <div class="stats-container">
+        <div class="stat-card">
+            <div class="stat-number">9</div>
+            <div class="stat-label">核心模块</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">6</div>
+            <div class="stat-label">架构层次</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">20+</div>
+            <div class="stat-label">异常类型</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">100%</div>
+            <div class="stat-label">协议兼容</div>
+        </div>
+    </div>
+
+    <div class="architecture-container">
+        <!-- 应用层 -->
+        <div class="layer">
+            <div class="layer-title">🎯 应用层 (Application Layer)</div>
+            <div class="modules-container">
+                <div class="module app-layer" onclick="toggleModule(this)">
+                    <h3>Producer</h3>
+                    <p>消息生产者，支持同步/异步发送、事务消息、批量发送</p>
+                    <div class="module-details">
+                        <strong>核心组件:</strong>
+                        <div class="components">
+                            <span class="component">AsyncProducer</span>
+                            <span class="component">TransactionProducer</span>
+                            <span class="component">MessageRouter</span>
+                            <span class="component">QueueSelector</span>
+                        </div>
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">智能路由</span>
+                            <span class="component">故障感知</span>
+                            <span class="component">心跳机制</span>
+                            <span class="component">性能监控</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module app-layer" onclick="toggleModule(this)">
+                    <h3>Consumer</h3>
+                    <p>消息消费者，支持并发/顺序消费、广播/集群模式</p>
+                    <div class="module-details">
+                        <strong>核心组件:</strong>
+                        <div class="components">
+                            <span class="component">ConcurrentConsumer</span>
+                            <span class="component">OrderlyConsumer</span>
+                            <span class="component">OffsetStore</span>
+                            <span class="component">SubscriptionManager</span>
+                        </div>
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">消息监听</span>
+                            <span class="component">偏移量管理</span>
+                            <span class="component">队列分配</span>
+                            <span class="component">消费重试</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow">↓ 数据流向</div>
+
+        <!-- 客户端层 -->
+        <div class="layer">
+            <div class="layer-title">🔗 客户端层 (NameServer & Broker Client)</div>
+            <div class="modules-container">
+                <div class="module client-layer" onclick="toggleModule(this)">
+                    <h3>NameServer Client</h3>
+                    <p>注册发现客户端，管理Topic路由和Broker集群信息</p>
+                    <div class="module-details">
+                        <strong>功能:</strong>
+                        <div class="components">
+                            <span class="component">路由查询</span>
+                            <span class="component">集群管理</span>
+                            <span class="component">Broker发现</span>
+                            <span class="component">Topic注册</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module client-layer" onclick="toggleModule(this)">
+                    <h3>Broker Client</h3>
+                    <p>Broker通信客户端，处理消息收发、心跳、偏移量管理</p>
+                    <div class="module-details">
+                        <strong>功能:</strong>
+                        <div class="components">
+                            <span class="component">消息发送</span>
+                            <span class="component">消息拉取</span>
+                            <span class="component">心跳维护</span>
+                            <span class="component">连接管理</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow">↓ 通信抽象</div>
+
+        <!-- 远程通信层 -->
+        <div class="layer">
+            <div class="layer-title">🌐 远程通信层 (Remote Communication)</div>
+            <div class="modules-container">
+                <div class="module communication-layer" onclick="toggleModule(this)">
+                    <h3>Remote & AsyncRemote</h3>
+                    <p>远程通信抽象层，提供同步/异步RPC通信</p>
+                    <div class="module-details">
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">线程安全</span>
+                            <span class="component">连接池</span>
+                            <span class="component">超时控制</span>
+                            <span class="component">并发限制</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module communication-layer" onclick="toggleModule(this)">
+                    <h3>Connection Pool</h3>
+                    <p>连接池管理器，优化TCP连接复用和资源管理</p>
+                    <div class="module-details">
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">连接复用</span>
+                            <span class="component">健康检查</span>
+                            <span class="component">负载均衡</span>
+                            <span class="component">自动回收</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow">↓ 网络传输</div>
+
+        <!-- 传输层 -->
+        <div class="layer">
+            <div class="layer-title">📡 传输层 (Transport Layer)</div>
+            <div class="modules-container">
+                <div class="module transport-layer" onclick="toggleModule(this)">
+                    <h3>Connection State Machine</h3>
+                    <p>基于状态机的TCP连接管理，支持同步/异步模式</p>
+                    <div class="module-details">
+                        <strong>状态流程:</strong>
+                        <div class="components">
+                            <span class="component">DISCONNECTED</span>
+                            <span class="component">CONNECTING</span>
+                            <span class="component">CONNECTED</span>
+                            <span class="component">CLOSING</span>
+                            <span class="component">CLOSED</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module transport-layer" onclick="toggleModule(this)">
+                    <h3>Transport Config</h3>
+                    <p>传输层配置管理，控制连接行为和网络参数</p>
+                    <div class="module-details">
+                        <strong>配置项:</strong>
+                        <div class="components">
+                            <span class="component">连接超时</span>
+                            <span class="component">读取超时</span>
+                            <span class="component">重试策略</span>
+                            <span class="component">缓冲区大小</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow">↓ 协议处理</div>
+
+        <!-- 协议模型层 -->
+        <div class="layer">
+            <div class="layer-title">📋 协议模型层 (Protocol Model)</div>
+            <div class="modules-container">
+                <div class="module protocol-layer" onclick="toggleModule(this)">
+                    <h3>Remoting Command</h3>
+                    <p>远程命令数据结构，协议层的核心通信单元</p>
+                    <div class="module-details">
+                        <strong>组件:</strong>
+                        <div class="components">
+                            <span class="component">Header</span>
+                            <span class="component">Body</span>
+                            <span class="component">Flag</span>
+                            <span class="component">Serializer</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module protocol-layer" onclick="toggleModule(this)">
+                    <h3>Message & Queue</h3>
+                    <p>消息和队列数据结构，支持消息属性和元数据</p>
+                    <div class="module-details">
+                        <strong>数据结构:</strong>
+                        <div class="components">
+                            <span class="component">Message</span>
+                            <span class="component">MessageExt</span>
+                            <span class="component">MessageQueue</span>
+                            <span class="component">Properties</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="module protocol-layer" onclick="toggleModule(this)">
+                    <h3>Request Factory</h3>
+                    <p>请求工厂，支持所有RocketMQ请求类型构建</p>
+                    <div class="module-details">
+                        <strong>支持请求:</strong>
+                        <div class="components">
+                            <span class="component">SendMessage</span>
+                            <span class="component">PullMessage</span>
+                            <span class="component">Heartbeat</span>
+                            <span class="component">GetRouteInfo</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flow-arrow">↓ 基础支持</div>
+
+        <!-- 工具支持层 -->
+        <div class="layer">
+            <div class="layer-title">🛠️ 工具支持层 (Utility Support)</div>
+            <div class="modules-container">
+                <div class="module utils-layer" onclick="toggleModule(this)">
+                    <h3>SyncRWLock</h3>
+                    <p>线程安全的读写锁实现，支持高并发读写场景</p>
+                    <div class="module-details">
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">多读者单写者</span>
+                            <span class="component">线程安全</span>
+                            <span class="component">性能优化</span>
+                            <span class="component">轻量级</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志系统层 -->
+        <div class="layer">
+            <div class="layer-title">📝 日志系统层 (Logging System)</div>
+            <div class="modules-container">
+                <div class="module logging-layer" onclick="toggleModule(this)">
+                    <h3>Logging Framework</h3>
+                    <p>统一日志记录系统，支持多种格式化和配置</p>
+                    <div class="module-details">
+                        <strong>特性:</strong>
+                        <div class="components">
+                            <span class="component">JSON格式</span>
+                            <span class="component">彩色输出</span>
+                            <span class="component">结构化日志</span>
+                            <span class="component">灵活配置</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 图例说明 -->
+        <div class="legend">
+            <h4>📖 图例说明</h4>
+            <div class="legend-items">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div>
+                    <span>应用层 - 高级功能实现</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+                    <span>客户端层 - NameServer & Broker</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+                    <span>通信层 - RPC & 连接池</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);"></div>
+                    <span>传输层 - TCP连接管理</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);"></div>
+                    <span>协议层 - 数据结构与序列化</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%);"></div>
+                    <span>工具层 - 通用组件</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 信息面板 -->
+    <div class="info-panel" id="infoPanel">
+        <button class="close-btn" onclick="closeInfoPanel()">×</button>
+        <h3>模块详情</h3>
+        <div id="infoPanelContent"></div>
+    </div>
+
+    <script>
+        function toggleModule(element) {
+            element.classList.toggle('expanded');
+
+            // 获取模块信息并显示在侧边面板
+            const moduleName = element.querySelector('h3').textContent;
+            const moduleDetails = element.querySelector('.module-details').innerHTML;
+
+            const infoPanel = document.getElementById('infoPanel');
+            const infoPanelContent = document.getElementById('infoPanelContent');
+
+            infoPanelContent.innerHTML = `
+                <h4>${moduleName}</h4>
+                <div>${moduleDetails}</div>
+            `;
+
+            infoPanel.classList.add('active');
+        }
+
+        function closeInfoPanel() {
+            const infoPanel = document.getElementById('infoPanel');
+            infoPanel.classList.remove('active');
+        }
+
+        // 页面加载完成后的初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('pyrocketmq 架构图已加载完成！');
+
+            // 添加键盘快捷键
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    closeInfoPanel();
+                }
+            });
+
+            // 动态统计数字动画
+            const statNumbers = document.querySelectorAll('.stat-number');
+            statNumbers.forEach(stat => {
+                const finalValue = stat.textContent;
+                const isPercentage = finalValue.includes('%');
+                const numericValue = parseInt(finalValue.replace(/\D/g, ''));
+
+                if (!isNaN(numericValue)) {
+                    let currentValue = 0;
+                    const increment = numericValue / 30; // 30 frames
+
+                    const updateNumber = () => {
+                        currentValue += increment;
+                        if (currentValue < numericValue) {
+                            stat.textContent = Math.floor(currentValue) + (isPercentage ? '%' : '+');
+                            requestAnimationFrame(updateNumber);
+                        } else {
+                            stat.textContent = finalValue;
+                        }
+                    };
+
+                    updateNumber();
+                }
+            });
+        });
+
+        // 添加模块拖拽功能（可选）
+        function enableDragAndDrop() {
+            const modules = document.querySelectorAll('.module');
+
+            modules.forEach(module => {
+                module.draggable = true;
+
+                module.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/html', module.innerHTML);
+                    module.style.opacity = '0.4';
+                });
+
+                module.addEventListener('dragend', (e) => {
+                    module.style.opacity = '';
+                });
+
+                module.addEventListener('dragover', (e) => {
+                    if (e.preventDefault) {
+                        e.preventDefault();
+                    }
+                    e.dataTransfer.dropEffect = 'move';
+                    return false;
+                });
+            });
+        }
+
+        // 性能监控
+        const performanceMonitor = {
+            startTime: Date.now(),
+
+            getUptime() {
+                const uptime = Date.now() - this.startTime;
+                const seconds = Math.floor(uptime / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const hours = Math.floor(minutes / 60);
+
+                return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+            },
+
+            init() {
+                setInterval(() => {
+                    console.log(`页面运行时间: ${this.getUptime()}`);
+                }, 30000);
+            }
+        };
+
+        // 启动性能监控
+        performanceMonitor.init();
+    </script>
+</body>
+</html>
