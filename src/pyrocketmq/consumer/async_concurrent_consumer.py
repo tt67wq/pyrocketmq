@@ -26,8 +26,6 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateQueueStrategyFactory,
 )
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
-from pyrocketmq.consumer.async_consume_from_where_manager import (
-)
 from pyrocketmq.consumer.async_listener import (
     AsyncMessageListener,
     ConsumeResult,
@@ -55,9 +53,8 @@ from pyrocketmq.model import (
     ResponseCode,
     SubscriptionData,
     SubscriptionEntry,
-    TopicRouteData,
 )
-from pyrocketmq.remote import AsyncConnectionPool, ConnectionPool
+from pyrocketmq.remote import AsyncConnectionPool
 
 logger = get_logger(__name__)
 
@@ -251,11 +248,122 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     },
                     exc_info=True,
                 )
-                # 清理资源
-                await self._cleanup_on_start_failure()
-                raise ConsumerStartError(
-                    f"Failed to start AsyncConcurrentConsumer: {e}"
-                ) from e
+
+    async def _process_messages_with_timing(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> tuple[bool, float]:
+        """
+        异步处理消息并计时
+
+        Args:
+            messages: 要处理的消息列表
+            message_queue: 消息队列信息
+
+        Returns:
+            tuple[bool, float]: (处理是否成功, 处理耗时)
+        """
+        start_time = time.time()
+        try:
+            success = await self._concurrent_consume_message(messages, message_queue)
+            return success, time.time() - start_time
+        except Exception as e:
+            logger.error(f"Message processing failed: {e}", exc_info=True)
+            return False, time.time() - start_time
+
+    async def _handle_successful_consume(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> None:
+        """
+        异步处理消费成功的情况
+
+        Args:
+            messages: 成功处理的消息列表
+            message_queue: 消息队列信息
+        """
+        try:
+            # 从缓存中移除已处理的消息，并获取当前最小offset
+            min_offset: int | None = await self._remove_messages_from_cache(
+                message_queue, messages
+            )
+
+            # 直接更新最小offset到offset_store，避免重复查询
+            if min_offset is not None:
+                try:
+                    await self._offset_store.update_offset(message_queue, min_offset)
+                    logger.debug(
+                        f"Updated offset from cache: {min_offset}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "offset": min_offset,
+                            "cache_stats": (
+                                await self._get_or_create_process_queue(message_queue)
+                            ).get_stats(),
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to update offset from cache: {e}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "offset": min_offset,
+                            "error": str(e),
+                        },
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Failed to remove messages from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "error": str(e),
+                },
+            )
+
+    async def _handle_failed_consume(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> list[MessageExt]:
+        """
+        异步处理消费失败的消息，根据消息模式采取不同的处理策略。
+
+        Args:
+            messages: 消费失败的消息列表
+            message_queue: 消息队列信息
+
+        Returns:
+            list[MessageExt]: 发送回broker失败的消息列表（集群模式）或空列表（广播模式）
+        """
+        if self._config.message_model == MessageModel.CLUSTERING:
+            # 尝试将失败的消息发送回broker进行重试
+            failed_messages: list[MessageExt] = []
+            for msg in messages:
+                if not await self._send_back_message(message_queue, msg):
+                    failed_messages.append(msg)
+            return failed_messages
+        else:
+            # 广播模式，直接丢掉消息
+            logger.warning("Broadcast mode, discard failed messages")
+            return []
+
+    async def _update_consume_stats(
+        self, success: bool, duration: float, message_count: int
+    ) -> None:
+        """
+        异步更新消费统计信息
+
+        Args:
+            success: 处理是否成功
+            duration: 处理耗时
+            message_count: 消息数量
+        """
+        async with self._stats_lock:
+            self._stats["consume_duration_total"] += duration
+            if not success:
+                self._stats["messages_failed"] += message_count
 
     async def shutdown(self) -> None:
         """关闭异步并发消费者。
@@ -1255,7 +1363,48 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     async def _consume_messages_loop(self) -> None:
         """
-        持续处理消息的循环
+        持续处理消息的异步消费循环。
+
+        这是并发消费者核心的异步消息处理循环，运行在独立的消费任务中。
+        该循环负责从消息处理队列中获取消息并调用用户注册的消息监听器进行处理。
+
+        主要功能:
+            - 异步从处理队列阻塞式获取消息批次
+            - 调用用户消息监听器进行业务处理
+            - 根据处理结果执行成功/失败后的处理逻辑
+            - 更新消费统计信息
+            - 处理重试机制和异常情况
+
+        处理流程:
+            1. 从处理队列获取消息批次（使用asyncio.wait_for超时机制）
+            2. 调用消息监听器处理消息 (_concurrent_consume_message)
+            3. 根据处理结果执行后续操作：
+               - 成功: 更新偏移量，清理处理队列
+               - 失败: 发送回broker进行重试
+            4. 更新消费统计信息
+            5. 对发送回broker失败的消息进行延迟重试
+
+        重试机制:
+            - 消费失败的消息会尝试发送回broker进行重试
+            - 发送回broker失败的消息会在本地延迟5秒后重试
+            - 避免因broker连接问题导致的消息丢失
+
+        异步特性:
+            - 使用asyncio.wait_for实现非阻塞超时获取
+            - 所有IO操作都是异步的，不阻塞事件循环
+            - 支持高并发消息处理
+            - 异步锁保护共享状态
+
+        异常处理:
+            - 捕获所有异常，确保单个消息处理失败不影响整个循环
+            - 记录详细的错误日志和异常堆栈信息
+            - 保持循环继续运行，确保消费者服务可用
+
+        Note:
+            - 该方法是消费者消息处理的核心逻辑，不应被外部调用
+            - 循环会在消费者关闭时(_is_running=False)自动退出
+            - 消费延迟主要取决于消息处理时间和队列深度
+            - 统计信息用于监控消费性能和健康状态
         """
         while self._is_running:
             try:
@@ -1269,75 +1418,31 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 except asyncio.TimeoutError:
                     continue
 
-                # 处理消息
-                start_time: float = time.time()
-                success: bool = await self._concurrent_consume_message(messages, message_queue)
-                duration: float = time.time() - start_time
+                while messages:
+                    # 处理消息
+                    success, duration = await self._process_messages_with_timing(
+                        messages, message_queue
+                    )
 
-                async with self._stats_lock:
-                    self._stats["consume_duration_total"] += duration
+                    # 根据处理结果进行后续处理
+                    if success:
+                        await self._handle_successful_consume(messages, message_queue)
+                    else:
+                        back_failed_messages: list[
+                            MessageExt
+                        ] = await self._handle_failed_consume(messages, message_queue)
+                        if back_failed_messages:
+                            messages = back_failed_messages
+                            await asyncio.sleep(5)  # 异步延迟
+                            # 重新处理失败的消息
+                            continue  # 跳过后续处理，直接重试
 
-                if not success:
-                    self._stats["messages_failed"] += len(messages)
-
-                # 更新偏移量
-                if success:
-                    try:
-                        # 从缓存中移除已处理的消息，并获取当前最小offset
-                        min_offset = await self._remove_messages_from_cache(
-                            message_queue, messages
-                        )
-
-                        # 直接更新最小offset到offset_store，避免重复查询
-                        if min_offset is not None:
-                            try:
-                                await self._offset_store.update_offset(
-                                    message_queue, min_offset
-                                )
-                                logger.debug(
-                                    f"Updated offset from cache: {min_offset}",
-                                    extra={
-                                        "consumer_group": self._config.consumer_group,
-                                        "topic": message_queue.topic,
-                                        "queue_id": message_queue.queue_id,
-                                        "offset": min_offset,
-                                        "cache_stats": (
-                                            await self._get_or_create_process_queue(
-                                                message_queue
-                                            )
-                                        ).get_stats(),
-                                    },
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to update offset from cache: {e}",
-                                    extra={
-                                        "consumer_group": self._config.consumer_group,
-                                        "topic": message_queue.topic,
-                                        "queue_id": message_queue.queue_id,
-                                        "offset": min_offset,
-                                        "error": str(e),
-                                    },
-                                )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to remove messages from cache: {e}",
-                            extra={
-                                "consumer_group": self._config.consumer_group,
-                                "topic": message_queue.topic,
-                                "queue_id": message_queue.queue_id,
-                                "error": str(e),
-                            },
-                        )
-                else:
-                    # TODO: send msg back
-                    for _ in messages:
-                        # TODO: implement async send_back_message
-                        pass
+                    # 更新统计信息
+                    await self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
-                    f"Error in consume messages loop: {e}",
+                    f"Error in async consume messages loop: {e}",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "error": str(e),
@@ -1353,10 +1458,13 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     async def _remove_messages_from_cache(
         self, queue: MessageQueue, messages: list[MessageExt]
-    ) -> None:
+    ) -> int | None:
         """从缓存中移除消息"""
         pq = await self._get_or_create_process_queue(queue)
-        _ = pq.remove_batch_messages([m.queue_offset for m in messages if m.queue_offset is not None])
+        _ = pq.remove_batch_messages(
+            [m.queue_offset for m in messages if m.queue_offset is not None]
+        )
+        return pq.get_min_offset()
 
     async def _wait_for_processing_completion(self) -> None:
         """等待正在处理的消息完成"""
@@ -1408,23 +1516,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 await asyncio.sleep(5.0)
 
     # ==================== 内部方法：资源管理和清理 ====================
-
-    async def _cleanup_on_start_failure(self) -> None:
-        """启动失败时的清理操作"""
-        try:
-            # 停止所有任务
-            await self._stop_pull_tasks()
-            await self._stop_consume_tasks()
-
-            # 清理资源
-            await self._cleanup_resources()
-
-        except Exception as e:
-            logger.error(
-                f"Error during startup failure cleanup: {e}",
-                extra={"error": str(e)},
-                exc_info=True,
-            )
 
     async def _cleanup_resources(self) -> None:
         """清理资源"""
