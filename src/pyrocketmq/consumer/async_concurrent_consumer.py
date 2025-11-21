@@ -125,24 +125,26 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         self._rebalance_lock = asyncio.Lock()
 
         # 统计信息
-        self._stats: dict[str, Any] = {
-            "start_time": 0,
-            "pull_count": 0,
-            "pull_success_count": 0,
-            "pull_error_count": 0,
-            "consume_count": 0,
-            "consume_success_count": 0,
-            "consume_error_count": 0,
-            "processed_message_count": 0,
-            "processed_message_size": 0,
-            "rebalance_count": 0,
-            "rebalance_success_count": 0,
-            "rebalance_failure_count": 0,
-            "rebalance_skipped_count": 0,
-            "last_pull_time": 0,
-            "last_consume_time": 0,
-            "last_rebalance_time": 0,
-        }
+        self._stats.update(
+            {
+                "start_time": 0,
+                "pull_count": 0,
+                "pull_success_count": 0,
+                "pull_error_count": 0,
+                "consume_count": 0,
+                "consume_success_count": 0,
+                "consume_error_count": 0,
+                "processed_message_count": 0,
+                "processed_message_size": 0,
+                "rebalance_count": 0,
+                "rebalance_success_count": 0,
+                "rebalance_failure_count": 0,
+                "rebalance_skipped_count": 0,
+                "last_pull_time": 0,
+                "last_consume_time": 0,
+                "last_rebalance_time": 0,
+            }
+        )
 
         # 创建队列分配策略
         self._allocate_strategy = AllocateQueueStrategyFactory.create_strategy(
@@ -443,31 +445,28 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         Raises:
             None: 此方法不会抛出异常
         """
-        # 使用异步锁保护重平衡操作，非阻塞尝试获取锁
-        try:
-            # 使用wait_for实现非阻塞获取锁，超时时间为0
-            await asyncio.wait_for(self._rebalance_lock.acquire(), timeout=0)
-        except asyncio.TimeoutError:
-            # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
+        # 首先检查是否有订阅的Topic，避免不必要的锁获取
+        topics: set[str] = set(self._subscription_manager.get_topics())
+        if not topics:
+            print("没有任何topic！！！！！")
+            logger.debug("No topics subscribed, skipping rebalance")
+            return False
+
+        # 检查锁是否已被占用，避免重复尝试获取
+        if self._rebalance_lock.locked():
+            print("已经锁上辣！")
+            # 锁已被占用，跳过本次重平衡
             async with self._stats_lock:
                 self._stats["rebalance_skipped_count"] += 1
 
             logger.debug(
-                "Rebalance already in progress, skipping",
+                "Rebalance lock already locked, skipping",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "skipped_count": self._stats["rebalance_skipped_count"],
                 },
             )
             return False
-
-        # 检查是否有订阅的Topic
-        topics: set[str] = set(self._subscription_manager.get_topics())
-        if not topics:
-            logger.debug("No topics subscribed, skipping rebalance")
-            self._rebalance_lock.release()
-            return False
-
         return True
 
     async def _collect_and_allocate_queues(self) -> set[MessageQueue]:
@@ -568,11 +567,13 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         4. 更新分配的队列
         5. 完成重平衡后处理
         """
-        # 前置检查
-        if not await self._pre_rebalance_check():
+        # 前置检查（包含锁获取）
+        lock_acquired = await self._pre_rebalance_check()
+        if not lock_acquired:
             return
 
         try:
+            await self._rebalance_lock.acquire()
             logger.debug(
                 "Starting rebalance",
                 extra={"consumer_group": self._config.consumer_group},
@@ -597,12 +598,20 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 self._stats["rebalance_failure_count"] += 1
 
         finally:
-            # 释放重平衡锁
-            self._rebalance_lock.release()
-            logger.debug(
-                "Rebalance lock released",
-                extra={"consumer_group": self._config.consumer_group},
-            )
+            # 只有成功获取锁时才释放锁
+            if self._rebalance_lock.locked():
+                try:
+                    self._rebalance_lock.release()
+                    logger.debug(
+                        "Rebalance lock released",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
+                except RuntimeError as e:
+                    # 防止尝试释放未被持有的锁
+                    logger.warning(
+                        f"Failed to release rebalance lock: {e}",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
 
     async def _allocate_queues(
         self, topic: str, all_queues: list[MessageQueue]

@@ -1207,9 +1207,7 @@ class AsyncBaseConsumer:
         """异步更新Topic路由信息"""
         self._logger.info(
             "Updating route info for topic",
-            extra={
-                "topic": topic,
-            },
+            extra={"topic": topic},
         )
 
         try:
@@ -1259,6 +1257,86 @@ class AsyncBaseConsumer:
         """
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+    def _calculate_wait_time(self, current_time: float) -> float:
+        """计算到下一次心跳的等待时间。
+
+        Args:
+            current_time (float): 当前时间戳
+
+        Returns:
+            float: 到下一次心跳的等待时间（秒）
+        """
+        return self._heartbeat_interval - (current_time - self._last_heartbeat_time)
+
+    def _should_wait_for_event(self, wait_time: float) -> bool:
+        """判断是否需要等待事件。
+
+        Args:
+            wait_time (float): 等待时间
+
+        Returns:
+            bool: 如果需要等待返回True，否则返回False
+        """
+        return wait_time > 0
+
+    async def _wait_for_heartbeat_event_or_timeout(self, timeout: float) -> bool:
+        """等待心跳事件或超时。
+
+        Args:
+            timeout (float): 超时时间（秒）
+
+        Returns:
+            bool: 如果事件被触发返回True，如果超时返回False
+        """
+        try:
+            await asyncio.wait_for(self._heartbeat_event.wait(), timeout=timeout)
+            # Event被触发，重置事件状态
+            self._heartbeat_event.clear()
+            return True
+        except asyncio.TimeoutError:
+            return False
+
+    def _should_send_heartbeat(self, current_time: float) -> bool:
+        """判断是否应该发送心跳。
+
+        Args:
+            current_time (float): 当前时间戳
+
+        Returns:
+            bool: 如果应该发送心跳返回True，否则返回False
+        """
+        return current_time - self._last_heartbeat_time >= self._heartbeat_interval
+
+    def _handle_heartbeat_loop_error(self, error: Exception) -> None:
+        """处理心跳循环中的异常。
+
+        Args:
+            error (Exception): 捕获的异常
+        """
+        self._logger.error(
+            f"Error in async heartbeat loop: {error}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "error": str(error),
+            },
+            exc_info=True,
+        )
+
+    async def _perform_heartbeat_if_needed(self, current_time: float) -> float:
+        """在需要时执行心跳并返回新的时间戳。
+
+        Args:
+            current_time (float): 当前时间戳
+
+        Returns:
+            float: 更新后的时间戳
+        """
+        if self._should_send_heartbeat(current_time):
+            await self._send_heartbeat_to_all_brokers()
+            self._last_heartbeat_time = time.time()
+            return self._last_heartbeat_time
+        return current_time
+
     async def _heartbeat_loop(self) -> None:
         """异步消费者心跳发送循环。
 
@@ -1277,50 +1355,38 @@ class AsyncBaseConsumer:
         """
         self._logger.info("Async heartbeat loop started")
 
+        # 执行首次心跳
         await self._send_heartbeat_to_all_brokers()
         self._last_heartbeat_time = time.time()
 
+        # 主心跳循环
         while self._is_running:
             try:
                 current_time = time.time()
 
-                # 计算到下一次心跳的等待时间
-                time_until_next_heartbeat = self._heartbeat_interval - (
-                    current_time - self._last_heartbeat_time
-                )
+                # 计算等待时间
+                wait_time = self._calculate_wait_time(current_time)
 
-                # 如果还没到心跳时间，等待一小段时间或直到被唤醒
-                if time_until_next_heartbeat > 0:
-                    # 使用Event.wait()替代asyncio.sleep()
-                    wait_timeout = min(time_until_next_heartbeat, 1.0)  # 最多等待1秒
-                    try:
-                        await asyncio.wait_for(
-                            self._heartbeat_event.wait(), timeout=wait_timeout
-                        )
-                        # Event被触发，检查是否需要退出
+                # 如果需要等待，处理等待逻辑
+                if self._should_wait_for_event(wait_time):
+                    # 限制最大等待时间为1秒，以便及时响应退出信号
+                    wait_timeout = min(wait_time, 1.0)
+                    event_triggered = await self._wait_for_heartbeat_event_or_timeout(
+                        wait_timeout
+                    )
+
+                    if event_triggered:
+                        # 检查是否需要退出
                         if not self._is_running:
                             break
-                        # 重置事件状态
-                        self._heartbeat_event.clear()
                         continue  # 重新计算等待时间
-                    except asyncio.TimeoutError:
-                        pass  # 超时继续执行心跳逻辑
 
-                # 检查是否需要发送心跳
-                current_time = time.time()  # 重新获取当前时间
-                if current_time - self._last_heartbeat_time >= self._heartbeat_interval:
-                    await self._send_heartbeat_to_all_brokers()
-                    self._last_heartbeat_time = current_time
+                # 重新获取当前时间并检查是否需要发送心跳
+                current_time = time.time()
+                await self._perform_heartbeat_if_needed(current_time)
 
             except Exception as e:
-                self._logger.error(
-                    f"Error in async heartbeat loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
+                self._handle_heartbeat_loop_error(e)
                 # 等待一段时间再重试
                 try:
                     await asyncio.wait_for(self._heartbeat_event.wait(), timeout=5.0)
@@ -1331,7 +1397,7 @@ class AsyncBaseConsumer:
 
     async def _send_heartbeat_to_all_brokers(self) -> None:
         """异步向所有Broker发送心跳"""
-        self._logger.debug("Sending heartbeat to all brokers...")
+        self._logger.info("Sending heartbeat to all brokers...")
 
         try:
             # 收集所有Broker地址

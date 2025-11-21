@@ -1,6 +1,8 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+from types import FrameType
+
 import pyrocketmq.logging
 from pyrocketmq.consumer import create_concurrent_consumer, create_message_listener
 from pyrocketmq.logging import LoggingConfig
@@ -55,7 +57,7 @@ def main():
         import signal
         import sys
 
-        def signal_handler(_sig, _frame):
+        def signal_handler(_sig: int, _frame: FrameType | None):
             print("\n收到中断信号，正在关闭消费者...")
             consumer.shutdown()
             print("消费者已关闭")
