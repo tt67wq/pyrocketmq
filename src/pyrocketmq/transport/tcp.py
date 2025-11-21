@@ -832,7 +832,6 @@ class AsyncConnectionStateMachine(StateMachine):
             return body_data
 
         except asyncio.TimeoutError:
-            self._logger.warning("异步接收数据包超时")
             raise TimeoutError("异步接收数据包超时")
         except Exception as e:
             self._logger.error(
@@ -865,12 +864,6 @@ class AsyncConnectionStateMachine(StateMachine):
             # 连接被对方关闭
             return b""
         except asyncio.TimeoutError:
-            self._logger.warning(
-                "异步接收数据超时",
-                extra={
-                    "bytes_requested": size,
-                },
-            )
             raise
 
     @property
