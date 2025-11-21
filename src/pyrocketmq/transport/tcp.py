@@ -540,7 +540,6 @@ class AsyncConnectionStateMachine(StateMachine):
             )
             await self.disconnect(None)
         else:
-            self._logger.info("异步连接成功")
             await self.connect_success(None)
 
     async def on_connect_success(self) -> None:

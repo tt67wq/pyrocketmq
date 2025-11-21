@@ -276,7 +276,9 @@ class AsyncProducer:
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
             if not routing_result.success:
-                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
+                raise RouteNotFoundError(
+                    f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                )
 
             message_queue = routing_result.message_queue
             broker_data = routing_result.broker_data

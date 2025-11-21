@@ -179,7 +179,7 @@ class MessageRouter:
                 )
 
                 # Debug: 记录队列为空的情况
-                self._logger.debug(
+                self._logger.error(
                     "No available queues found",
                     extra={
                         "operation": "route_message",
