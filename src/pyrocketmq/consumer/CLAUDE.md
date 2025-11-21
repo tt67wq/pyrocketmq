@@ -4,11 +4,12 @@
 
 Consumer模块是pyrocketmq的消息消费者实现，提供完整的RocketMQ消息消费功能。该模块采用分层架构设计，支持并发消费、顺序消费、集群广播消费等多种消费模式，并具备完善的偏移量管理、订阅管理、消息监听等核心功能。
 
-**当前状态**: 🚧 基础架构完成，核心Consumer实现中
+**当前状态**: ✅ Consumer模块完整实现完成
 
 - ✅ **已完成的组件**: 配置管理、偏移量存储、订阅管理、消息监听器、队列分配策略、消费起始位置管理、异常体系、监控指标
-- 🚧 **进行中的组件**: ConcurrentConsumer核心实现
-- ❌ **待实现的组件**: OrderlyConsumer、完整的重平衡机制
+- ✅ **已完成实现**: ConcurrentConsumer (同步并发消费者)
+- ✅ **已完成实现**: AsyncConcurrentConsumer (异步并发消费者)
+- ✅ **已完成实现**: 完整的重平衡机制和ProcessQueue消息缓存管理
 
 ### 核心特性
 
@@ -55,25 +56,32 @@ Consumer模块是pyrocketmq的消息消费者实现，提供完整的RocketMQ消
 ```
 consumer/
 ├── __init__.py                        # 模块导出和公共接口
-├── base_consumer.py                  # 消费者抽象基类
-├── concurrent_consumer.py             # 并发消费者核心实现 (开发中)
+├── base_consumer.py                  # 同步消费者抽象基类
+├── async_base_consumer.py             # 异步消费者抽象基类
+├── concurrent_consumer.py             # 同步并发消费者核心实现 ✅
+├── async_concurrent_consumer.py       # 异步并发消费者核心实现 ✅
 ├── config.py                          # 消费者配置管理
 ├── listener.py                        # 同步消息监听器接口体系
 ├── async_listener.py                  # 异步消息监听器接口体系
 ├── subscription_manager.py            # 订阅关系管理器
 ├── offset_store.py                    # 偏移量存储抽象基类
+├── async_offset_store.py              # 异步偏移量存储抽象基类
 ├── remote_offset_store.py             # 远程偏移量存储实现
 ├── async_remote_offset_store.py       # 异步远程偏移量存储实现
 ├── local_offset_store.py              # 本地偏移量存储实现
-├── offset_store_factory.py            # 偏移量存储工厂 (简化版)
+├── async_local_offset_store.py        # 异步本地偏移量存储实现
+├── offset_store_factory.py            # 同步偏移量存储工厂
+├── async_offset_store_factory.py      # 异步偏移量存储工厂
 ├── allocate_queue_strategy.py         # 队列分配策略
 ├── queue_selector.py                  # 队列选择器 (从producer导入)
 ├── consume_from_where_manager.py      # 同步消费起始位置管理
 ├── async_consume_from_where_manager.py # 异步消费起始位置管理
-├── consumer_factory.py                # 消费者创建工厂
+├── process_queue.py                   # 消息缓存管理队列 ✅
+├── consumer_factory.py                # 同步消费者创建工厂
+├── async_factory.py                   # 异步消费者创建工厂 ✅
+├── topic_broker_mapping.py            # Topic-Broker映射管理
 ├── errors.py                          # 消费者专用异常
-├── subscription_exceptions.py         # 订阅管理专用异常
-└── CLAUDE.md                          # 本文档
+└── subscription_exceptions.py         # 订阅管理专用异常
 ```
 
 ### 模块依赖关系
@@ -249,7 +257,68 @@ class SubscriptionManager:
     def validate_subscription(self, topic: str, selector: MessageSelector) -> bool
 ```
 
-### 5. 异步消费者基类 (async_base_consumer.py)
+### 5. 消息缓存管理 (process_queue.py)
+
+#### ProcessQueue
+
+**功能描述**: ProcessQueue是pyrocketmq消费者模块的核心消息缓存管理组件，用于解决并发消费中的偏移量管理问题。它提供高效的按序缓存、统计计算和流量控制功能。
+
+**核心功能**:
+- **有序消息缓存**: 按照queue_offset升序排列消息，保证消息顺序性
+- **高效统计操作**: 提供min/max/count等O(1)时间复杂度的统计计算
+- **消息体积统计**: 统计MessageExt的body总体积，支持内存使用监控
+- **流量控制**: 支持基于缓存数量和大小的智能流量控制
+- **线程安全**: 内置线程安全机制，支持多线程并发访问
+- **批量操作**: 支持高效的批量消息添加和移除操作
+
+**核心接口**:
+```python
+class ProcessQueue:
+    def __init__(self, max_cache_count: int, max_cache_size_mb: int):
+        """初始化ProcessQueue
+        
+        Args:
+            max_cache_count: 最大缓存消息数量
+            max_cache_size_mb: 最大缓存大小(MB)
+        """
+        
+    def add_batch_messages(self, messages: list[MessageExt]) -> int:
+        """批量添加消息到缓存
+        
+        Returns:
+            int: 实际添加的消息数量
+        """
+        
+    def remove_batch_messages(self, offsets: list[int]) -> int:
+        """批量移除指定偏移量的消息
+        
+        Returns:
+            int: 实际移除的消息数量
+        """
+        
+    def get_min_offset(self) -> int | None:
+        """获取缓存中最小消息偏移量"""
+        
+    def get_max_offset(self) -> int | None:
+        """获取缓存中最大消息偏移量"""
+        
+    def get_stats(self) -> dict[str, Any]:
+        """获取缓存统计信息"""
+        
+    def need_flow_control(self) -> bool:
+        """检查是否需要进行流量控制"""
+        
+    def contains_message(self, offset: int) -> bool:
+        """检查指定偏移量的消息是否在缓存中"""
+```
+
+**设计特点**:
+- **高性能**: 使用跳表数据结构，提供高效的插入、删除和查询操作
+- **内存优化**: 支持缓存数量和大小的双重限制，防止内存溢出
+- **统计丰富**: 提供全面的缓存统计信息，便于监控和调优
+- **流量控制**: 智能的流量控制机制，避免消费速度过快导致内存问题
+
+### 6. 异步消费者基类 (async_base_consumer.py)
 
 #### AsyncBaseConsumer
 
@@ -392,7 +461,169 @@ class MyAsyncConsumer(AsyncBaseConsumer):
 - **统计监控**: 全面的路由和心跳统计信息
 - **协议兼容**: 心跳数据与同步版本完全一致
 
-### 6. 偏移量存储体系
+### 7. 同步并发消费者 (concurrent_consumer.py)
+
+#### ConcurrentConsumer
+
+**功能描述**: ConcurrentConsumer是pyrocketmq的核心同步并发消费者实现，支持高并发消息消费。它使用线程池来并行处理多个队列的消息，提供高吞吐量的消息消费能力。
+
+**核心特性**:
+- **多线程并发消费**: 基于ThreadPoolExecutor的并发处理架构
+- **自动重平衡**: 智能队列分配和重平衡机制，确保负载均衡
+- **ProcessQueue缓存**: 使用ProcessQueue解决并发消费的偏移量管理问题
+- **智能拉取控制**: 支持基于拉取结果的智能间隔控制
+- **完善监控**: 丰富的性能监控指标和统计信息
+- **容错恢复**: 完善的错误处理和自动恢复机制
+
+**核心架构**:
+```python
+class ConcurrentConsumer(BaseConsumer):
+    def __init__(self, config: ConsumerConfig):
+        """初始化并发消费者"""
+        # 线程池管理
+        self._consume_executor: ThreadPoolExecutor  # 消息处理线程池
+        self._pull_executor: ThreadPoolExecutor     # 消息拉取线程池
+        
+        # 消息缓存管理 - 使用ProcessQueue解决并发偏移量问题
+        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
+        
+        # 队列分配和重平衡
+        self._assigned_queues: dict[MessageQueue, int] = {}
+        self._rebalance_thread: threading.Thread
+        
+    def start(self) -> None:
+        """启动并发消费者，包括：
+        - 创建线程池
+        - 执行初始重平衡
+        - 启动拉取和处理任务
+        """
+        
+    def shutdown(self) -> None:
+        """优雅停止并发消费者：
+        - 停止拉取任务
+        - 等待处理完成
+        - 持久化偏移量
+        - 清理资源
+        """
+```
+
+**重平衡机制**:
+```python
+def _do_rebalance(self) -> None:
+    """执行消费者重平衡操作：
+    1. 收集所有Topic的可用队列
+    2. 执行队列分配算法  
+    3. 更新分配的队列并启动拉取任务
+    4. 停止被回收队列的拉取任务
+    """
+    
+def _allocate_queues(self, topic: str, all_queues: list[MessageQueue]) -> list[MessageQueue]:
+    """队列分配策略：
+    - 集群模式：多个消费者分担队列
+    - 广播模式：每个消费者消费所有队列
+    """
+```
+
+**消息拉取循环**:
+```python
+def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
+    """持续拉取指定队列的消息：
+    1. 获取当前偏移量
+    2. 执行单次拉取操作
+    3. 过滤和处理消息
+    4. 更新ProcessQueue缓存
+    5. 提交到处理队列
+    """
+    
+def _handle_pulled_messages(self, message_queue: MessageQueue, 
+                           messages: list[MessageExt], next_begin_offset: int) -> None:
+    """处理拉取到的消息：
+    - 更新偏移量记录
+    - 添加到ProcessQueue缓存
+    - 按批次提交到处理队列
+    """
+```
+
+**消息处理循环**:
+```python
+def _consume_messages_loop(self) -> None:
+    """持续处理消息的消费循环：
+    1. 从处理队列获取消息批次
+    2. 调用用户监听器处理消息
+    3. 根据处理结果更新ProcessQueue
+    4. 更新偏移量到OffsetStore
+    """
+```
+
+**ProcessQueue集成**:
+```python
+def _add_messages_to_cache(self, queue: MessageQueue, messages: list[MessageExt]) -> None:
+    """将消息添加到ProcessQueue缓存，保持按queue_offset排序"""
+    
+def _remove_messages_from_cache(self, queue: MessageQueue, messages: list[MessageExt]) -> int | None:
+    """从ProcessQueue移除已处理消息，返回当前最小offset"""
+    
+def _update_offset_from_cache(self, queue: MessageQueue) -> None:
+    """从ProcessQueue获取最小offset并更新到OffsetStore"""
+```
+
+### 8. 异步并发消费者 (async_concurrent_consumer.py)
+
+#### AsyncConcurrentConsumer
+
+**功能描述**: AsyncConcurrentConsumer是pyrocketmq的异步并发消费者实现，支持高并发异步消息消费。它使用asyncio和异步任务来并行处理多个队列的消息，提供高吞吐量的异步消息消费能力。
+
+**核心特性**:
+- **异步并发架构**: 基于asyncio事件循环的异步处理
+- **异步线程池**: 使用asyncio.gather等异步并发机制
+- **异步ProcessQueue**: 与同步版本共享ProcessQueue缓存管理
+- **异步重平衡**: 支持异步队列分配和重平衡
+- **异步IO优化**: 所有网络操作都采用异步模式
+- **性能监控**: 异步环境下的性能统计和监控
+
+**核心接口**:
+```python
+class AsyncConcurrentConsumer(AsyncBaseConsumer):
+    def __init__(self, config: ConsumerConfig):
+        """初始化异步并发消费者"""
+        
+    async def start(self) -> None:
+        """异步启动消费者，创建异步任务池"""
+        
+    async def shutdown(self) -> None:
+        """异步关闭消费者，等待异步任务完成"""
+        
+    async def _consume_message(self, messages: list[MessageExt], 
+                              context: AsyncConsumeContext) -> ConsumeResult:
+        """异步消费消息的核心方法"""
+```
+
+**使用示例**:
+```python
+# 同步并发消费者
+from pyrocketmq.consumer import ConcurrentConsumer, create_consumer
+
+consumer = create_consumer(
+    consumer_group="sync_group",
+    namesrv_addr="localhost:9876",
+    message_listener=MySyncListener()
+)
+consumer.subscribe("test_topic", "*")
+consumer.start()
+
+# 异步并发消费者  
+from pyrocketmq.consumer import AsyncConcurrentConsumer, create_async_consumer
+
+consumer = await create_async_consumer(
+    consumer_group="async_group", 
+    namesrv_addr="localhost:9876",
+    message_listener=MyAsyncListener()
+)
+await consumer.subscribe("test_topic", "*")
+await consumer.start()
+```
+
+### 9. 偏移量存储体系
 
 #### 6.1 抽象基类 (offset_store.py)
 
@@ -413,7 +644,7 @@ class OffsetStore(ABC):
     def persist(self, queue: MessageQueue) -> None:    # 持久化偏移量
 ```
 
-#### 6.2 远程偏移量存储 (remote_offset_store.py & async_remote_offset_store.py)
+#### 9.2 远程偏移量存储 (remote_offset_store.py & async_remote_offset_store.py)
 
 **RemoteOffsetStore**: 集群模式的远程偏移量存储，偏移量存储在Broker端。
 
@@ -422,7 +653,7 @@ class OffsetStore(ABC):
 - **多消费者协调**: 支持多消费者协调消费
 - **高可用性**: 依赖Broker的高可用性
 
-#### 6.3 本地偏移量存储 (local_offset_store.py)
+#### 9.3 本地偏移量存储 (local_offset_store.py & async_local_offset_store.py)
 
 **LocalOffsetStore**: 广播模式的本地偏移量存储，偏移量存储在本地文件。
 
@@ -431,7 +662,7 @@ class OffsetStore(ABC):
 - **独立消费**: 每个消费者独立维护偏移量
 - **文件格式**: 使用JSON格式存储，支持手动查看
 
-#### 6.4 偏移量存储工厂 (offset_store_factory.py & async_offset_store_factory.py)
+#### 9.4 偏移量存储工厂 (offset_store_factory.py & async_offset_store_factory.py)
 
 **OffsetStoreFactory**: 偏移量存储工厂类，根据消费模式创建相应的存储实例。
 
@@ -446,7 +677,7 @@ class OffsetStore(ABC):
 - `create_offset_store()`: 创建偏移量存储实例
 - `validate_offset_store_config()`: 验证配置有效性
 
-### 7. 队列分配策略 (allocate_queue_strategy.py)
+### 10. 队列分配策略 (allocate_queue_strategy.py)
 
 #### 队列分配策略
 
@@ -477,7 +708,7 @@ class AllocateContext:
 - `create_average_strategy()`: 创建平均分配策略
 - `create_hash_strategy()`: 创建哈希分配策略
 
-### 8. 消费起始位置管理
+### 11. 消费起始位置管理
 
 #### 8.1 同步版本 (consume_from_where_manager.py)
 
@@ -497,7 +728,87 @@ class AllocateContext:
 - 适用于高并发异步应用场景
 - 与同步版本保持相同的API设计
 
-### 9. 队列选择器 (queue_selector.py)
+### 12. 消费者工厂 (consumer_factory.py & async_factory.py)
+
+#### 消费者工厂函数
+
+**功能描述**: 消费者工厂模块提供便捷的消费者创建函数，简化用户的使用复杂度。
+
+**同步工厂函数 (consumer_factory.py)**:
+```python
+def create_consumer(consumer_group: str, namesrv_addr: str, 
+                   message_listener: MessageListener, **kwargs) -> ConcurrentConsumer:
+    """创建并发消费者的便捷函数"""
+    
+def create_consumer_with_config(config: ConsumerConfig, 
+                               message_listener: MessageListener) -> ConcurrentConsumer:
+    """使用配置对象创建并发消费者"""
+    
+def create_concurrent_consumer(config: ConsumerConfig) -> ConcurrentConsumer:
+    """创建并发消费者实例"""
+```
+
+**异步工厂函数 (async_factory.py)**:
+```python
+async def create_async_consumer(consumer_group: str, namesrv_addr: str,
+                               message_listener: AsyncMessageListener, **kwargs) -> AsyncConcurrentConsumer:
+    """异步创建异步并发消费者的便捷函数"""
+    
+async def create_async_consumer_with_config(config: ConsumerConfig,
+                                           message_listener: AsyncMessageListener) -> AsyncConcurrentConsumer:
+    """使用配置对象异步创建异步并发消费者"""
+    
+async def create_async_concurrent_consumer(config: ConsumerConfig) -> AsyncConcurrentConsumer:
+    """异步创建异步并发消费者实例"""
+```
+
+**使用示例**:
+```python
+# 同步消费者创建
+from pyrocketmq.consumer import create_consumer
+
+consumer = create_consumer(
+    consumer_group="my_group",
+    namesrv_addr="localhost:9876",
+    message_listener=MySyncListener()
+)
+
+# 异步消费者创建
+from pyrocketmq.consumer import create_async_consumer
+
+consumer = await create_async_consumer(
+    consumer_group="my_async_group", 
+    namesrv_addr="localhost:9876",
+    message_listener=MyAsyncListener()
+)
+```
+
+### 13. Topic-Broker映射 (topic_broker_mapping.py)
+
+#### ConsumerTopicBrokerMapping
+
+**功能描述**: ConsumerTopicBrokerMapping是专门为消费者设计的Topic-Broker映射管理器，提供路由信息查询、队列选择和缓存管理功能。
+
+**核心功能**:
+- **路由缓存**: 缓存Topic到Broker的路由信息
+- **队列选择**: 支持多种队列选择策略
+- **更新机制**: 支持路由信息的动态更新
+- **统计监控**: 提供路由查询和选择的统计信息
+
+**主要接口**:
+```python
+class ConsumerTopicBrokerMapping:
+    def get_subscribe_queues(self, topic: str) -> list[tuple[MessageQueue, str]]:
+        """获取Topic的可订阅队列列表"""
+        
+    def update_route_info(self, topic: str) -> bool:
+        """更新Topic的路由信息"""
+        
+    def get_broker_address(self, broker_name: str) -> str | None:
+        """获取Broker地址"""
+```
+
+### 14. 队列选择器 (queue_selector.py)
 
 **功能描述**: 从producer模块导入的队列选择器，支持轮询、随机、哈希三种选择策略。
 
@@ -513,7 +824,7 @@ class AllocateContext:
 
 ## 使用示例
 
-### 1. 基础消费者创建
+### 1. 同步并发消费者使用
 
 ```python
 from pyrocketmq.consumer import create_consumer, MessageListenerConcurrently, ConsumeResult
@@ -525,7 +836,7 @@ class SimpleMessageListener(MessageListenerConcurrently):
             print(f"消费消息: {message.body.decode()}")
         return ConsumeResult.CONSUME_SUCCESS
 
-# 创建消费者
+# 创建并发消费者
 consumer = create_consumer(
     consumer_group="test_group",
     namesrv_addr="localhost:9876",
@@ -542,9 +853,21 @@ consumer.start()
 import time
 time.sleep(60)
 consumer.shutdown()
+
+# 或者使用ConcurrentConsumer直接创建
+config = ConsumerConfig(
+    consumer_group="my_group",
+    namesrv_addr="localhost:9876",
+    consume_thread_max=20,
+    pull_batch_size=32
+)
+consumer = ConcurrentConsumer(config)
+consumer.register_message_listener(SimpleMessageListener())
+consumer.subscribe("test_topic", "*")
+consumer.start()
 ```
 
-### 2. 异步消费者使用
+### 2. 异步并发消费者使用
 
 ```python
 import asyncio
@@ -580,7 +903,7 @@ async def async_consumer_example():
         pull_batch_size=32      # 批量拉取大小
     )
     
-    # 创建异步消费者
+    # 创建异步并发消费者
     consumer = AsyncConcurrentConsumer(config, AsyncOrderProcessor())
     
     try:
@@ -730,6 +1053,61 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 
 ## 版本变更记录
 
+### v3.0.0 (2025-01-21) - Consumer模块完整实现完成 ✅
+
+**重大里程碑**: Consumer模块从"开发中"状态升级为"完整实现完成"，所有核心功能已实现并可投入使用。
+
+**🚀 核心消费者实现**:
+- ✅ **ConcurrentConsumer**: 同步并发消费者完整实现
+  - 基于ThreadPoolExecutor的多线程并发架构
+  - 完整的重平衡机制和队列分配算法
+  - ProcessQueue消息缓存管理，解决并发偏移量问题
+  - 智能拉取控制和完善的错误处理机制
+  - 丰富的性能监控指标和统计信息
+  
+- ✅ **AsyncConcurrentConsumer**: 异步并发消费者完整实现  
+  - 基于asyncio事件循环的异步并发架构
+  - 与同步版本共享ProcessQueue缓存管理
+  - 异步重平衡和队列分配机制
+  - 异步IO优化，适用于高并发异步应用
+
+**📚 架构组件完善**:
+- ✅ **ProcessQueue**: 新增消息缓存管理组件
+  - 高效的有序消息缓存（按queue_offset排序）
+  - O(1)时间复杂度的统计计算（min/max/count）
+  - 智能流量控制和内存优化
+  - 线程安全的批量操作支持
+
+- ✅ **工厂模式完善**: 
+  - consumer_factory.py: 同步消费者工厂函数
+  - async_factory.py: 异步消费者工厂函数
+  - 提供便捷的create_consumer()和create_async_consumer()接口
+
+- ✅ **Topic-Broker映射**:
+  - ConsumerTopicBrokerMapping: 专为消费者设计的路由管理
+  - 路由缓存、队列选择、动态更新机制
+  - 统计监控和性能优化
+
+**🔧 技术特性升级**:
+- **重平衡机制**: 完整的队列重平衡和负载均衡实现
+- **ProcessQueue集成**: 解决并发消费中的偏移量管理难题
+- **智能拉取**: 基于拉取结果的智能间隔控制
+- **容错恢复**: 完善的错误处理和自动恢复机制
+- **监控完善**: 全面的性能指标和统计信息
+
+**📖 文档体系完善**:
+- 📚 新增ProcessQueue组件详细文档
+- 💡 完善ConcurrentConsumer和AsyncConcurrentConsumer使用示例
+- 🔧 更新模块架构图，体现完整的消费者实现
+- 📋 修正所有组件状态从"开发中"到"已完成"
+
+**测试覆盖增强**:
+- ✅ ConcurrentConsumer核心功能单元测试
+- ✅ AsyncConcurrentConsumer异步功能测试
+- ✅ ProcessQueue缓存管理测试
+- ✅ 重平衡机制和队列分配测试
+- ✅ 端到端集成测试
+
 ### v2.2.0 (2025-01-20) - AsyncBaseConsumer完整实现
 
 **新增功能**:
@@ -838,43 +1216,43 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 
 ### 当前限制
 
-1. **Consumer实现**: ConcurrentConsumer仍在开发中，完整的消息消费流程尚未完成
-2. **重平衡机制**: 自动重平衡功能需要进一步实现和完善
-3. **顺序消费**: MessageListenerOrderly需要配套的Consumer实现支持
-4. **消息过滤**: SQL92过滤功能尚未完全实现
+1. **顺序消费**: MessageListenerOrderly需要配套的OrderlyConsumer实现（中期计划）
+2. **消息过滤**: SQL92过滤功能尚未完全实现（中期计划）
+3. **死信队列**: 死信队列处理机制需要进一步完善（中期计划）
 
 ### 使用建议
 
-1. **订阅管理**: 在实际使用Consumer前，可以先使用SubscriptionManager管理订阅关系
-2. **偏移量存储**: 可以独立使用OffsetStore进行偏移量管理
-3. **配置验证**: 使用validate_offset_store_config()提前验证配置
-4. **异常处理**: 充分利用异常体系进行错误处理和问题诊断
+1. **生产就绪**: ConcurrentConsumer和AsyncConcurrentConsumer已完整实现，可在生产环境使用
+2. **配置调优**: 根据业务场景调整consume_thread_max、pull_batch_size等参数
+3. **监控告警**: 利用内置的统计指标建立监控告警体系
+4. **异常处理**: 充分利用完善的异常体系进行错误处理和问题诊断
+5. **性能优化**: 使用ProcessQueue的流量控制功能避免内存问题
 
 ## 下一步计划
 
-### 短期计划 (v2.2.0) - Consumer核心实现
-
-1. **ConcurrentConsumer完善**: 完成并发消费者的核心实现
-2. **消息拉取循环**: 实现完整的消息拉取和处理机制
-3. **重平衡机制**: 实现队列重平衡和动态调整
-4. **监控集成**: 完善监控指标和性能统计
-5. **集成测试**: 添加端到端的集成测试
-
-### 中期计划 (v3.0.0) - 高级功能
+### 短期计划 (v3.1.0) - 功能增强
 
 1. **OrderlyConsumer**: 实现顺序消息消费者
-2. **SQL92过滤**: 完善SQL92消息过滤功能
-3. **事务消息**: 支持事务消息消费
-4. **死信队列**: 实现死信队列处理机制
-5. **性能优化**: 进一步优化消费性能
+2. **SQL92过滤**: 完善SQL92消息过滤功能  
+3. **死信队列**: 实现死信队列处理机制
+4. **性能调优**: 进一步优化ProcessQueue和消费性能
+5. **监控增强**: 添加更详细的性能指标和可视化
+
+### 中期计划 (v3.5.0) - 高级特性
+
+1. **事务消息**: 支持事务消息消费
+2. **消息轨迹**: 完善消息追踪和链路监控
+3. **流控机制**: 实现智能流量控制和背压管理
+4. **集群管理**: 支持消费者集群的统一管理和协调
+5. **多租户**: 支持多租户隔离和资源配额管理
 
 ### 长期规划 (v4.0.0) - 企业级功能
 
-1. **集群管理**: 支持消费者集群管理和协调
-2. **流控机制**: 实现智能流量控制
-3. **故障转移**: 完善的故障转移和恢复机制
-4. **云原生**: 支持Kubernetes等云原生环境
-5. **可观测性**: 完善的可观测性和链路追踪
+1. **云原生支持**: 完整的Kubernetes和云原生环境支持
+2. **可观测性**: 集成OpenTelemetry，完善链路追踪
+3. **故障恢复**: 智能故障转移和自愈能力
+4. **扩展性**: 支持水平扩展和弹性伸缩
+5. **生态集成**: 与主流监控、日志、告警系统集成
 
 ## 总结
 
@@ -902,6 +1280,6 @@ Consumer模块适用于以下场景：
 
 ---
 
-**最后更新**: 2025-01-20
-**文档版本**: v2.1.0
-**项目状态**: 🚧 基础架构完成，核心Consumer实现中
+**最后更新**: 2025-01-21
+**文档版本**: v3.0.0
+**项目状态**: ✅ Consumer模块完整实现完成
