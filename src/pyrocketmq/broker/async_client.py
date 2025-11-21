@@ -1847,12 +1847,13 @@ class AsyncBrokerClient:
 
             # 创建消费者发送消息回退请求
             request = RemotingRequestFactory.create_consumer_send_msg_back_request(
-                message=message,
-                consumer_group=consumer_group,
+                group=consumer_group,
+                offset=message.commit_log_offset or 0,
                 delay_level=delay_level,
-                max_consume_retry_times=max_consume_retry_times,
+                origin_msg_id=message.msg_id or "",
+                origin_topic=message.topic,
                 body=message.body,
-                **kwargs,
+                max_reconsume_times=max_consume_retry_times,
             )
 
             # 发送请求并获取响应

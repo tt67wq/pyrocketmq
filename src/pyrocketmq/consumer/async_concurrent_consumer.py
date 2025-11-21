@@ -129,8 +129,10 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             {
                 "start_time": 0,
                 "pull_count": 0,
+                "pull_failures": 0,
                 "pull_success_count": 0,
                 "pull_error_count": 0,
+                "pull_requests": 0,
                 "consume_count": 0,
                 "consume_success_count": 0,
                 "consume_error_count": 0,

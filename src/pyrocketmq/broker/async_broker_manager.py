@@ -35,7 +35,7 @@ class AsyncBrokerManager:
         self,
         remote_config: RemoteConfig,
         transport_config: TransportConfig | None = None,
-        connection_pool_size: int = 5,
+        connection_pool_size: int = 16,
     ):
         """初始化异步Broker管理器
 

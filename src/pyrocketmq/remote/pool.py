@@ -635,7 +635,9 @@ class AsyncConnectionPool:
 
             # 检查是否超时
             if time.time() - start_time > timeout:
-                raise TimeoutError("获取连接超时")
+                raise TimeoutError(
+                    f"获取连接超时, timeout:{timeout}, pool_size:{self.pool_size}"
+                )
 
             # 短暂等待后重试
             await asyncio.sleep(0.1)
