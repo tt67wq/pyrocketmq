@@ -1390,6 +1390,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     # 根据处理结果进行后续处理
                     if success:
                         await self._handle_successful_consume(messages, message_queue)
+                        messages = []
                     else:
                         messages = await self._handle_failed_consume(
                             messages, message_queue
