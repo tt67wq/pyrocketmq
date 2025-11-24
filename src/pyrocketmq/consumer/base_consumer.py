@@ -771,6 +771,30 @@ class BaseConsumer:
                     topic=topic,
                     queue_id=context.queue_id,
                 )
+            if self._config.enable_auto_commit and result in [
+                ConsumeResult.COMMIT,
+                ConsumeResult.ROLLBACK,
+            ]:
+                logger.error(
+                    "Invalid result for orderly consumer when auto commit",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                    },
+                )
+                # 抛出无效消费结果异常
+                raise InvalidConsumeResultError(
+                    consumer_type="orderly",
+                    invalid_result=result.value,
+                    valid_results=[
+                        ConsumeResult.SUCCESS.value,
+                        ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT.value,
+                    ],
+                    topic=topic,
+                    queue_id=context.queue_id,
+                )
 
             # 顺序消费支持所有消费结果类型
             success = result in [

@@ -473,6 +473,8 @@ class ProcessQueue:
                 if entry.message is not None and not entry.is_tombstone:
                     messages.append(entry.message)
 
+            self._consuming_orderly_msgs.clear()
+
             # 清空所有数据
             self._entries.clear()
             self._offset_to_index.clear()

@@ -1,5 +1,4 @@
 import concurrent.futures
-import queue
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -67,11 +66,6 @@ class OrderlyConsumer(BaseConsumer):
         self._consume_tasks: dict[MessageQueue, list[Future[None]]] = {}
         self._consume_executor: ThreadPoolExecutor | None = None  # 用于管理消费任务
         self._pull_executor: ThreadPoolExecutor | None = None
-
-        # 消息处理队列管理 - 每个MessageQueue独立处理队列
-        # 顺序消费要求每个MessageQueue有独立的处理队列，避免不同队列的消息交叉处理
-        self._process_queues: dict[MessageQueue, queue.Queue[list[MessageExt]]] = {}
-        self._process_queue_lock = threading.Lock()  # 用于保护_process_queues字典
 
         # 初始化每个message_queue的锁管理字段
         # 每个queue的锁都有时间限制，支持is_lock_expired方法
@@ -1161,50 +1155,11 @@ class OrderlyConsumer(BaseConsumer):
         # 将消息添加到缓存中（用于解决并发偏移量问题）
         self._add_messages_to_cache(message_queue, messages)
 
-        # 将消息按批次放入处理队列
-        self._submit_messages_for_processing(message_queue, messages)
-
         # 更新统计信息
         message_count = len(messages)
         self._stats["pull_successes"] += 1
         self._stats["messages_consumed"] += message_count
         self._stats["pull_requests"] += 1
-
-    def _submit_messages_for_processing(
-        self, message_queue: MessageQueue, messages: list[MessageExt]
-    ) -> None:
-        """将消息按批次提交给对应MessageQueue的处理队列。
-
-        Args:
-            message_queue: 消息队列
-            messages: 要处理的消息列表
-        """
-        # 获取该MessageQueue专属的处理队列
-        consume_queue = self._get_or_create_consume_queue(message_queue)
-
-        # 按照config.consume_batch_size分割消息批次
-        batch_size = self._config.consume_batch_size
-        message_count = len(messages)
-
-        # 计算批次数量
-        batch_count = (message_count + batch_size - 1) // batch_size
-
-        logger.debug(
-            f"Splitting {message_count} messages into {batch_count} batches for queue {message_queue}",
-            extra={
-                "consumer_group": self._config.consumer_group,
-                "topic": message_queue.topic,
-                "queue_id": message_queue.queue_id,
-                "message_count": message_count,
-                "batch_size": batch_size,
-                "batch_count": batch_count,
-            },
-        )
-
-        # 将消息按批次放入对应MessageQueue的处理队列
-        for i in range(0, message_count, batch_size):
-            batch_messages = messages[i : i + batch_size]
-            consume_queue.put(batch_messages)
 
     def _apply_pull_interval(
         self, has_messages: bool = True, stop_event: threading.Event | None = None
@@ -1253,15 +1208,6 @@ class OrderlyConsumer(BaseConsumer):
                     max_cache_size_mb=self._config.max_cache_size_per_queue,
                 )
             return self._msg_cache[queue]
-
-    def _get_or_create_consume_queue(
-        self, mq: MessageQueue
-    ) -> queue.Queue[list[MessageExt]]:
-        """获取或创建指定队列的消费处理队列"""
-        with self._process_queue_lock:
-            if mq not in self._process_queues:
-                self._process_queues[mq] = queue.Queue()
-            return self._process_queues[mq]
 
     def _add_messages_to_cache(
         self, queue: MessageQueue, messages: list[MessageExt]
@@ -1657,24 +1603,23 @@ class OrderlyConsumer(BaseConsumer):
         if not self._consume_executor:
             return
 
-        with self._process_queue_lock:
-            for message_queue in queues:
-                # 获取该队列的停止事件
-                with self._stop_events_lock:
-                    if message_queue in self._consume_stop_events:
-                        consume_stop_event = self._consume_stop_events[message_queue]
-                    else:
-                        # 如果事件不存在，创建一个（虽然正常情况下应该已经存在）
-                        consume_stop_event = threading.Event()
-                        self._consume_stop_events[message_queue] = consume_stop_event
+        for message_queue in queues:
+            # 获取该队列的停止事件
+            with self._stop_events_lock:
+                if message_queue in self._consume_stop_events:
+                    consume_stop_event = self._consume_stop_events[message_queue]
+                else:
+                    # 如果事件不存在，创建一个（虽然正常情况下应该已经存在）
+                    consume_stop_event = threading.Event()
+                    self._consume_stop_events[message_queue] = consume_stop_event
 
-                # 启动消费任务，传入停止事件
-                future = self._consume_executor.submit(
-                    self._consume_messages_loop, message_queue, consume_stop_event
-                )
-                if message_queue not in self._consume_tasks:
-                    self._consume_tasks[message_queue] = []
-                self._consume_tasks[message_queue].append(future)
+            # 启动消费任务，传入停止事件
+            future = self._consume_executor.submit(
+                self._consume_messages_loop, message_queue, consume_stop_event
+            )
+            if message_queue not in self._consume_tasks:
+                self._consume_tasks[message_queue] = []
+            self._consume_tasks[message_queue].append(future)
 
     def _consume_messages_loop(
         self, message_queue: MessageQueue, stop_event: threading.Event
@@ -1741,11 +1686,6 @@ class OrderlyConsumer(BaseConsumer):
             },
         )
 
-        # 获取该MessageQueue专属的处理队列
-        consume_queue: queue.Queue[list[MessageExt]] = (
-            self._get_or_create_consume_queue(message_queue)
-        )
-
         while self._is_running and not stop_event.is_set():
             queue_lock: threading.RLock = self._get_queue_lock(message_queue)
             try:
@@ -1799,11 +1739,14 @@ class OrderlyConsumer(BaseConsumer):
                         },
                     )
 
-                # 从MessageQueue专属的处理队列获取消息批次
-                messages: list[MessageExt] | None = self._get_messages_from_queue(
-                    consume_queue, stop_event
+                pq: ProcessQueue | None = self._get_or_create_process_queue(
+                    message_queue
                 )
-                if messages is None:
+                messages: list[MessageExt] = pq.take_messages(
+                    self._config.consume_batch_size
+                )
+                if not messages:
+                    stop_event.wait(timeout=3.0)
                     continue
 
                 while messages and self._is_running and not stop_event.is_set():
@@ -1843,38 +1786,9 @@ class OrderlyConsumer(BaseConsumer):
                 if queue_lock.locked():
                     queue_lock.release()
 
-    def _get_messages_from_queue(
-        self,
-        consume_queue: queue.Queue[list[MessageExt]],
-        stop_event: threading.Event | None = None,
-    ) -> list[MessageExt] | None:
-        """
-        从MessageQueue专属的处理队列获取消息
-
-        Args:
-            consume_queue: 指定MessageQueue的消费处理队列
-            stop_event: 停止事件，用于支持优雅关闭，默认为None
-
-        Returns:
-            消息列表，如果队列为空则返回None
-        """
-        try:
-            if stop_event:
-                # 使用可中断的超时获取，支持优雅关闭
-                while not stop_event.is_set():
-                    try:
-                        messages = consume_queue.get(timeout=0.1)
-                        return messages
-                    except queue.Empty:
-                        continue
-                # 收到停止信号，返回None
-                return None
-            else:
-                # 传统方式，固定超时
-                messages = consume_queue.get(timeout=1.0)
-                return messages
-        except queue.Empty:
-            return None
+    def _take_messages(self) -> list[MessageExt] | None:
+        """ """
+        pass
 
     def _process_messages_with_timing(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -1891,7 +1805,7 @@ class OrderlyConsumer(BaseConsumer):
         """
 
         start_time: float = time.time()
-        success: bool = self._concurrent_consume_message(messages, message_queue)
+        success: bool = self._orderly_consume_message(messages, message_queue)
         duration: float = time.time() - start_time
 
         return success, duration
@@ -2049,13 +1963,12 @@ class OrderlyConsumer(BaseConsumer):
             # 等待所有消费任务完成
             timeout: int = 30  # 30秒超时
 
-            with self._process_queue_lock:
-                # 收集所有未完成的消费任务
-                all_futures: list[Future[None]] = []
-                for futures in self._consume_tasks.values():
-                    for future in futures:
-                        if future and not future.done():
-                            all_futures.append(future)
+            # 收集所有未完成的消费任务
+            all_futures: list[Future[None]] = []
+            for futures in self._consume_tasks.values():
+                for future in futures:
+                    if future and not future.done():
+                        all_futures.append(future)
 
             # 等待所有任务完成或超时
             if all_futures and self._consume_executor:
@@ -2072,31 +1985,6 @@ class OrderlyConsumer(BaseConsumer):
                             "remaining_tasks": len(not_done_futures),
                         },
                     )
-
-            # 等待所有处理队列为空
-            queue_check_start = time.time()
-            all_empty: bool = False
-            while time.time() - queue_check_start < timeout:
-                all_empty = True
-                with self._process_queue_lock:
-                    for _queue_name, consume_queue in self._process_queues.items():
-                        if not consume_queue.empty():
-                            all_empty = False
-                            break
-
-                if all_empty:
-                    break
-
-                time.sleep(0.1)  # 短暂等待
-
-            if not all_empty:
-                logger.warning(
-                    f"Timeout waiting for processing queues to empty after {timeout}s",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "timeout": timeout,
-                    },
-                )
 
         except Exception as e:
             logger.warning(
@@ -2283,19 +2171,9 @@ class OrderlyConsumer(BaseConsumer):
         清理资源
         """
 
-        # 清理所有MessageQueue的处理队列
-        with self._process_queue_lock:
-            for _, consume_queue in self._process_queues.items():
-                while not consume_queue.empty():
-                    try:
-                        consume_queue.get_nowait()
-                    except queue.Empty:
-                        break
-            self._process_queues.clear()
-
         # 清理ProcessQueue消息缓存
         for process_queue in self._msg_cache.values():
-            process_queue.clear()
+            _ = process_queue.clear()
         self._msg_cache.clear()
 
         # 清理停止事件
