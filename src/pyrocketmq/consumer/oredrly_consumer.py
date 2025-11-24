@@ -109,6 +109,14 @@ class OrderlyConsumer(BaseConsumer):
         # 重平衡重入保护
         self._rebalance_lock: threading.RLock = threading.RLock()  # 重平衡锁，防止重入
 
+        # 远程锁缓存和有效期管理
+        # 避免每次消费循环都需要获取远程锁，提升性能
+        self._remote_lock_cache: dict[
+            MessageQueue, float
+        ] = {}  # queue -> lock_expiry_time
+        self._remote_lock_cache_lock = threading.Lock()  # 保护远程锁缓存
+        self._remote_lock_expire_time: float = 30.0  # 远程锁有效期30秒
+
         logger.info(
             "OrderlyConsumer initialized",
             extra={
@@ -116,6 +124,7 @@ class OrderlyConsumer(BaseConsumer):
                 "message_model": self._config.message_model,
                 "consume_thread_max": self._config.consume_thread_max,
                 "pull_batch_size": self._config.pull_batch_size,
+                "remote_lock_expire_time": self._remote_lock_expire_time,
             },
         )
 
@@ -705,6 +714,45 @@ class OrderlyConsumer(BaseConsumer):
 
             return self._queue_locks[message_queue].locked()
 
+    def _is_remote_lock_valid(self, message_queue: MessageQueue) -> bool:
+        """
+        检查指定队列的远程锁是否仍然有效
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            True如果远程锁仍然有效，False如果已过期或不存在
+        """
+        with self._remote_lock_cache_lock:
+            expiry_time = self._remote_lock_cache.get(message_queue)
+            if expiry_time is None:
+                return False
+
+            current_time = time.time()
+            return current_time < expiry_time
+
+    def _set_remote_lock_expiry(self, message_queue: MessageQueue) -> None:
+        """
+        设置指定队列的远程锁过期时间
+
+        Args:
+            message_queue: 消息队列
+        """
+        with self._remote_lock_cache_lock:
+            expiry_time = time.time() + self._remote_lock_expire_time
+            self._remote_lock_cache[message_queue] = expiry_time
+
+    def _invalidate_remote_lock(self, message_queue: MessageQueue) -> None:
+        """
+        使指定队列的远程锁失效
+
+        Args:
+            message_queue: 消息队列
+        """
+        with self._remote_lock_cache_lock:
+            self._remote_lock_cache.pop(message_queue, None)
+
     def _lock_remote_queue(self, message_queue: MessageQueue) -> bool:
         """
         尝试远程锁定指定队列
@@ -739,6 +787,8 @@ class OrderlyConsumer(BaseConsumer):
 
                 # 检查锁定是否成功
                 if locked_queues and len(locked_queues) > 0:
+                    # 成功获取远程锁，设置过期时间
+                    self._set_remote_lock_expiry(message_queue)
                     logger.debug(
                         f"Successfully locked remote queue: {message_queue}",
                         extra={
@@ -746,6 +796,7 @@ class OrderlyConsumer(BaseConsumer):
                             "client_id": self._config.client_id,
                             "queue": str(message_queue),
                             "operation": "lock_remote_queue",
+                            "expire_seconds": self._remote_lock_expire_time,
                         },
                     )
                     return True
@@ -805,6 +856,9 @@ class OrderlyConsumer(BaseConsumer):
                     client_id=self._config.client_id,
                     mqs=[message_queue],
                 )
+
+                # 清除远程锁缓存
+                self._invalidate_remote_lock(message_queue)
 
                 logger.debug(
                     f"Successfully unlocked remote queue: {message_queue}",
@@ -1714,23 +1768,36 @@ class OrderlyConsumer(BaseConsumer):
                         queue_lock.release()
                     continue
 
-                # 本地锁持有成功，尝试持有远程锁
-                if not self._lock_remote_queue(message_queue):
+                # 本地锁持有成功，检查远程锁是否需要重新获取
+                if not self._is_remote_lock_valid(message_queue):
+                    # 远程锁已过期或不存在，需要重新获取
+                    if not self._lock_remote_queue(message_queue):
+                        logger.debug(
+                            f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "client_id": self._config.client_id,
+                                "queue": str(message_queue),
+                                "operation": "consume_messages_loop",
+                            },
+                        )
+                        # 释放本地锁并继续下一轮循环
+                        queue_lock.release()
+                        # 等待3秒以减少锁竞争频率
+                        if stop_event.wait(timeout=3.0):
+                            break
+                        continue
+                else:
                     logger.debug(
-                        f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
+                        f"Using cached remote lock for queue {message_queue}",
                         extra={
                             "consumer_group": self._config.consumer_group,
                             "client_id": self._config.client_id,
                             "queue": str(message_queue),
                             "operation": "consume_messages_loop",
+                            "lock_cached": True,
                         },
                     )
-                    # 释放本地锁并继续下一轮循环
-                    queue_lock.release()
-                    # 等待3秒以减少锁竞争频率
-                    if stop_event.wait(timeout=3.0):
-                        break
-                    continue
 
                 # 从MessageQueue专属的处理队列获取消息批次
                 messages: list[MessageExt] | None = self._get_messages_from_queue(
@@ -2262,6 +2329,10 @@ class OrderlyConsumer(BaseConsumer):
         # 清理队列锁
         self._queue_locks.clear()
 
+        # 清理远程锁缓存
+        with self._remote_lock_cache_lock:
+            self._remote_lock_cache.clear()
+
     # ==================== 统计和监控方法 ====================
 
     def _get_final_stats(self) -> dict[str, Any]:
@@ -2286,6 +2357,15 @@ class OrderlyConsumer(BaseConsumer):
         with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
             assigned_queues_count = len(self._assigned_queues)
 
+        # 远程锁缓存统计
+        with self._remote_lock_cache_lock:
+            remote_lock_cache_size = len(self._remote_lock_cache)
+            valid_remote_locks = sum(
+                1
+                for _, expiry_time in self._remote_lock_cache.items()
+                if time.time() < expiry_time
+            )
+
         return {
             **self._stats,
             "uptime_seconds": uptime,
@@ -2300,6 +2380,10 @@ class OrderlyConsumer(BaseConsumer):
                 (messages_consumed - self._stats["messages_failed"])
                 / max(messages_consumed, 1)
             ),
+            # 远程锁相关统计
+            "remote_lock_cache_size": remote_lock_cache_size,
+            "valid_remote_locks": valid_remote_locks,
+            "remote_lock_expire_time": self._remote_lock_expire_time,
             # 路由刷新相关统计
             "route_refresh_success_rate": route_refresh_success_rate,
             "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
