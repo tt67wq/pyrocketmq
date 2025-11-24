@@ -36,7 +36,7 @@ from pyrocketmq.remote import ConnectionPool, RemoteConfig
 
 # 本地模块导入
 from .config import ConsumerConfig
-from .errors import ConsumerError
+from .errors import ConsumerError, InvalidConsumeResultError
 from .listener import ConsumeContext, MessageListener
 from .subscription_manager import SubscriptionManager
 
@@ -445,6 +445,83 @@ class BaseConsumer:
 
     # ==================== 消息处理核心方法 ====================
 
+    def _prepare_message_consumption(
+        self,
+        messages: list[MessageExt],
+        message_queue: MessageQueue,
+        consumption_type: str = "concurrent",
+    ) -> tuple[MessageListener | None, ConsumeContext | None]:
+        """
+        为消息消费做准备的通用方法。
+
+        这个方法封装了消息验证、监听器选择和上下文创建的通用逻辑，
+        被并发消费和顺序消费共同使用，避免代码重复。
+
+        Args:
+            messages (list[MessageExt]): 要处理的消息列表
+            message_queue (MessageQueue): 消息来自的队列信息
+            consumption_type (str): 消费类型，用于日志记录，可选值为 "concurrent" 或 "orderly"
+
+        Returns:
+            tuple[MessageListener | None, ConsumeContext]:
+                - MessageListener: 找到的监听器，如果没有找到则为None
+                - ConsumeContext: 创建的消费上下文
+
+        Examples:
+            >>> listener, context = self._prepare_message_consumption(messages, queue)
+            >>> if listener:
+            >>>     result = listener.consume_message(messages, context)
+            >>> else:
+            >>>     return False
+        """
+        # 消息验证
+        if not messages:
+            logger.warning(
+                f"Empty message list received for {consumption_type} consumption",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                },
+            )
+            return None, None
+
+        # 获取消息的topic
+        topic = messages[0].topic if messages else message_queue.topic
+
+        # 根据topic获取对应的监听器
+        listener: MessageListener | None = self._message_listeners.get(topic)
+        if not listener and self._is_retry_topic(topic):
+            origin_topic: str | None = messages[0].get_property(
+                MessageProperty.RETRY_TOPIC
+            )
+            listener = (
+                self._message_listeners.get(origin_topic) if origin_topic else None
+            )
+
+        # 如果没有找到监听器，记录错误日志
+        if not listener:
+            logger.error(
+                f"No message listener registered for topic: {topic} in {consumption_type} consumption",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": message_queue.queue_id,
+                    "available_topics": list(self._message_listeners.keys()),
+                },
+            )
+
+        # 创建消费上下文
+        reconsume_times: int = messages[0].reconsume_times if messages else 0
+        context: ConsumeContext = ConsumeContext(
+            consumer_group=self._config.consumer_group,
+            message_queue=message_queue,
+            reconsume_times=reconsume_times,
+        )
+
+        return listener, context
+
     def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
@@ -459,51 +536,23 @@ class BaseConsumer:
             message_queue (MessageQueue): 消息来自的队列信息，包含topic、broker名称和队列ID
 
         Returns:
-            bool: 消费处理是否成功
+            bool: 消息处理是否成功
                 - True: 消息处理成功（ConsumeResult.SUCCESS），可以更新偏移量
                 - False: 消息处理失败或发生异常，消息将进入重试流程
 
         核心处理流程:
             1. **消息验证**: 检查消息列表是否为空（空列表视为处理成功）
-            2. **监听器选择**:
-               - 首先根据消息topic获取对应的监听器
-               - 如果是重试主题且没有找到监听器，尝试使用原始topic的监听器
-               - 最后尝试使用默认监听器
-            3. **上下文创建**: 创建ConsumeContext，包含消费者组、队列信息、重试次数等
-            4. **消息处理**: 调用监听器的consume_message方法处理消息
-            5. **结果验证**: 验证消费结果的有效性（并发消费者只支持SUCCESS/RECONSUME_LATER）
-            6. **异常处理**: 捕获处理异常并调用监听器的异常回调
-            7. **日志记录**: 记录详细的处理过程和结果日志
-
-        监听器选择策略（优先级从高到低）:
-            1. **主题特定监听器**: 通过subscribe_with_listener注册的topic监听器
-            2. **重试主题原始监听器**: 对于重试主题，使用RETRY_TOPIC属性找到原始topic的监听器
-            3. **默认监听器**: 通过register_message_listener注册的默认监听器
-            4. **无监听器**: 记录错误并返回处理失败
+            2. **监听器选择**: 通过通用方法获取对应的监听器和消费上下文
+            3. **消息处理**: 调用监听器的consume_message方法处理消息
+            4. **结果验证**: 验证消费结果的有效性（并发消费者只支持SUCCESS/RECONSUME_LATER）
+            5. **异常处理**: 捕获处理异常并调用监听器的异常回调
+            6. **日志记录**: 记录详细的处理过程和结果日志
 
         消费结果处理:
             - ConsumeResult.SUCCESS: 返回True，消息处理成功，可以更新消费偏移量
             - ConsumeResult.RECONSUME_LATER: 返回False，消息处理失败，将触发重试机制
             - 无效结果（COMMIT、ROLLBACK、SUSPEND_CURRENT_QUEUE_A_MOMENT）:
               记录错误日志，返回False，触发消息重试
-
-        重试主题支持:
-            - 自动识别重试主题（格式：%RETRY%{consumer_group}）
-            - 智能路由到原始topic的监听器进行业务处理
-            - 使用RETRY_TOPIC属性确定消息的原始业务主题
-            - 支持重试次数统计和监控
-
-        异常处理机制:
-            - 捕获消息处理过程中的所有异常
-            - 调用消息监听器的on_exception回调方法（如果实现）
-            - 回调异常不影响主处理流程的返回结果
-            - 异常情况下统一返回False，触发消息重试
-
-        监控和日志:
-            - 记录处理开始的消息信息（topic、数量、重试次数等）
-            - 记录处理结果和耗时统计
-            - 记录监听器选择过程和失败原因
-            - 提供详细的错误上下文信息
 
         Examples:
             >>> # 该方法由消费者内部调用，通常不需要外部直接使用
@@ -523,63 +572,18 @@ class BaseConsumer:
             - 适用于高并发、无序消息处理场景
             - 每次调用可能处理多条消息，监听器需要支持批量处理
             - 重试机制是自动的，无需手动管理重试队列
-
-        RocketMQ集成特性:
-            - 完全兼容RocketMQ的消息重试机制
-            - 支持消费失败消息的自动延迟重试
-            - 集成死信队列处理（超过最大重试次数）
-            - 支持消息轨迹和监控统计
         """
-        if not messages:
-            logger.warning(
-                "Empty message list received",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                },
-            )
-            return True  # 空消息列表视为处理成功
+        # 使用通用方法进行消息验证和监听器选择
+        listener, context = self._prepare_message_consumption(
+            messages, message_queue, "concurrent"
+        )
 
-        # 获取消息的topic
-        topic = messages[0].topic if messages else message_queue.topic
-
-        # 根据topic获取对应的监听器
-
-        listener: MessageListener | None = self._message_listeners.get(topic)
-        if not listener and self._is_retry_topic(topic):
-            origin_topic: str | None = messages[0].get_property(
-                MessageProperty.RETRY_TOPIC
-            )
-            listener = (
-                self._message_listeners.get(origin_topic) if origin_topic else None
-            )
-
-        if not listener:
-            # 如果没有找到topic特定的监听器，使用默认监听器
-            logger.error(
-                f"No message listener registered for topic: {topic}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": topic,
-                    "message_count": len(messages),
-                    "queue_id": message_queue.queue_id,
-                    "available_topics": list(self._message_listeners.keys()),
-                },
-            )
+        # 如果没有找到监听器或消息列表为空，返回失败
+        if listener is None or context is None:
             return False
 
-        # 创建消费上下文
-        reconsume_times: int = messages[0].reconsume_times if messages else 0
-        # if reconsume_times > 0:
-        #     print("!!!!!!" * 10)
-        #     print(f"我的亲妈啊，重试次数为{reconsume_times}")
-        #     print("!!!!!!" * 10)
-        context: ConsumeContext = ConsumeContext(
-            consumer_group=self._config.consumer_group,
-            message_queue=message_queue,
-            reconsume_times=reconsume_times,
-        )
+        # 获取topic用于日志记录
+        topic = messages[0].topic if messages else message_queue.topic
 
         try:
             logger.debug(
@@ -589,7 +593,7 @@ class BaseConsumer:
                     "topic": topic,
                     "message_count": len(messages),
                     "queue_id": context.queue_id,
-                    "reconsume_times": reconsume_times,
+                    "reconsume_times": context.reconsume_times,
                 },
             )
 
@@ -608,7 +612,17 @@ class BaseConsumer:
                         "result": result.value,
                     },
                 )
-                return False
+                # 抛出无效消费结果异常
+                raise InvalidConsumeResultError(
+                    consumer_type="concurrent",
+                    invalid_result=result.value,
+                    valid_results=[
+                        ConsumeResult.SUCCESS.value,
+                        ConsumeResult.RECONSUME_LATER.value,
+                    ],
+                    topic=topic,
+                    queue_id=context.queue_id,
+                )
 
             logger.info(
                 "Message processing completed",
@@ -624,9 +638,180 @@ class BaseConsumer:
 
             return result == ConsumeResult.SUCCESS
 
+        except InvalidConsumeResultError:
+            raise
+
         except Exception as e:
             logger.error(
                 f"Failed to process messages: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": context.queue_id,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
+            # 调用异常回调（如果监听器实现了）
+            if hasattr(listener, "on_exception"):
+                try:
+                    listener.on_exception(messages, context, e)
+                except Exception as callback_error:
+                    logger.error(
+                        f"Exception callback failed: {callback_error}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": topic,
+                            "error": str(callback_error),
+                        },
+                        exc_info=True,
+                    )
+
+            return False
+
+    def _orderly_consume_message(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> bool:
+        """
+        顺序消费消息的核心处理方法。
+
+        这是顺序消费者消息处理的核心方法，根据消息的topic选择对应的监听器来处理消息。
+        与并发消费不同，顺序消费需要保证同一个队列中的消息按照顺序处理，并支持事务性的消费操作。
+
+        Args:
+            messages (list[MessageExt]): 要处理的消息列表，顺序消费通常每次只处理一条消息
+            message_queue (MessageQueue): 消息来自的队列信息，包含topic、broker名称和队列ID
+
+        Returns:
+            bool: 消费处理是否成功
+                - True: 消息处理成功（ConsumeResult.SUCCESS 或 ConsumeResult.COMMIT），可以更新偏移量
+                - False: 消息处理失败或其他结果，不更新偏移量
+
+        核心处理流程:
+            1. **消息验证**: 检查消息列表是否为空（空列表视为处理成功）
+            2. **监听器选择**: 通过通用方法获取对应的监听器和消费上下文
+            3. **消息处理**: 调用监听器的consume_message方法处理消息
+            4. **结果验证**: 验证消费结果的有效性（顺序消费者支持所有消费结果类型）
+            5. **异常处理**: 捕获处理异常并调用监听器的异常回调
+            6. **日志记录**: 记录详细的处理过程和结果日志
+
+        消费结果处理:
+            - ConsumeResult.SUCCESS: 返回True，消息处理成功，可以更新消费偏移量
+            - ConsumeResult.COMMIT: 返回True，事务提交，消息处理成功，可以更新消费偏移量
+            - ConsumeResult.RECONSUME_LATER: 返回False，消息处理失败，将触发重试机制
+            - ConsumeResult.ROLLBACK: 返回False，事务回滚，消息将重新消费
+            - ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT: 返回False，挂起当前队列片刻后重试
+
+        Examples:
+            >>> # 该方法由消费者内部调用，通常不需要外部直接使用
+            >>> success = self._orderly_consume_message(messages, queue)
+            >>> if success:
+            >>>     # 消息处理成功，可以更新偏移量
+            >>>     offset_store.update_offset(queue, next_offset)
+            >>> else:
+            >>>     # 消息处理失败，不更新偏移量，消息将重新消费
+            >>>     pass
+
+        Important Notes:
+            - 这是OrderlyConsumer的核心消息处理逻辑
+            - 支持多监听器模式，实现不同topic的独立业务逻辑
+            - 与ConcurrentConsumer不同，支持事务性的COMMIT/ROLLBACK操作
+            - 适用于需要严格保证消息顺序的场景，如订单处理、金融交易等
+            - 顺序消费通常每次只处理一条消息以保证顺序性
+            - 消息处理失败时会暂停当前队列的处理，直到成功恢复
+        """
+        # 使用通用方法进行消息验证和监听器选择
+        listener, context = self._prepare_message_consumption(
+            messages, message_queue, "orderly"
+        )
+
+        # 如果没有找到监听器或消息列表为空，返回失败
+        if listener is None or context is None:
+            return False
+
+        # 获取topic用于日志记录
+        topic = messages[0].topic if messages else message_queue.topic
+
+        try:
+            logger.debug(
+                "Processing messages orderly",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": context.queue_id,
+                    "reconsume_times": context.reconsume_times,
+                },
+            )
+
+            result: ConsumeResult = listener.consume_message(messages, context)
+
+            if result == ConsumeResult.RECONSUME_LATER:
+                logger.error(
+                    "Invalid result for orderly consumer",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                    },
+                )
+                # 抛出无效消费结果异常
+                raise InvalidConsumeResultError(
+                    consumer_type="orderly",
+                    invalid_result=result.value,
+                    valid_results=[
+                        ConsumeResult.SUCCESS.value,
+                        ConsumeResult.COMMIT.value,
+                        ConsumeResult.ROLLBACK.value,
+                        ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT.value,
+                    ],
+                    topic=topic,
+                    queue_id=context.queue_id,
+                )
+
+            # 顺序消费支持所有消费结果类型
+            success = result in [
+                ConsumeResult.SUCCESS,
+                ConsumeResult.COMMIT,
+            ]
+            if result in [
+                ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT,
+                ConsumeResult.ROLLBACK,
+            ]:
+                logger.warning(
+                    "Orderly consumption needs retry or suspension",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                        "message_count": len(messages),
+                    },
+                )
+            else:
+                logger.info(
+                    "Orderly message processing completed",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "message_count": len(messages),
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                        "duration": context.get_consume_duration(),
+                    },
+                )
+
+            return success
+
+        except InvalidConsumeResultError:
+            raise
+
+        except Exception as e:
+            logger.error(
+                f"Failed to process messages orderly: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
                     "topic": topic,

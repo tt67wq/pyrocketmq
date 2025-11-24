@@ -371,6 +371,42 @@ class ValidationError(ConsumerError):
         )
 
 
+class InvalidConsumeResultError(ConsumerError):
+    """
+    无效消费结果异常
+
+    当消息监听器返回了不被当前消费者类型支持的消费结果时抛出。
+    例如：并发消费者返回了COMMIT或ROLLBACK等仅顺序消费支持的结果。
+    """
+
+    def __init__(
+        self,
+        consumer_type: str,
+        invalid_result: str,
+        valid_results: list[str],
+        topic: str,
+        queue_id: int,
+        cause: Exception | None = None,
+    ):
+        context = {
+            "consumer_type": consumer_type,
+            "invalid_result": invalid_result,
+            "valid_results": valid_results,
+            "topic": topic,
+            "queue_id": queue_id,
+        }
+        message = (
+            f"Invalid consume result '{invalid_result}' returned for "
+            f"{consumer_type}. Valid results are: {', '.join(valid_results)}"
+        )
+        super().__init__(
+            message=message,
+            error_code="INVALID_CONSUME_RESULT",
+            context=context,
+            cause=cause,
+        )
+
+
 # 便利函数
 
 
