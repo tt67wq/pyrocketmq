@@ -98,8 +98,6 @@ class Remote:
                     event.set()
                 self._waiters.clear()
 
-            self._logger.info("连接已关闭")
-
         except Exception as e:
             self._logger.error(
                 "关闭连接失败",
@@ -432,7 +430,7 @@ class Remote:
                 data = self.transport.recv_pkg()
                 if not data:
                     # 连接关闭
-                    self._logger.info("连接已关闭，停止接收")
+                    self._logger.debug("连接已关闭，停止接收")
                     break
 
                 # 反序列化响应

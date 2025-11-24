@@ -11,7 +11,9 @@ from pyrocketmq.producer.errors import ProducerError
 
 async def main():
     """主函数"""
-    pyrocketmq.logging.setup_logging(LoggingConfig(level="INFO"))
+    pyrocketmq.logging.setup_logging(
+        LoggingConfig(level="INFO", file_path="producer.log")
+    )
     producer = create_async_producer(
         "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
     )

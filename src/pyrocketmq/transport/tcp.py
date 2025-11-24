@@ -58,7 +58,7 @@ class ConnectionStateMachine(StateMachine):
     # 状态转换回调
     def on_connect(self) -> None:
         """进入连接中状态"""
-        self._logger.info(
+        self._logger.debug(
             "开始连接到服务器",
             extra={
                 "address": self.config.address,
@@ -166,7 +166,7 @@ class ConnectionStateMachine(StateMachine):
 
         # 重连逻辑：只有在配置允许重连时才自动重连
         if self.config.max_retries != 0 and self.config.retry_interval > 0:
-            self._logger.info(
+            self._logger.debug(
                 "准备重连",
                 extra={
                     "address": self.config.address,
@@ -188,7 +188,7 @@ class ConnectionStateMachine(StateMachine):
 
     def on_close(self) -> None:
         """进入关闭状态"""
-        self._logger.info(
+        self._logger.debug(
             "连接已关闭",
             extra={
                 "address": self.config.address,
@@ -204,7 +204,7 @@ class ConnectionStateMachine(StateMachine):
         if self._socket:
             try:
                 self._socket.close()
-                self._logger.info("Socket已关闭")
+                self._logger.debug("Socket已关闭")
             except Exception as e:
                 self._logger.error(
                     "关闭Socket时发生错误",
@@ -280,7 +280,7 @@ class ConnectionStateMachine(StateMachine):
 
             if not data:
                 # 连接被对方关闭
-                self._logger.info("连接被对方关闭")
+                self._logger.debug("连接被对方关闭")
                 self.disconnect(self.connected)
                 return b""
 
@@ -493,7 +493,7 @@ class AsyncConnectionStateMachine(StateMachine):
     # 状态转换回调
     async def on_connect(self) -> None:
         """进入连接中状态"""
-        self._logger.info(
+        self._logger.debug(
             "开始异步连接到服务器",
             extra={
                 "address": self.config.address,
@@ -544,7 +544,7 @@ class AsyncConnectionStateMachine(StateMachine):
 
     async def on_connect_success(self) -> None:
         """进入已连接状态"""
-        self._logger.info(
+        self._logger.debug(
             "异步连接已建立",
             extra={
                 "address": self.config.address,
@@ -613,7 +613,7 @@ class AsyncConnectionStateMachine(StateMachine):
 
     async def on_disconnect(self) -> None:
         """进入断开连接状态"""
-        self._logger.info(
+        self._logger.debug(
             "异步连接已断开",
             extra={
                 "address": self.config.address,
@@ -648,7 +648,7 @@ class AsyncConnectionStateMachine(StateMachine):
 
     async def on_close(self) -> None:
         """进入关闭状态"""
-        self._logger.info("异步连接已关闭")
+        self._logger.debug("异步连接已关闭")
         # 清理socket资源
         await self._close_connection()
 

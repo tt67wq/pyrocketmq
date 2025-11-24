@@ -426,7 +426,7 @@ class AsyncRemote:
                 data = await self.transport.recv_pkg()
                 if not data:
                     # 连接关闭
-                    self._logger.info("连接已关闭，停止接收")
+                    self._logger.debug("连接已关闭，停止接收")
                     break
 
                 # 反序列化响应

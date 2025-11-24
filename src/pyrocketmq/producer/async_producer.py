@@ -271,7 +271,11 @@ class AsyncProducer:
 
             # 2. 更新路由信息
             if message.topic not in self._topic_mapping.get_all_topics():
-                _ = await self.update_route_info(message.topic)
+                updated: bool = await self.update_route_info(message.topic)
+                if not updated:
+                    raise RouteNotFoundError(
+                        f"Updated failed for topic: {message.topic}"
+                    )
 
             # 3. 获取队列和Broker
             routing_result = self._message_router.route_message(message.topic, message)
@@ -725,9 +729,7 @@ class AsyncProducer:
                 ):
                     logger.info(
                         "Async refreshing routes",
-                        extra={
-                            "loop_count": loop_count,
-                        },
+                        extra={"loop_count": loop_count},
                     )
                     await self._refresh_all_routes()
                     _ = self._topic_mapping.clear_expired_routes()
@@ -784,10 +786,7 @@ class AsyncProducer:
             except Exception as e:
                 logger.debug(
                     "Failed to refresh route",
-                    extra={
-                        "topic": topic,
-                        "error": str(e),
-                    },
+                    extra={"topic": topic, "error": str(e)},
                 )
 
     async def _send_message_to_broker_async(
@@ -1049,21 +1048,14 @@ class AsyncProducer:
         """
         logger.info(
             "Updating async route info for topic",
-            extra={
-                "topic": topic,
-            },
+            extra={"topic": topic},
         )
 
         topic_route_data: (
             TopicRouteData | None
         ) = await self._nameserver_manager.get_topic_route(topic)
         if not topic_route_data:
-            logger.error(
-                "Failed to get topic route info",
-                extra={
-                    "topic": topic,
-                },
-            )
+            logger.error("Failed to get topic route info", extra={"topic": topic})
             return False
 
         # 维护broker连接
