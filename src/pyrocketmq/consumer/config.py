@@ -63,6 +63,9 @@ class ConsumerConfig:
     enable_auto_recovery: bool = True  # 启用自动恢复
     max_retry_times: int = 3  # 最大重试次数
 
+    # === 队列锁配置 ===
+    lock_expire_time: float = 30000.0  # 队列锁过期时间(毫秒)，用于顺序消费的锁管理
+
     # === 高级配置 ===
     enable_auto_commit: bool = True  # 是否自动提交偏移量
     enable_message_trace: bool = False  # 是否启用消息追踪
@@ -112,6 +115,10 @@ class ConsumerConfig:
         # 验证路径配置
         if not self.offset_store_path:
             raise ValueError("offset_store_path 不能为空")
+
+        # 验证锁配置
+        if self.lock_expire_time <= 0:
+            raise ValueError("lock_expire_time 必须大于0")
 
         # 生成客户端ID
         import time
@@ -198,6 +205,10 @@ class ConsumerConfig:
             self.suspend_current_queue_time_millis = int(
                 os.getenv("ROCKETMQ_SUSPEND_CURRENT_QUEUE_TIME_MILLIS", 1000)
             )
+        if os.getenv("ROCKETMQ_LOCK_EXPIRE_TIME"):
+            self.lock_expire_time = float(
+                os.getenv("ROCKETMQ_LOCK_EXPIRE_TIME", 30000.0)
+            )
 
     @property
     def client_id(self) -> str:
@@ -245,6 +256,8 @@ class ConsumerConfig:
             "max_cache_size_per_queue": self.max_cache_size_per_queue,
             "enable_auto_recovery": self.enable_auto_recovery,
             "max_retry_times": self.max_retry_times,
+            # 队列锁配置
+            "lock_expire_time": self.lock_expire_time,
             # 高级配置
             "enable_auto_commit": self.enable_auto_commit,
             "enable_message_trace": self.enable_message_trace,
