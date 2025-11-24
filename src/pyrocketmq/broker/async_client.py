@@ -45,7 +45,7 @@ class AsyncBrokerClient:
     timeout: float
     _client_id: str
 
-    def __init__(self, remote: AsyncRemote, timeout: float = 30.0):
+    def __init__(self, remote: AsyncRemote, timeout: float = 5.0):
         """初始化异步客户端
 
         Args:

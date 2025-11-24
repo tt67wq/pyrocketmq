@@ -12,7 +12,7 @@ class RemoteConfig:
     """远程通信配置类"""
 
     # RPC相关配置
-    rpc_timeout: float = 30.0  # RPC调用超时时间（秒）
+    rpc_timeout: float = 5.0  # RPC调用超时时间（秒）
     opaque_start: int = 0  # opaque起始值，使用随机数确保唯一性
     max_waiters: int = 10000  # 最大并发请求数
 

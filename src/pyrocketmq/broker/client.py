@@ -44,7 +44,7 @@ class BrokerClient:
     timeout: float
     _client_id: str
 
-    def __init__(self, remote: Remote, timeout: float = 30.0):
+    def __init__(self, remote: Remote, timeout: float = 5.0):
         """初始化同步客户端
 
         Args:
