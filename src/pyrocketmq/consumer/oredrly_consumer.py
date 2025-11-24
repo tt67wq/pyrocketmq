@@ -87,6 +87,9 @@ class OrderlyConsumer(BaseConsumer):
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
+        self._assigned_queues_lock = (
+            threading.RLock()
+        )  # 🔐保护_assigned_queues字典的并发访问
         self._last_rebalance_time: float = 0.0
 
         # 重平衡任务管理
@@ -175,11 +178,14 @@ class OrderlyConsumer(BaseConsumer):
 
                 self._stats["start_time"] = time.time()
 
+                with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+                    assigned_queues_count = len(self._assigned_queues)
+
                 logger.info(
                     "OrderlyConsumer started successfully",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "assigned_queues": len(self._assigned_queues),
+                        "assigned_queues": assigned_queues_count,
                         "consume_threads": self._config.consume_thread_max,
                         "pull_threads": min(self._config.consume_thread_max, 10),
                     },
@@ -609,45 +615,54 @@ class OrderlyConsumer(BaseConsumer):
             - 偏移量信息会在队列分配变更时保留
             - 每个队列的消费任务会在队列分配变更时进行管理
         """
-        with self._lock:
+
+        # 使用_assigned_queues_lock保护整个队列更新过程
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues的完整操作
             old_queues: set[MessageQueue] = set(self._assigned_queues.keys())
             new_queue_set: set[MessageQueue] = set(new_queues)
 
-            # 停止不再分配的队列的拉取任务和消费任务
             removed_queues: set[MessageQueue] = old_queues - new_queue_set
+            added_queues: set[MessageQueue] = new_queue_set - old_queues
+
+            # 移除旧队列的偏移量信息
             for q in removed_queues:
-                if q in self._pull_tasks:
-                    future: Future[None] | None = self._pull_tasks.pop(q)
-                    if future and not future.done():
-                        future.cancel()
                 _ = self._assigned_queues.pop(q, None)
 
-                # 停止并移除该队列的消费任务
-                if q in self._consume_tasks:
-                    consume_futures = self._consume_tasks.pop(q)
-                    for future in consume_futures:
-                        if future and not future.done():
-                            future.cancel()
-
-                # 清理队列锁
-                if q in self._queue_locks:
-                    del self._queue_locks[q]
-
-            # 启动新分配队列的拉取任务
-            added_queues: set[MessageQueue] = new_queue_set - old_queues
+            # 添加新队列的偏移量初始化
             for q in added_queues:
                 self._assigned_queues[q] = 0  # 初始化偏移量为0，后续会更新
 
-                # 为新队列创建锁
-                self._queue_locks[q] = threading.RLock()
+        # 在锁外处理其他资源的清理和创建，避免死锁
+        # 停止不再分配的队列的拉取任务和消费任务
+        for q in removed_queues:
+            if q in self._pull_tasks:
+                future: Future[None] | None = self._pull_tasks.pop(q)
+                if future and not future.done():
+                    future.cancel()
 
-                # 为新队列初始化消费任务列表
-                self._consume_tasks[q] = []
+            # 停止并移除该队列的消费任务
+            if q in self._consume_tasks:
+                consume_futures = self._consume_tasks.pop(q)
+                for future in consume_futures:
+                    if future and not future.done():
+                        future.cancel()
 
-            # 如果消费者正在运行，启动新队列的拉取任务和消费任务
-            if self._is_running and added_queues:
-                self._start_pull_tasks_for_queues(added_queues)
-                self._start_consume_tasks_for_queues(added_queues)
+            # 清理队列锁
+            if q in self._queue_locks:
+                del self._queue_locks[q]
+
+        # 为新分配的队列创建资源
+        for q in added_queues:
+            # 为新队列创建锁
+            self._queue_locks[q] = threading.RLock()
+
+            # 为新队列初始化消费任务列表
+            self._consume_tasks[q] = []
+
+        # 如果消费者正在运行，启动新队列的拉取任务和消费任务
+        if self._is_running and added_queues:
+            self._start_pull_tasks_for_queues(added_queues)
+            self._start_consume_tasks_for_queues(added_queues)
 
     def _get_queue_lock(self, message_queue: MessageQueue) -> threading.RLock:
         """
@@ -1086,7 +1101,8 @@ class OrderlyConsumer(BaseConsumer):
             next_begin_offset: 下次拉取的起始偏移量
         """
         # 更新偏移量
-        self._assigned_queues[message_queue] = next_begin_offset
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            self._assigned_queues[message_queue] = next_begin_offset
 
         # 将消息添加到缓存中（用于解决并发偏移量问题）
         self._add_messages_to_cache(message_queue, messages)
@@ -1353,46 +1369,49 @@ class OrderlyConsumer(BaseConsumer):
             - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
             - 获取失败时使用默认偏移量0，确保消费流程不中断
         """
-        current_offset: int = self._assigned_queues.get(message_queue, 0)
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            current_offset: int = self._assigned_queues.get(message_queue, 0)
 
-        # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
-        if current_offset == 0:
-            try:
-                current_offset = self._consume_from_where_manager.get_consume_offset(
-                    message_queue,
-                    self._config.consume_from_where,
-                    self._config.consume_timestamp
-                    if hasattr(self._config, "consume_timestamp")
-                    else 0,
-                )
-                # 更新本地缓存的偏移量
-                self._assigned_queues[message_queue] = current_offset
+            # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
+            if current_offset == 0:
+                try:
+                    current_offset = (
+                        self._consume_from_where_manager.get_consume_offset(
+                            message_queue,
+                            self._config.consume_from_where,
+                            self._config.consume_timestamp
+                            if hasattr(self._config, "consume_timestamp")
+                            else 0,
+                        )
+                    )
+                    # 更新本地缓存的偏移量
+                    self._assigned_queues[message_queue] = current_offset
 
-                logger.info(
-                    f"初始化消费偏移量: {current_offset}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": message_queue.topic,
-                        "queue_id": message_queue.queue_id,
-                        "strategy": self._config.consume_from_where,
-                        "offset": current_offset,
-                    },
-                )
+                    logger.info(
+                        f"初始化消费偏移量: {current_offset}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "strategy": self._config.consume_from_where,
+                            "offset": current_offset,
+                        },
+                    )
 
-            except Exception as e:
-                logger.error(
-                    f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": message_queue.topic,
-                        "queue_id": message_queue.queue_id,
-                        "strategy": self._config.consume_from_where,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
-                # 使用默认偏移量0
-                current_offset = 0
+                except Exception as e:
+                    logger.error(
+                        f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "strategy": self._config.consume_from_where,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+                    # 使用默认偏移量0
+                    current_offset = 0
 
         return current_offset
 
@@ -2219,10 +2238,13 @@ class OrderlyConsumer(BaseConsumer):
 
         # 清理状态
         self._pull_tasks.clear()
-        self._assigned_queues.clear()
 
         # 远程解锁所有已分配的队列
-        for message_queue in self._assigned_queues.keys():
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            assigned_queues = list(self._assigned_queues.keys())  # 复制一份避免并发修改
+            self._assigned_queues.clear()
+
+        for message_queue in assigned_queues:
             try:
                 self._unlock_remote_queue(message_queue)
             except Exception as e:
@@ -2261,10 +2283,13 @@ class OrderlyConsumer(BaseConsumer):
                 self._stats.get("route_refresh_success_count", 0) / route_refresh_count
             )
 
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            assigned_queues_count = len(self._assigned_queues)
+
         return {
             **self._stats,
             "uptime_seconds": uptime,
-            "assigned_queues": len(self._assigned_queues),
+            "assigned_queues": assigned_queues_count,
             "avg_consume_duration": (
                 self._stats["consume_duration_total"] / max(messages_consumed, 1)
             ),
