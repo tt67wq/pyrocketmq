@@ -1710,7 +1710,29 @@ class OrderlyConsumer(BaseConsumer):
         )
 
         while self._is_running and not stop_event.is_set():
+            queue_lock: threading.RLock = self._get_queue_lock(message_queue)
             try:
+                # 开始消费这个message_queue之前，先持有本地锁，如果持有失败，则等待10ms
+                lock_acquired = False
+
+                # 尝试非阻塞获取锁，如果失败则等待10ms后重试
+                while (
+                    not lock_acquired and self._is_running and not stop_event.is_set()
+                ):
+                    lock_acquired = queue_lock.acquire(blocking=False)
+                    if not lock_acquired:
+                        # 等待10ms
+                        if stop_event.wait(timeout=0.01):
+                            break
+
+                # 如果获取锁失败或消费者停止，则继续下一轮循环
+                if not lock_acquired or not self._is_running:
+                    if lock_acquired:
+                        queue_lock.release()
+                    continue
+
+                # TODO: 本地锁持有成功，尝试持有远程锁
+
                 # 从MessageQueue专属的处理队列获取消息批次
                 messages: list[MessageExt] | None = self._get_messages_from_queue(
                     consume_queue, stop_event
@@ -1749,6 +1771,11 @@ class OrderlyConsumer(BaseConsumer):
                     },
                     exc_info=True,
                 )
+
+            finally:
+                # 释放本地锁
+                if queue_lock.locked():
+                    queue_lock.release()
 
     def _get_messages_from_queue(
         self,
