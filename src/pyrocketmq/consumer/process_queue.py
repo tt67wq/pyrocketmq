@@ -35,6 +35,13 @@ class QueueEntry:
         """检查是否为墓碑值"""
         return self.is_deleted or self.message is None
 
+    @property
+    def message_offset(self) -> int:
+        """获取消息的偏移量"""
+        if not self.message:
+            return -1
+        return self.message.queue_offset or -1
+
 
 class ProcessQueue:
     """
@@ -528,11 +535,7 @@ class ProcessQueue:
             consuming_max_offset: int | None = None
             if self._consuming_orderly_msgs:
                 consuming_max_offset = max(
-                    [
-                        entry.message.queue_offset or -1
-                        for entry in self._consuming_orderly_msgs
-                        if not entry.is_tombstone and entry.message
-                    ]
+                    [entry.message_offset for entry in self._consuming_orderly_msgs]
                 )
 
             return {
@@ -632,3 +635,53 @@ class ProcessQueue:
             self._consuming_orderly_msgs.clear()
 
         return max_offset
+
+    def rollback(self) -> int:
+        """
+        回滚正在处理的消息，将它们重新放回队列头部
+
+        这个方法用于顺序消费处理失败时，将已取出但未成功处理的消息
+        重新放回待处理队列，以便后续重新处理。
+
+        Returns:
+            int: 回滚的消息数量，如果没有消息则返回0
+        """
+        if not self._consuming_orderly_msgs:
+            return 0
+
+        rollback_count = 0
+
+        # 使用写锁保证线程安全
+        with self._lock:
+            # 将_consuming_orderly_msgs中的消息重新放回_entries头部
+            # 需要保持按queue_offset的顺序，所以先按偏移量排序
+            sorted_rollback_msgs: list[QueueEntry] = sorted(
+                self._consuming_orderly_msgs,
+                key=lambda x: x.message_offset,
+            )
+
+            # 重新构建_entries列表：回滚消息 + 原有entries
+            self._entries = sorted_rollback_msgs + self._entries
+
+            # 恢复计数和大小统计
+            for entry in sorted_rollback_msgs:
+                if not entry.is_tombstone and entry.message:
+                    self._count += 1
+                    self._total_size += len(entry.message.body) if entry.message else 0
+                    rollback_count += 1
+
+            # 重新构建偏移量到索引的映射
+            self._offset_to_index.clear()
+            for index, entry in enumerate(self._entries):
+                if not entry.is_tombstone and entry.message:
+                    offset = entry.message.queue_offset
+                    if offset is not None:
+                        self._offset_to_index[offset] = index
+
+            # 重新计算偏移量范围
+            self._update_offset_ranges()
+
+            # 清空待提交区
+            self._consuming_orderly_msgs.clear()
+
+        return rollback_count
