@@ -79,6 +79,9 @@ class ProcessQueue:
         self._min_offset: float = float("inf")
         self._max_offset: int = -1
 
+        # 顺序消费处理中的消息（待提交区）
+        self._consuming_orderly_msgs: list[QueueEntry] = []
+
     def add_message(self, message: MessageExt) -> bool:
         """
         添加消息到队列
@@ -518,6 +521,18 @@ class ProcessQueue:
             )
             cleanup_needed: bool = tombstone_ratio > self._cleanup_threshold
 
+            # 待提交区统计
+            consuming_count: int = len(self._consuming_orderly_msgs)
+            consuming_max_offset: int | None = None
+            if self._consuming_orderly_msgs:
+                consuming_max_offset = max(
+                    [
+                        entry.message.queue_offset or -1
+                        for entry in self._consuming_orderly_msgs
+                        if not entry.is_tombstone and entry.message
+                    ]
+                )
+
             return {
                 # 有效消息统计
                 "count": self._count,
@@ -531,9 +546,87 @@ class ProcessQueue:
                 "tombstone_ratio": round(tombstone_ratio, 3),
                 "cleanup_needed": cleanup_needed,
                 "cleanup_threshold": self._cleanup_threshold,
+                # 待提交区统计
+                "consuming_count": consuming_count,
+                "consuming_max_offset": consuming_max_offset,
                 # 配置信息
                 "max_cache_count": self._max_cache_count,
                 "max_cache_size_mb": max_cache_size_mb,
                 "is_near_limit_count": is_near_limit_count,
                 "is_near_limit_size": is_near_limit_size,
             }
+
+    def take_messages(self, batch_size: int) -> list[MessageExt]:
+        """
+        从队列中取出一批消息用于顺序消费处理
+
+        Args:
+            batch_size: 要取出的消息数量
+
+        Returns:
+            List[MessageExt]: 取出的消息列表
+        """
+        if batch_size <= 0:
+            return []
+
+        taken_messages: list[MessageExt] = []
+        taken_count = 0
+
+        # 使用写锁保证线程安全
+        with self._lock:
+            # 从_entries头部开始取出有效消息
+            remaining_entries: list[QueueEntry] = []
+
+            for entry in self._entries:
+                if taken_count >= batch_size:
+                    remaining_entries.append(entry)
+                    continue
+
+                if not entry.is_tombstone and entry.message:
+                    taken_messages.append(entry.message)
+                    self._consuming_orderly_msgs.append(entry)
+                    taken_count += 1
+                else:
+                    # 保留墓碑标记
+                    remaining_entries.append(entry)
+
+            # 更新_entries列表
+            if taken_count > 0:
+                # 更新计数和大小统计
+                for entry in self._consuming_orderly_msgs[-taken_count:]:
+                    if not entry.is_tombstone:
+                        self._count -= 1
+                        self._total_size -= (
+                            len(entry.message.body) if entry.message else 0
+                        )
+
+                self._entries = remaining_entries
+                # 重新计算偏移量范围
+                self._update_offset_ranges()
+
+        return taken_messages
+
+    def commit(self) -> int:
+        """
+        提交已处理的消息，返回最大偏移量
+
+        Returns:
+            int: 已提交消息的最大偏移量，如果没有消息则返回-1
+        """
+        if not self._consuming_orderly_msgs:
+            return -1
+
+        max_offset = -1
+
+        # 使用写锁保证线程安全
+        with self._lock:
+            # 计算最大偏移量
+            for entry in self._consuming_orderly_msgs:
+                if not entry.is_tombstone and entry.message:
+                    offset: int = entry.message.queue_offset or -1
+                    max_offset = max(offset, max_offset)
+
+            # 清空待提交区
+            self._consuming_orderly_msgs.clear()
+
+        return max_offset
