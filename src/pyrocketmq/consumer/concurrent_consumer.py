@@ -135,6 +135,9 @@ class ConcurrentConsumer(BaseConsumer):
             MessageQueue, threading.Event
         ] = {}  # 拉取任务停止事件
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
+        self._assigned_queues_lock: threading.RLock = (
+            threading.RLock()
+        )  # 保护assigned_queues的锁
         self._last_rebalance_time: float = 0.0
 
         # 重平衡任务管理
@@ -221,11 +224,14 @@ class ConcurrentConsumer(BaseConsumer):
 
                 self._stats["start_time"] = time.time()
 
+                with self._assigned_queues_lock:
+                    assigned_queue_count = len(self._assigned_queues)
+
                 logger.info(
                     "ConcurrentConsumer started successfully",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "assigned_queues": len(self._assigned_queues),
+                        "assigned_queues": assigned_queue_count,
                         "consume_threads": self._config.consume_thread_max,
                         "pull_threads": min(self._config.consume_thread_max, 10),
                     },
@@ -451,12 +457,15 @@ class ConcurrentConsumer(BaseConsumer):
         # 更新成功统计
         self._stats["rebalance_success_count"] += 1
 
+        with self._assigned_queues_lock:
+            assigned_queue_count = len(self._assigned_queues)
+
         logger.info(
             "Rebalance completed",
             extra={
                 "consumer_group": self._config.consumer_group,
                 "total_topics": total_topics,
-                "assigned_queues": total_queues,
+                "assigned_queues": assigned_queue_count,
                 "success_count": self._stats["rebalance_success_count"],
             },
         )
@@ -650,7 +659,7 @@ class ConcurrentConsumer(BaseConsumer):
             - 新队列会立即开始拉取消息
             - 偏移量信息会在队列分配变更时保留
         """
-        with self._lock:
+        with self._assigned_queues_lock:
             old_queues: set[MessageQueue] = set(self._assigned_queues.keys())
             new_queue_set: set[MessageQueue] = set(new_queues)
 
@@ -686,10 +695,15 @@ class ConcurrentConsumer(BaseConsumer):
         """
         启动所有队列的消息拉取任务
         """
-        if not self._pull_executor or not self._assigned_queues:
+        if not self._pull_executor:
             return
 
-        self._start_pull_tasks_for_queues(set(self._assigned_queues.keys()))
+        with self._assigned_queues_lock:
+            if not self._assigned_queues:
+                return
+            queue_keys = set(self._assigned_queues.keys())
+
+        self._start_pull_tasks_for_queues(queue_keys)
 
     def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """
@@ -915,7 +929,8 @@ class ConcurrentConsumer(BaseConsumer):
             next_begin_offset: 下次拉取的起始偏移量
         """
         # 更新偏移量
-        self._assigned_queues[message_queue] = next_begin_offset
+        with self._assigned_queues_lock:
+            self._assigned_queues[message_queue] = next_begin_offset
 
         # 将消息添加到缓存中（用于解决并发偏移量问题）
         self._add_messages_to_cache(message_queue, messages)
@@ -1164,7 +1179,8 @@ class ConcurrentConsumer(BaseConsumer):
             - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
             - 获取失败时使用默认偏移量0，确保消费流程不中断
         """
-        current_offset: int = self._assigned_queues.get(message_queue, 0)
+        with self._assigned_queues_lock:
+            current_offset: int = self._assigned_queues.get(message_queue, 0)
 
         # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
         if current_offset == 0:
@@ -1177,7 +1193,8 @@ class ConcurrentConsumer(BaseConsumer):
                     else 0,
                 )
                 # 更新本地缓存的偏移量
-                self._assigned_queues[message_queue] = current_offset
+                with self._assigned_queues_lock:
+                    self._assigned_queues[message_queue] = current_offset
 
                 logger.info(
                     f"初始化消费偏移量: {current_offset}",
@@ -1875,7 +1892,8 @@ class ConcurrentConsumer(BaseConsumer):
 
         # 清理状态
         self._pull_tasks.clear()
-        self._assigned_queues.clear()
+        with self._assigned_queues_lock:
+            self._assigned_queues.clear()
 
     # ==================== 统计和监控方法 ====================
 
@@ -1898,10 +1916,13 @@ class ConcurrentConsumer(BaseConsumer):
                 self._stats.get("route_refresh_success_count", 0) / route_refresh_count
             )
 
+        with self._assigned_queues_lock:
+            assigned_queue_count = len(self._assigned_queues)
+
         return {
             **self._stats,
             "uptime_seconds": uptime,
-            "assigned_queues": len(self._assigned_queues),
+            "assigned_queues": assigned_queue_count,
             "avg_consume_duration": (
                 self._stats["consume_duration_total"] / max(messages_consumed, 1)
             ),
