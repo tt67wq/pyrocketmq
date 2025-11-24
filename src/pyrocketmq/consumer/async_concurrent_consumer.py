@@ -121,6 +121,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
         # 异步锁
         self._cache_lock = asyncio.Lock()
+        self._assigned_queues_lock = (
+            asyncio.Lock()
+        )  # 🔐保护_assigned_queues字典的并发访问
         self._stats_lock = asyncio.Lock()
         self._rebalance_lock = asyncio.Lock()
 
@@ -209,11 +212,15 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
                 self._stats["start_time"] = time.time()
 
+                # 获取分配队列数量用于日志统计
+                async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+                    assigned_queues_count = len(self._assigned_queues)
+
                 logger.info(
                     "AsyncConcurrentConsumer started successfully",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "assigned_queues": len(self._assigned_queues),
+                        "assigned_queues": assigned_queues_count,
                         "consume_concurrency": self._config.consume_thread_max,
                         "pull_concurrency": min(self._config.consume_thread_max, 10),
                     },
@@ -675,20 +682,14 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         Args:
             new_assigned_queues: 新分配的队列集合
         """
-        async with self._cache_lock:
+        # 使用_assigned_queues_lock保护整个队列更新过程
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues的完整操作
             # 记录旧队列集合
             old_queues = set(self._assigned_queues.keys())
 
-            # 停止已移除队列的拉取任务
+            # 移除旧队列的偏移量信息
             removed_queues = old_queues - new_assigned_queues
             for queue in removed_queues:
-                task = self._pull_tasks.pop(queue, None)
-                if task and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
                 self._assigned_queues.pop(queue, None)
 
             # 初始化新分配队列的偏移量
@@ -696,9 +697,20 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             for queue in added_queues:
                 self._assigned_queues[queue] = 0  # 初始化偏移量为0，后续会更新
 
-            # 如果消费者正在运行，启动新队列的拉取任务
-            if self._is_running and added_queues:
-                await self._start_pull_tasks_for_queues(added_queues)
+        # 在锁外处理拉取任务的启停，避免死锁
+        # 停止已移除队列的拉取任务
+        for queue in removed_queues:
+            task = self._pull_tasks.pop(queue, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        # 如果消费者正在运行，启动新队列的拉取任务
+        if self._is_running and added_queues:
+            await self._start_pull_tasks_for_queues(added_queues)
 
     async def _trigger_rebalance(self) -> None:
         """触发重平衡"""
@@ -898,7 +910,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             next_begin_offset: 下次拉取的起始偏移量
         """
         # 更新偏移量
-        async with self._cache_lock:
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
             self._assigned_queues[message_queue] = next_begin_offset
 
         # 将消息添加到缓存中（用于解决并发偏移量问题）
@@ -1007,7 +1019,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             int: 消费偏移量
         """
         # 先从_assigned_queues中读取当前偏移量
-        async with self._lock:
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
             current_offset = self._assigned_queues.get(queue, 0)
 
         # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
@@ -1019,7 +1031,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     )
                 )
                 # 更新本地缓存的偏移量
-                async with self._lock:
+                async with self._assigned_queues_lock:  # 🔐保护_assigned_queues修改
                     self._assigned_queues[queue] = current_offset
 
                 logger.info(
@@ -1424,7 +1436,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     async def _update_offset_from_cache(self, queue: MessageQueue, offset: int) -> None:
         """从缓存更新偏移量"""
-        async with self._cache_lock:
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
             self._assigned_queues[queue] = offset
         await self._offset_store.update_offset(queue, offset)
 
@@ -1495,6 +1507,8 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             # 清理缓存
             async with self._cache_lock:
                 self._msg_cache.clear()
+
+            async with self._assigned_queues_lock:  # 🔐保护_assigned_queues清理
                 self._assigned_queues.clear()
 
             # 清理任务
@@ -1530,7 +1544,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             stats["running_time"] = 0
 
         # 添加缓存统计
-        async with self._cache_lock:
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
             stats["assigned_queue_count"] = len(self._assigned_queues)
             stats["cached_message_count"] = sum(
                 pq.get_count() for pq in self._msg_cache.values()
