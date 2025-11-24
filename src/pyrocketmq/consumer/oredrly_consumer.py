@@ -93,6 +93,11 @@ class OrderlyConsumer(BaseConsumer):
             threading.Event()
         )  # 用于重平衡循环的事件
 
+        # 线程停止事件 - 用于优雅关闭拉取和消费循环
+        self._pull_stop_events: dict[MessageQueue, threading.Event] = {}
+        self._consume_stop_events: dict[MessageQueue, threading.Event] = {}
+        self._stop_events_lock = threading.Lock()  # 保护停止事件字典
+
         # 重平衡重入保护
         self._rebalance_lock: threading.RLock = threading.RLock()  # 重平衡锁，防止重入
 
@@ -633,12 +638,10 @@ class OrderlyConsumer(BaseConsumer):
                 self._assigned_queues[q] = 0  # 初始化偏移量为0，后续会更新
 
                 # 为新队列创建锁
-                if hasattr(self, "_queue_locks"):
-                    self._queue_locks[q] = threading.RLock()
-                    # 初始化锁时间戳
-                    if not hasattr(self, "_queue_lock_timestamps"):
-                        self._queue_lock_timestamps = {}
-                    self._queue_lock_timestamps[q] = time.time() * 1000  # 转换为毫秒
+                self._queue_locks[q] = threading.RLock()
+                # 初始化锁时间戳
+                self._queue_lock_timestamps = {}
+                self._queue_lock_timestamps[q] = time.time() * 1000  # 转换为毫秒
 
                 # 为新队列初始化消费任务列表
                 self._consume_tasks[q] = []
@@ -856,15 +859,6 @@ class OrderlyConsumer(BaseConsumer):
 
     # ==================== 内部方法：消息拉取 ====================
 
-    def _start_pull_tasks(self) -> None:
-        """
-        启动所有队列的消息拉取任务
-        """
-        if not self._pull_executor or not self._assigned_queues:
-            return
-
-        self._start_pull_tasks_for_queues(set(self._assigned_queues.keys()))
-
     def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """
         为指定队列启动拉取任务
@@ -877,25 +871,51 @@ class OrderlyConsumer(BaseConsumer):
 
         for q in queues:
             if q not in self._pull_tasks:
+                # 为每个队列创建停止事件
+                with self._stop_events_lock:
+                    pull_stop_event = threading.Event()
+                    consume_stop_event = threading.Event()
+                    self._pull_stop_events[q] = pull_stop_event
+                    self._consume_stop_events[q] = consume_stop_event
+
+                # 启动拉取任务，传入停止事件
                 future: Future[None] = self._pull_executor.submit(
-                    self._pull_messages_loop, q
+                    self._pull_messages_loop, q, pull_stop_event
                 )
                 self._pull_tasks[q] = future
 
     def _stop_pull_tasks(self) -> None:
         """
-        停止所有消息拉取任务
+        停止所有消息拉取任务 - 使用停止事件优雅关闭
         """
         if not self._pull_tasks:
             return
 
+        # 首先设置所有停止事件
+        with self._stop_events_lock:
+            for message_queue in self._pull_tasks.keys():
+                # 设置拉取停止事件
+                if message_queue in self._pull_stop_events:
+                    self._pull_stop_events[message_queue].set()
+                # 设置消费停止事件
+                if message_queue in self._consume_stop_events:
+                    self._consume_stop_events[message_queue].set()
+
+        # 然后取消Future任务
         for _, future in self._pull_tasks.items():
             if future and not future.done():
                 future.cancel()
 
         self._pull_tasks.clear()
 
-    def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
+        # 等待一段时间让线程自然退出
+        time.sleep(0.1)
+
+    def _pull_messages_loop(
+        self,
+        message_queue: MessageQueue,
+        pull_stop_event: threading.Event,
+    ) -> None:
         """持续拉取指定队列的消息。
 
         为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
@@ -909,6 +929,7 @@ class OrderlyConsumer(BaseConsumer):
 
         Args:
             message_queue (MessageQueue): 要持续拉取消息的目标队列
+            pull_stop_event (threading.Event): 拉取线程停止事件
 
         Returns:
             None
@@ -922,13 +943,17 @@ class OrderlyConsumer(BaseConsumer):
             - 拉取失败会记录日志并等待重试，不会影响其他队列
             - 消费者停止时此循环会自动退出
             - 支持通过配置控制拉取频率
+            - 支持通过停止事件优雅关闭
         """
         suggest_broker_id = 0
-        while self._is_running:
+        while self._is_running and not pull_stop_event.is_set():
             pq: ProcessQueue = self._get_or_create_process_queue(message_queue)
             if pq.need_flow_control():
-                time.sleep(3.0)
+                # 使用可中断的等待，检查停止事件
+                if pull_stop_event.wait(timeout=3.0):
+                    break
                 continue
+
             try:
                 # 执行单次拉取操作
                 pull_result: tuple[list[MessageExt], int, int] | None = (
@@ -958,8 +983,8 @@ class OrderlyConsumer(BaseConsumer):
                 else:
                     self._stats["pull_requests"] += 1
 
-                # 控制拉取频率 - 传入是否有消息的标志
-                self._apply_pull_interval(len(messages) > 0)
+                # 控制拉取频率 - 传入是否有消息的标志，使用可中断等待
+                self._apply_pull_interval(len(messages) > 0, pull_stop_event)
 
             except MessagePullError as e:
                 logger.warning(
@@ -986,8 +1011,9 @@ class OrderlyConsumer(BaseConsumer):
 
                 self._stats["pull_failures"] += 1
 
-                # 拉取失败时等待一段时间再重试
-                time.sleep(3.0)
+                # 拉取失败时等待一段时间再重试，使用可中断等待
+                if pull_stop_event.wait(timeout=3.0):
+                    break
 
     def _perform_single_pull(
         self, message_queue: MessageQueue, suggest_broker_id: int
@@ -1119,7 +1145,9 @@ class OrderlyConsumer(BaseConsumer):
             batch_messages = messages[i : i + batch_size]
             consume_queue.put(batch_messages)
 
-    def _apply_pull_interval(self, has_messages: bool = True) -> None:
+    def _apply_pull_interval(
+        self, has_messages: bool = True, stop_event: threading.Event | None = None
+    ) -> None:
         """应用智能拉取间隔控制。
 
         根据上次拉取结果智能调整拉取间隔：
@@ -1128,6 +1156,7 @@ class OrderlyConsumer(BaseConsumer):
 
         Args:
             has_messages: 上次拉取是否获取到消息，默认为True
+            stop_event: 停止事件，用于支持优雅关闭，默认为None
         """
         # TODO: 如果msg_cache中消息体积太大，需要调整拉取间隔
         if self._config.pull_interval > 0:
@@ -1140,7 +1169,7 @@ class OrderlyConsumer(BaseConsumer):
                     },
                 )
             else:
-                # 拉取为空，休眠配置的间隔时间
+                # 拉取为空，休眠配置的间隔时间，使用可中断等待
                 sleep_time: float = self._config.pull_interval / 1000.0
                 logger.debug(
                     f"No messages pulled, sleeping for {sleep_time}s",
@@ -1149,7 +1178,10 @@ class OrderlyConsumer(BaseConsumer):
                         "sleep_time": sleep_time,
                     },
                 )
-                time.sleep(sleep_time)
+                if stop_event:
+                    stop_event.wait(timeout=sleep_time)
+                else:
+                    time.sleep(sleep_time)
 
     def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
         """获取或创建指定队列的ProcessQueue（消息缓存队列）"""
@@ -1563,14 +1595,26 @@ class OrderlyConsumer(BaseConsumer):
 
         with self._process_queue_lock:
             for message_queue in queues:
+                # 获取该队列的停止事件
+                with self._stop_events_lock:
+                    if message_queue in self._consume_stop_events:
+                        consume_stop_event = self._consume_stop_events[message_queue]
+                    else:
+                        # 如果事件不存在，创建一个（虽然正常情况下应该已经存在）
+                        consume_stop_event = threading.Event()
+                        self._consume_stop_events[message_queue] = consume_stop_event
+
+                # 启动消费任务，传入停止事件
                 future = self._consume_executor.submit(
-                    self._consume_messages_loop, message_queue
+                    self._consume_messages_loop, message_queue, consume_stop_event
                 )
                 if message_queue not in self._consume_tasks:
                     self._consume_tasks[message_queue] = []
                 self._consume_tasks[message_queue].append(future)
 
-    def _consume_messages_loop(self, message_queue: MessageQueue) -> None:
+    def _consume_messages_loop(
+        self, message_queue: MessageQueue, stop_event: threading.Event
+    ) -> None:
         """
         持续处理指定MessageQueue的消息消费循环。
 
@@ -1579,6 +1623,7 @@ class OrderlyConsumer(BaseConsumer):
 
         Args:
             message_queue: 要处理的指定MessageQueue
+            stop_event: 消费线程停止事件
 
         主要功能:
             - 从MessageQueue专属的处理队列阻塞式获取消息批次
@@ -1619,6 +1664,7 @@ class OrderlyConsumer(BaseConsumer):
         Note:
             - 该方法是消费者消息处理的核心逻辑，不应被外部调用
             - 循环会在消费者关闭时(_is_running=False)自动退出
+            - 支持通过停止事件优雅关闭
             - 消费延迟主要取决于消息处理时间和队列深度
             - 统计信息用于监控消费性能和健康状态
         """
@@ -1636,16 +1682,16 @@ class OrderlyConsumer(BaseConsumer):
             self._get_or_create_consume_queue(message_queue)
         )
 
-        while self._is_running:
+        while self._is_running and not stop_event.is_set():
             try:
                 # 从MessageQueue专属的处理队列获取消息批次
                 messages: list[MessageExt] | None = self._get_messages_from_queue(
-                    consume_queue
+                    consume_queue, stop_event
                 )
                 if messages is None:
                     continue
 
-                while messages:
+                while messages and self._is_running and not stop_event.is_set():
                     # 处理消息
                     success, duration = self._process_messages_with_timing(
                         messages, message_queue
@@ -1658,7 +1704,9 @@ class OrderlyConsumer(BaseConsumer):
                     else:
                         messages = self._handle_failed_consume(messages, message_queue)
                         if messages:
-                            time.sleep(5)
+                            # 处理失败重试时，使用可中断等待
+                            if stop_event.wait(timeout=5.0):
+                                break
 
                     # 更新统计信息
                     self._update_consume_stats(success, duration, len(messages))
@@ -1676,13 +1724,16 @@ class OrderlyConsumer(BaseConsumer):
                 )
 
     def _get_messages_from_queue(
-        self, consume_queue: queue.Queue[list[MessageExt]]
+        self,
+        consume_queue: queue.Queue[list[MessageExt]],
+        stop_event: threading.Event | None = None,
     ) -> list[MessageExt] | None:
         """
         从MessageQueue专属的处理队列获取消息
 
         Args:
             consume_queue: 指定MessageQueue的消费处理队列
+            stop_event: 停止事件，用于支持优雅关闭，默认为None
 
         Returns:
             消息列表，如果队列为空则返回None
@@ -2132,6 +2183,11 @@ class OrderlyConsumer(BaseConsumer):
         for process_queue in self._msg_cache.values():
             process_queue.clear()
         self._msg_cache.clear()
+
+        # 清理停止事件
+        with self._stop_events_lock:
+            self._pull_stop_events.clear()
+            self._consume_stop_events.clear()
 
         # 清理状态
         self._pull_tasks.clear()
