@@ -49,7 +49,7 @@ class BrokerClient:
 
         Args:
             remote: 远程通信实例
-            timeout: 请求超时时间，默认30秒
+            timeout: 请求超时时间，默认5秒
         """
         self.remote = remote
         self.timeout = timeout

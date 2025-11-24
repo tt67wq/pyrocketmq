@@ -26,12 +26,12 @@ class SyncNameServerClient:
     使用 Remote 类进行同步通信
     """
 
-    def __init__(self, remote: Remote, timeout: float = 30.0) -> None:
+    def __init__(self, remote: Remote, timeout: float = 5.0) -> None:
         """初始化同步客户端
 
         Args:
             remote: 远程通信实例
-            timeout: 请求超时时间，默认30秒
+            timeout: 请求超时时间，默认5秒
         """
         self.remote: Remote = remote
         self.timeout: float = timeout
