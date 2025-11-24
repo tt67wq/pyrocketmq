@@ -249,6 +249,9 @@ class OrderlyConsumer(BaseConsumer):
                 # 停止拉取任务
                 self._stop_pull_tasks()
 
+                # 停止消费任务
+                self._stop_consume_tasks()
+
                 # 等待处理中的消息完成
                 self._wait_for_processing_completion()
 
@@ -907,6 +910,30 @@ class OrderlyConsumer(BaseConsumer):
                 future.cancel()
 
         self._pull_tasks.clear()
+
+        # 等待一段时间让线程自然退出
+        time.sleep(0.1)
+
+    def _stop_consume_tasks(self) -> None:
+        """
+        停止所有消息消费任务 - 使用停止事件优雅关闭
+        """
+        if not self._consume_tasks:
+            return
+
+        # 首先设置所有停止事件
+        with self._stop_events_lock:
+            for message_queue in self._consume_tasks.keys():
+                if message_queue in self._consume_stop_events:
+                    self._consume_stop_events[message_queue].set()
+
+        # 然后取消Future任务
+        for message_queue, futures in self._consume_tasks.items():
+            for future in futures:
+                if future and not future.done():
+                    future.cancel()
+
+        self._consume_tasks.clear()
 
         # 等待一段时间让线程自然退出
         time.sleep(0.1)
@@ -1739,8 +1766,20 @@ class OrderlyConsumer(BaseConsumer):
             消息列表，如果队列为空则返回None
         """
         try:
-            messages = consume_queue.get(timeout=1.0)
-            return messages
+            if stop_event:
+                # 使用可中断的超时获取，支持优雅关闭
+                while not stop_event.is_set():
+                    try:
+                        messages = consume_queue.get(timeout=0.1)
+                        return messages
+                    except queue.Empty:
+                        continue
+                # 收到停止信号，返回None
+                return None
+            else:
+                # 传统方式，固定超时
+                messages = consume_queue.get(timeout=1.0)
+                return messages
         except queue.Empty:
             return None
 
