@@ -49,7 +49,7 @@ class BrokerClient:
 
         Args:
             remote: 远程通信实例
-            timeout: 请求超时时间，默认5秒
+            timeout: 默认请求超时时间，默认5秒
         """
         self.remote = remote
         self.timeout = timeout
@@ -240,6 +240,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> SendMessageResult:
         """发送消息
@@ -249,6 +250,7 @@ class BrokerClient:
             mq: 消息队列
             body: 消息体内容
             properties: 消息属性字典，默认为None
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数
 
         Returns:
@@ -288,7 +290,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             send_msg_rt = time.time() - start_time
 
             # 检查响应状态
@@ -468,6 +471,7 @@ class BrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> SendMessageResult:
         """批量发送消息
@@ -477,6 +481,7 @@ class BrokerClient:
             body: 批量消息体内容
             mq: 消息队列
             properties: 消息属性字典，默认为None
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数
 
         Returns:
@@ -515,7 +520,8 @@ class BrokerClient:
             )
 
             # 发送请求
-            response = self.remote.rpc(request)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
 
             # 处理响应
             if response.code == ResponseCode.SUCCESS:
@@ -693,6 +699,7 @@ class BrokerClient:
         max_msg_nums: int = 32,
         sys_flag: int = 0,
         commit_offset: int = 0,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> PullMessageResult:
         """拉取消息
@@ -705,6 +712,7 @@ class BrokerClient:
             max_msg_nums: 最大拉取消息数量，默认32
             sys_flag: 系统标志位，默认0
             commit_offset: 提交偏移量，默认0
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数（如sub_expression等）
 
         Returns:
@@ -748,7 +756,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             pull_rt = time.time() - start_time
 
             self._logger.debug(
@@ -904,6 +913,7 @@ class BrokerClient:
         consumer_group: str,
         topic: str,
         queue_id: int,
+        timeout: float | None = None,
     ) -> int:
         """查询消费者偏移量
 
@@ -911,6 +921,7 @@ class BrokerClient:
             consumer_group: 消费者组名
             topic: 主题名称
             queue_id: 队列ID
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 消费者偏移量
@@ -946,7 +957,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             query_rt = time.time() - start_time
 
             self._logger.debug(
@@ -1173,6 +1185,7 @@ class BrokerClient:
         topic: str,
         queue_id: int,
         commit_offset: int,
+        timeout: float | None = None,
     ) -> None:
         """更新消费者偏移量（使用oneway通信，无需等待响应）
 
@@ -1260,6 +1273,7 @@ class BrokerClient:
         topic: str,
         queue_id: int,
         timestamp: int,
+        timeout: float | None = None,
     ) -> int:
         """根据时间戳搜索偏移量
 
@@ -1267,6 +1281,7 @@ class BrokerClient:
             topic: 主题名称
             queue_id: 队列ID
             timestamp: 时间戳（毫秒）
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 对应的偏移量
@@ -1302,7 +1317,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             search_rt = time.time() - start_time
 
             self._logger.debug(
@@ -1516,12 +1532,15 @@ class BrokerClient:
                 queue_id=queue_id,
             )
 
-    def get_max_offset(self, topic: str, queue_id: int) -> int:
+    def get_max_offset(
+        self, topic: str, queue_id: int, timeout: float | None = None
+    ) -> int:
         """获取队列的最大偏移量
 
         Args:
             topic: 主题名称
             queue_id: 队列ID
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 最大偏移量
@@ -1555,7 +1574,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             query_rt = time.time() - start_time
 
             self._logger.debug(
@@ -1743,11 +1763,14 @@ class BrokerClient:
                 queue_id=queue_id,
             )
 
-    def send_heartbeat(self, heartbeat_data: HeartbeatData) -> None:
+    def send_heartbeat(
+        self, heartbeat_data: HeartbeatData, timeout: float | None = None
+    ) -> None:
         """发送心跳数据
 
         Args:
             heartbeat_data: 心跳数据
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Raises:
             BrokerConnectionError: 连接错误
@@ -1775,7 +1798,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             heartbeat_rt = time.time() - start_time
 
             self._logger.debug(
@@ -2183,11 +2207,14 @@ class BrokerClient:
             )
             raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
-    def get_consumers_by_group(self, consumer_group: str) -> list[str]:
+    def get_consumers_by_group(
+        self, consumer_group: str, timeout: float | None = None
+    ) -> list[str]:
         """获取指定消费者组的消费者列表
 
         Args:
             consumer_group: 消费者组名称
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             list: 消费者ID列表
@@ -2218,7 +2245,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             get_consumers_rt = time.time() - start_time
 
             self._logger.debug(
@@ -2358,7 +2386,11 @@ class BrokerClient:
             )
 
     def lock_batch_mq(
-        self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
+        self,
+        consumer_group: str,
+        client_id: str,
+        mqs: list[MessageQueue],
+        timeout: float | None = None,
     ) -> list[MessageQueue]:
         """批量锁定消息队列
 
@@ -2366,6 +2398,7 @@ class BrokerClient:
             consumer_group: 消费者组名称
             client_id: 客户端ID
             mqs: 消息队列列表
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             list: 锁定成功的消息队列列表
@@ -2400,7 +2433,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             lock_rt = time.time() - start_time
 
             self._logger.debug(
@@ -2546,7 +2580,11 @@ class BrokerClient:
             raise BrokerResponseError(f"Unexpected error during lock_batch_mq: {e}")
 
     def unlock_batch_mq(
-        self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
+        self,
+        consumer_group: str,
+        client_id: str,
+        mqs: list[MessageQueue],
+        timeout: float | None = None,
     ) -> None:
         """批量解锁消息队列
 
@@ -2554,6 +2592,7 @@ class BrokerClient:
             consumer_group: 消费者组名称
             client_id: 客户端ID
             mqs: 消息队列列表
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Raises:
             BrokerConnectionError: 连接错误
@@ -2585,7 +2624,8 @@ class BrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = self.remote.rpc(request, timeout=actual_timeout)
             unlock_rt = time.time() - start_time
 
             self._logger.debug(

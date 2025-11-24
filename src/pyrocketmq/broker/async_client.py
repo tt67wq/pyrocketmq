@@ -244,6 +244,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> SendMessageResult:
         """异步发送消息
@@ -253,6 +254,7 @@ class AsyncBrokerClient:
             mq: 消息队列
             body: 消息体内容
             properties: 消息属性字典，默认为None
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数
 
         Returns:
@@ -295,7 +297,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             send_msg_rt = time.time() - start_time
 
             # 检查响应状态
@@ -478,6 +481,7 @@ class AsyncBrokerClient:
         body: bytes,
         mq: MessageQueue,
         properties: dict[str, str] | None = None,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> SendMessageResult:
         """异步批量发送消息
@@ -487,6 +491,7 @@ class AsyncBrokerClient:
             body: 批量消息体内容
             mq: 消息队列
             properties: 消息属性字典，默认为None
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数
 
         Returns:
@@ -530,7 +535,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             send_msg_rt = time.time() - start_time
 
             # 检查响应状态
@@ -722,6 +728,7 @@ class AsyncBrokerClient:
         max_msg_nums: int,
         sys_flag: int = 0,
         commit_offset: int = 0,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> PullMessageResult:
         """异步拉取消息
@@ -734,6 +741,7 @@ class AsyncBrokerClient:
             max_msg_nums: 最大拉取消息数量，默认32
             sys_flag: 系统标志位，默认0
             commit_offset: 提交偏移量，默认0
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数（如sub_expression等）
 
         Returns:
@@ -780,7 +788,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             pull_rt = time.time() - start_time
 
             logger.debug(
@@ -942,6 +951,7 @@ class AsyncBrokerClient:
         consumer_group: str,
         topic: str,
         queue_id: int,
+        timeout: float | None = None,
     ) -> int:
         """异步查询消费者偏移量
 
@@ -949,6 +959,7 @@ class AsyncBrokerClient:
             consumer_group: 消费者组名
             topic: 主题名称
             queue_id: 队列ID
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 消费者偏移量
@@ -986,7 +997,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             query_rt = time.time() - start_time
 
             logger.debug(
@@ -1271,6 +1283,7 @@ class AsyncBrokerClient:
         topic: str,
         queue_id: int,
         timestamp: int,
+        timeout: float | None = None,
     ) -> int:
         """异步根据时间戳搜索偏移量
 
@@ -1278,6 +1291,7 @@ class AsyncBrokerClient:
             topic: 主题名称
             queue_id: 队列ID
             timestamp: 时间戳（毫秒）
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 对应的偏移量
@@ -1313,7 +1327,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             search_rt = time.time() - start_time
 
             logger.debug(
@@ -1511,12 +1526,18 @@ class AsyncBrokerClient:
                 queue_id=queue_id,
             )
 
-    async def get_max_offset(self, topic: str, queue_id: int) -> int:
+    async def get_max_offset(
+        self,
+        topic: str,
+        queue_id: int,
+        timeout: float | None = None,
+    ) -> int:
         """异步获取队列的最大偏移量
 
         Args:
             topic: 主题名称
             queue_id: 队列ID
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             int: 最大偏移量
@@ -1550,7 +1571,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             query_rt = time.time() - start_time
 
             logger.debug(
@@ -1719,12 +1741,16 @@ class AsyncBrokerClient:
             )
 
     async def send_heartbeat(
-        self, heartbeat_data: HeartbeatData, **kwargs: Any
+        self,
+        heartbeat_data: HeartbeatData,
+        timeout: float | None = None,
+        **kwargs: Any,
     ) -> None:
         """异步发送心跳
 
         Args:
             heartbeat_data: 心跳数据
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
             **kwargs: 其他参数
 
         Raises:
@@ -1753,7 +1779,8 @@ class AsyncBrokerClient:
             )
 
             # 发送请求并获取响应
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:
@@ -1812,6 +1839,7 @@ class AsyncBrokerClient:
         consumer_group: str,
         delay_level: int = 0,
         max_consume_retry_times: int = 16,
+        timeout: float | None = None,
         **kwargs: Any,
     ) -> None:
         """异步消费者发送消息回退
@@ -1857,7 +1885,8 @@ class AsyncBrokerClient:
             )
 
             # 发送请求并获取响应
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:
@@ -2036,11 +2065,16 @@ class AsyncBrokerClient:
             )
             raise BrokerResponseError(f"Unexpected error during end_transaction: {e}")
 
-    async def get_consumers_by_group(self, consumer_group: str) -> list[Any]:
+    async def get_consumers_by_group(
+        self,
+        consumer_group: str,
+        timeout: float | None = None,
+    ) -> list[Any]:
         """异步获取指定消费者组的消费者列表
 
         Args:
             consumer_group: 消费者组名称
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             list: 消费者ID列表
@@ -2071,7 +2105,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             get_consumers_rt = time.time() - start_time
 
             logger.debug(
@@ -2202,7 +2237,11 @@ class AsyncBrokerClient:
             )
 
     async def lock_batch_mq(
-        self, consumer_group: str, client_id: str, mqs: list[MessageQueue]
+        self,
+        consumer_group: str,
+        client_id: str,
+        mqs: list[MessageQueue],
+        timeout: float | None = None,
     ) -> list[Any]:
         """异步批量锁定消息队列
 
@@ -2210,6 +2249,7 @@ class AsyncBrokerClient:
             consumer_group: 消费者组名称
             client_id: 客户端ID
             mqs: 消息队列列表
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Returns:
             list: 锁定成功的消息队列列表
@@ -2244,7 +2284,8 @@ class AsyncBrokerClient:
 
             # 发送请求并获取响应
             start_time = time.time()
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
             lock_rt = time.time() - start_time
 
             logger.debug(
@@ -2385,6 +2426,7 @@ class AsyncBrokerClient:
         consumer_group: str,
         client_id: str,
         mqs: list[MessageQueue],
+        timeout: float | None = None,
     ) -> None:
         """异步批量解锁消息队列
 
@@ -2392,6 +2434,7 @@ class AsyncBrokerClient:
             consumer_group: 消费者组名称
             client_id: 客户端ID
             mqs: 要解锁的消息队列列表
+            timeout: 请求超时时间，如果为None则使用实例默认超时时间
 
         Raises:
             BrokerConnectionError: 连接错误
@@ -2422,7 +2465,8 @@ class AsyncBrokerClient:
             )
 
             # 发送请求并获取响应
-            response = await self.remote.rpc(request, timeout=self.timeout)
+            actual_timeout = timeout if timeout is not None else self.timeout
+            response = await self.remote.rpc(request, timeout=actual_timeout)
 
             # 检查响应状态
             if response.code != ResponseCode.SUCCESS:

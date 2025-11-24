@@ -329,7 +329,7 @@ class ConnectionStateMachine(StateMachine):
             header_data = self._recv_exactly(4)
             if not header_data:
                 # 连接被对方关闭
-                self._logger.info("连接被对方关闭（接收header时）")
+                self._logger.debug("连接被对方关闭（接收header时）")
                 self.disconnect(self.connected)
                 return b""
 
@@ -358,7 +358,7 @@ class ConnectionStateMachine(StateMachine):
             body_data = self._recv_exactly(body_length)
             if not body_data:
                 # 连接被对方关闭
-                self._logger.info("连接被对方关闭（接收body时）")
+                self._logger.debug("连接被对方关闭（接收body时）")
                 self.disconnect(self.connected)
                 return b""
 
@@ -744,7 +744,7 @@ class AsyncConnectionStateMachine(StateMachine):
 
         except asyncio.IncompleteReadError:
             # 连接被对方关闭
-            self._logger.info("异步连接被对方关闭")
+            self._logger.debug("异步连接被对方关闭")
             await self.disconnect(None)
             return b""
         except asyncio.TimeoutError:
@@ -783,7 +783,7 @@ class AsyncConnectionStateMachine(StateMachine):
             header_data = await self._recv_exactly_async(4)
             if not header_data:
                 # 连接被对方关闭
-                self._logger.info("异步连接被对方关闭（接收header时）")
+                self._logger.debug("异步连接被对方关闭（接收header时）")
                 await self.disconnect(None)
                 return b""
 
@@ -812,7 +812,7 @@ class AsyncConnectionStateMachine(StateMachine):
             body_data = await self._recv_exactly_async(body_length)
             if not body_data:
                 # 连接被对方关闭
-                self._logger.info("异步连接被对方关闭（接收body时）")
+                self._logger.debug("异步连接被对方关闭（接收body时）")
                 await self.disconnect(None)
                 return b""
 
