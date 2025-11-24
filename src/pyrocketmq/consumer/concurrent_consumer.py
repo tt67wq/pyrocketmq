@@ -131,6 +131,9 @@ class ConcurrentConsumer(BaseConsumer):
 
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
+        self._pull_stop_events: dict[
+            MessageQueue, threading.Event
+        ] = {}  # 拉取任务停止事件
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
         self._last_rebalance_time: float = 0.0
 
@@ -700,8 +703,12 @@ class ConcurrentConsumer(BaseConsumer):
 
         for q in queues:
             if q not in self._pull_tasks:
+                # 创建停止事件
+                stop_event = threading.Event()
+                self._pull_stop_events[q] = stop_event
+
                 future: Future[None] = self._pull_executor.submit(
-                    self._pull_messages_loop, q
+                    self._pull_messages_loop, q, stop_event
                 )
                 self._pull_tasks[q] = future
 
@@ -712,13 +719,21 @@ class ConcurrentConsumer(BaseConsumer):
         if not self._pull_tasks:
             return
 
+        # 首先设置所有停止事件，通知拉取循环停止
+        for _, stop_event in self._pull_stop_events.items():
+            stop_event.set()
+
+        # 然后取消Future
         for _, future in self._pull_tasks.items():
             if future and not future.done():
                 future.cancel()
 
+        self._pull_stop_events.clear()
         self._pull_tasks.clear()
 
-    def _pull_messages_loop(self, message_queue: MessageQueue) -> None:
+    def _pull_messages_loop(
+        self, message_queue: MessageQueue, stop_event: threading.Event
+    ) -> None:
         """持续拉取指定队列的消息。
 
         为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
@@ -732,6 +747,7 @@ class ConcurrentConsumer(BaseConsumer):
 
         Args:
             message_queue (MessageQueue): 要持续拉取消息的目标队列
+            stop_event (threading.Event): 停止事件，用于中断循环
 
         Returns:
             None
@@ -747,10 +763,12 @@ class ConcurrentConsumer(BaseConsumer):
             - 支持通过配置控制拉取频率
         """
         suggest_broker_id = 0
-        while self._is_running:
+        while self._is_running and not stop_event.is_set():
             pq: ProcessQueue = self._get_or_create_process_queue(message_queue)
             if pq.need_flow_control():
-                time.sleep(3.0)
+                # 使用可中断的等待代替time.sleep
+                if stop_event.wait(timeout=3.0):
+                    break
                 continue
             try:
                 # 执行单次拉取操作
@@ -784,6 +802,10 @@ class ConcurrentConsumer(BaseConsumer):
                 # 控制拉取频率 - 传入是否有消息的标志
                 self._apply_pull_interval(len(messages) > 0)
 
+                # 检查是否收到停止信号
+                if stop_event.is_set():
+                    break
+
             except MessagePullError as e:
                 logger.warning(
                     "The pull request is illegal",
@@ -810,7 +832,8 @@ class ConcurrentConsumer(BaseConsumer):
                 self._stats["pull_failures"] += 1
 
                 # 拉取失败时等待一段时间再重试
-                time.sleep(3.0)
+                if stop_event.wait(timeout=3.0):
+                    break
 
     def _perform_single_pull(
         self, message_queue: MessageQueue, suggest_broker_id: int

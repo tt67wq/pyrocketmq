@@ -798,6 +798,16 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 控制拉取频率 - 传入是否有消息的标志
                 await self._apply_pull_interval(len(messages) > 0)
 
+            except asyncio.CancelledError:
+                logger.info(
+                    "Pull messages loop cancelled, shutting down gracefully",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                    },
+                )
+                return
             except MessagePullError as e:
                 logger.warning(
                     "The pull request is illegal",
