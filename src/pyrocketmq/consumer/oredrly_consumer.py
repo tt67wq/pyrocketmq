@@ -73,6 +73,11 @@ class OrderlyConsumer(BaseConsumer):
         self._process_queues: dict[MessageQueue, queue.Queue[list[MessageExt]]] = {}
         self._process_queue_lock = threading.Lock()  # 用于保护_process_queues字典
 
+        # 初始化每个message_queue的锁管理字段
+        # 每个queue的锁都有时间限制，支持is_lock_expired方法
+        self._queue_locks: dict[MessageQueue, threading.RLock] = {}
+        self._queue_lock_management_lock = threading.Lock()  # 🔐保护_queue_locks字典
+
         # 消息缓存管理 - 使用ProcessQueue解决并发消费偏移量问题
         # ProcessQueue支持高效的insert/remove/min/max/count计算
         # 还能统计MessageExt的body总体积，提供更好的性能
@@ -167,11 +172,6 @@ class OrderlyConsumer(BaseConsumer):
 
                 # 启动重平衡任务
                 self._start_rebalance_task()
-
-                # 初始化每个message_queue的锁管理字段
-                # 每个queue的锁都有时间限制，支持is_lock_expired方法
-                self._queue_locks: dict[MessageQueue, threading.RLock] = {}
-                self._queue_lock_timestamps: dict[MessageQueue, float] = {}
 
                 self._stats["start_time"] = time.time()
 
@@ -632,8 +632,6 @@ class OrderlyConsumer(BaseConsumer):
                 # 清理队列锁
                 if q in self._queue_locks:
                     del self._queue_locks[q]
-                if q in self._queue_lock_timestamps:
-                    del self._queue_lock_timestamps[q]
 
             # 启动新分配队列的拉取任务
             added_queues: set[MessageQueue] = new_queue_set - old_queues
@@ -642,9 +640,6 @@ class OrderlyConsumer(BaseConsumer):
 
                 # 为新队列创建锁
                 self._queue_locks[q] = threading.RLock()
-                # 初始化锁时间戳
-                self._queue_lock_timestamps = {}
-                self._queue_lock_timestamps[q] = time.time() * 1000  # 转换为毫秒
 
                 # 为新队列初始化消费任务列表
                 self._consume_tasks[q] = []
@@ -664,19 +659,19 @@ class OrderlyConsumer(BaseConsumer):
         Returns:
             该队列的RLock锁对象
         """
-        if not hasattr(self, "_queue_locks"):
-            self._queue_locks = {}
 
-        if message_queue not in self._queue_locks:
-            self._queue_locks[message_queue] = threading.RLock()
-            # 初始化锁时间戳
-            if not hasattr(self, "_queue_lock_timestamps"):
-                self._queue_lock_timestamps = {}
-            self._queue_lock_timestamps[message_queue] = (
-                time.time() * 1000
-            )  # 转换为毫秒
+        # 使用双重检查锁定模式来避免竞争条件
+        # 首先进行无锁检查，提高性能
+        if message_queue in self._queue_locks:
+            return self._queue_locks[message_queue]
 
-        return self._queue_locks[message_queue]
+        # 使用锁保护字典操作，防止竞争条件
+        with self._queue_lock_management_lock:
+            # 再次检查，防止在等待锁的过程中其他线程已经创建了锁
+            if message_queue not in self._queue_locks:
+                self._queue_locks[message_queue] = threading.RLock()
+
+            return self._queue_locks[message_queue]
 
     def _is_locked(self, message_queue: MessageQueue) -> bool:
         """
@@ -688,31 +683,12 @@ class OrderlyConsumer(BaseConsumer):
         Returns:
             True如果队列已锁定，False如果队列未锁定
         """
-        if message_queue not in self._queue_locks:
-            return False
+        # 使用锁保护对_queue_locks字典的访问，防止竞争条件
+        with self._queue_lock_management_lock:
+            if message_queue not in self._queue_locks:
+                return False
 
-        return self._queue_locks[message_queue].locked()
-
-    def _is_lock_expired(self, message_queue: MessageQueue) -> bool:
-        """
-        检查指定队列的锁是否已过期
-
-        Args:
-            message_queue: 消息队列
-
-        Returns:
-            True如果锁已过期，False如果锁仍然有效
-        """
-        if not hasattr(self, "_queue_lock_timestamps"):
-            return True  # 如果没有时间戳记录，认为锁过期
-
-        if message_queue not in self._queue_lock_timestamps:
-            return True  # 如果没有时间戳记录，认为锁过期
-
-        current_time = time.time() * 1000  # 转换为毫秒
-        lock_time = self._queue_lock_timestamps[message_queue]
-
-        return (current_time - lock_time) > self._config.lock_expire_time
+            return self._queue_locks[message_queue].locked()
 
     def _lock_remote_queue(self, message_queue: MessageQueue) -> bool:
         """
@@ -839,18 +815,6 @@ class OrderlyConsumer(BaseConsumer):
                 exc_info=True,
             )
             return False
-
-    def _update_lock_timestamp(self, message_queue: MessageQueue) -> None:
-        """
-        更新指定队列锁的时间戳
-
-        Args:
-            message_queue: 消息队列
-        """
-        if not hasattr(self, "_queue_lock_timestamps"):
-            self._queue_lock_timestamps = {}
-
-        self._queue_lock_timestamps[message_queue] = time.time() * 1000  # 转换为毫秒
 
     def _trigger_rebalance(self) -> None:
         """
@@ -1731,7 +1695,23 @@ class OrderlyConsumer(BaseConsumer):
                         queue_lock.release()
                     continue
 
-                # TODO: 本地锁持有成功，尝试持有远程锁
+                # 本地锁持有成功，尝试持有远程锁
+                if not self._lock_remote_queue(message_queue):
+                    logger.debug(
+                        f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "client_id": self._config.client_id,
+                            "queue": str(message_queue),
+                            "operation": "consume_messages_loop",
+                        },
+                    )
+                    # 释放本地锁并继续下一轮循环
+                    queue_lock.release()
+                    # 等待3秒以减少锁竞争频率
+                    if stop_event.wait(timeout=3.0):
+                        break
+                    continue
 
                 # 从MessageQueue专属的处理队列获取消息批次
                 messages: list[MessageExt] | None = self._get_messages_from_queue(
@@ -1823,30 +1803,12 @@ class OrderlyConsumer(BaseConsumer):
         Returns:
             消费结果，包含成功状态和耗时
         """
-        # 首先尝试远程锁定队列，确保分布式环境下的顺序性
-        if not self._lock_remote_queue(message_queue):
-            logger.warning(
-                f"Failed to acquire remote lock for queue {message_queue}, skipping message processing",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "client_id": self._config.client_id,
-                    "queue": str(message_queue),
-                    "operation": "process_messages_with_timing",
-                },
-            )
-            return False, 0.0  # 远程锁定失败，不处理消息
 
-        # 获取队列锁，确保同一队列的消息顺序处理
-        queue_lock = self._get_queue_lock(message_queue)
-        # 更新锁时间戳，表示锁被活跃使用
-        self._update_lock_timestamp(message_queue)
+        start_time: float = time.time()
+        success: bool = self._concurrent_consume_message(messages, message_queue)
+        duration: float = time.time() - start_time
 
-        with queue_lock:
-            start_time: float = time.time()
-            success: bool = self._concurrent_consume_message(messages, message_queue)
-            duration: float = time.time() - start_time
-
-            return success, duration
+        return success, duration
 
     def _handle_successful_consume(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -2276,10 +2238,7 @@ class OrderlyConsumer(BaseConsumer):
                 )
 
         # 清理队列锁
-        if hasattr(self, "_queue_locks"):
-            self._queue_locks.clear()
-        if hasattr(self, "_queue_lock_timestamps"):
-            self._queue_lock_timestamps.clear()
+        self._queue_locks.clear()
 
     # ==================== 统计和监控方法 ====================
 
@@ -2456,34 +2415,3 @@ class OrderlyConsumer(BaseConsumer):
                 .with_remark("Failed to consume message")
                 .build()
             )
-
-    # ==================== 锁过期测试辅助方法 ====================
-
-    def _get_lock_info(self, message_queue: MessageQueue) -> dict[str, Any]:
-        """
-        获取指定队列锁的信息（用于调试和监控）
-
-        Args:
-            message_queue: 消息队列
-
-        Returns:
-            包含锁信息的字典
-        """
-        if not hasattr(self, "_queue_lock_timestamps"):
-            return {"has_lock": False, "has_timestamp": False}
-
-        if message_queue not in self._queue_locks:
-            return {"has_lock": False, "has_timestamp": False}
-
-        current_time: float = time.time() * 1000
-        lock_time: float = self._queue_lock_timestamps.get(message_queue, current_time)
-        age_ms: float = current_time - lock_time
-        is_expired: bool = self._is_lock_expired(message_queue)
-
-        return {
-            "has_lock": True,
-            "has_timestamp": True,
-            "lock_age_ms": age_ms,
-            "is_expired": is_expired,
-            "expire_time_ms": self._config.lock_expire_time,
-        }
