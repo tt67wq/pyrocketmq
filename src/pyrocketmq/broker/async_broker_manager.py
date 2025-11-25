@@ -35,18 +35,16 @@ class AsyncBrokerManager:
         self,
         remote_config: RemoteConfig,
         transport_config: TransportConfig | None = None,
-        connection_pool_size: int = 16,
     ):
         """初始化异步Broker管理器
 
         Args:
             remote_config: 远程通信配置
             transport_config: 传输层配置
-            connection_pool_size: 每个Broker的连接池大小
         """
         self.remote_config = remote_config
         self.transport_config = transport_config
-        self.connection_pool_size = connection_pool_size
+        self.connection_pool_size = remote_config.connection_pool_size
 
         self._logger = get_logger("broker.manager.async")
 
