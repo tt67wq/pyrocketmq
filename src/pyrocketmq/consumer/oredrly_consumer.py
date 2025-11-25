@@ -1747,26 +1747,59 @@ class OrderlyConsumer(BaseConsumer):
                 )
                 if not messages:
                     stop_event.wait(timeout=3.0)
-                    continue
 
-                while messages and self._is_running and not stop_event.is_set():
-                    # 处理消息
-                    success, duration = self._process_messages_with_timing(
+                for msg in messages:
+                    self._reset_retry(msg)
+
+                while True:
+                    # while messages and self._is_running and not stop_event.is_set():
+                    success, result, duration = self._process_messages_with_timing(
                         messages, message_queue
                     )
-
-                    # 根据处理结果进行后续处理
-                    if success:
-                        self._handle_successful_consume(messages, message_queue)
-                        messages = []
-                    else:
-                        messages = self._handle_failed_consume(messages, message_queue)
-                        if messages:
-                            # 处理失败重试时，使用可中断等待
-                            if stop_event.wait(timeout=5.0):
+                    offset: int = -1
+                    if self._config.enable_auto_commit:
+                        # 自动提交模式
+                        if success:
+                            offset = pq.commit()
+                            if offset:
+                                self._offset_store.update_offset(message_queue, offset)
+                            break
+                        else:
+                            if self.check_reconsume_times(message_queue, messages):
+                                stop_event.wait(timeout=1.0)
+                            else:
+                                offset = pq.commit()
+                                if offset:
+                                    self._offset_store.update_offset(
+                                        message_queue, offset
+                                    )
                                 break
 
-                    # 更新统计信息
+                    else:
+                        # 手动提交模式
+                        if success:
+                            if result == ConsumeResult.SUCCESS:
+                                # 啥也不做, 等待下次一起commit
+                                pass
+                            else:
+                                # commit
+                                offset = pq.commit()
+                                if offset:
+                                    self._offset_store.update_offset(
+                                        message_queue, offset
+                                    )
+                            break
+                        else:
+                            if result == ConsumeResult.ROLLBACK:
+                                _ = pq.rollback(messages)
+                                stop_event.wait(timeout=1.0)
+                                break
+                            elif result == ConsumeResult.RECONSUME_LATER:
+                                if self.check_reconsume_times(message_queue, messages):
+                                    stop_event.wait(timeout=1.0)
+                                else:
+                                    break
+
                     self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
@@ -1792,7 +1825,7 @@ class OrderlyConsumer(BaseConsumer):
 
     def _process_messages_with_timing(
         self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> tuple[bool, float]:
+    ) -> tuple[bool, ConsumeResult, float]:
         """
         处理消息并计时
 
@@ -1805,39 +1838,10 @@ class OrderlyConsumer(BaseConsumer):
         """
 
         start_time: float = time.time()
-        success: bool = self._orderly_consume_message(messages, message_queue)
+        success, consume_result = self._orderly_consume_message(messages, message_queue)
         duration: float = time.time() - start_time
 
-        return success, duration
-
-    def _handle_successful_consume(
-        self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> None:
-        """
-        处理成功消费的消息
-
-        Args:
-            messages: 成功消费的消息列表
-            message_queue: 消息队列
-        """
-        try:
-            # 从缓存中移除已处理的消息，并获取当前最小offset
-            min_offset = self._remove_messages_from_cache(message_queue, messages)
-
-            # 直接更新最小offset到offset_store，避免重复查询
-            if min_offset is not None:
-                self._update_offset_to_store(message_queue, min_offset)
-
-        except Exception as e:
-            logger.warning(
-                f"Failed to remove messages from cache: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "error": str(e),
-                },
-            )
+        return success, consume_result, duration
 
     def _update_offset_to_store(
         self, message_queue: MessageQueue, min_offset: int
@@ -1874,69 +1878,6 @@ class OrderlyConsumer(BaseConsumer):
                     "error": str(e),
                 },
             )
-
-    def _handle_failed_consume(
-        self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> list[MessageExt]:
-        """
-        处理消费失败的消息，根据消息模式采取不同的处理策略。
-
-        当消息监听器返回RECONSUME_LATER或抛出异常时，此方法负责处理失败的消息。
-        根据消费者配置的消息模型（集群模式或广播模式），采取不同的重试策略。
-
-        Args:
-            messages (list[MessageExt]): 消费失败的消息列表
-            message_queue (MessageQueue): 消息所属的队列信息
-
-        Returns:
-            list[MessageExt]: 发送回broker失败的消息列表（集群模式）或空列表（广播模式）
-
-        处理策略:
-            集群模式 (MessageModel.CLUSTERING):
-                - 尝试将失败的消息发送回broker进行重试
-                - 只有发送回broker失败的消息才会被返回（需要本地处理）
-                - 成功发送回broker的消息由broker负责重试，不在返回列表中
-                - 发送失败的消息可能会导致消息丢失，需要业务方关注
-
-            广播模式 (MessageModel.BROADCASTING):
-                - 直接丢弃所有失败的消息，返回空列表
-                - 广播模式下每个消费者独立消费，不需要重试机制
-                - 记录警告日志，便于问题排查
-
-        Examples:
-            >>> # 在消息处理循环中使用
-            >>> failed_messages = []
-            >>> try:
-            >>>     result = await self._consume_message(messages, context)
-            >>>     if result == ConsumeResult.RECONSUME_LATER:
-            >>>         # 返回的是发送到broker失败的消息，需要特殊处理
-            >>>         failed_messages = self._handle_failed_consume(messages, queue)
-            >>>         if failed_messages:
-            >>>             logger.error(f"Failed to send {len(failed_messages)} messages back to broker")
-            >>> except Exception as e:
-            >>>     failed_messages = self._handle_failed_consume(messages, queue)
-            >>>     logger.error(f"Message processing failed: {e}")
-            >>>     if failed_messages:
-            >>>         # 可能需要记录到死信队列或进行其他补偿处理
-            >>>         pass
-
-        Note:
-            - 集群模式下，重试次数受max_reconsume_times配置限制
-            - 重试消息会被发送到重试主题(%RETRY%{consumer_group})
-            - 超过最大重试次数的消息会进入死信队列(%DLQ%{consumer_group})
-            - 广播模式的消息丢失风险需要业务方考虑补偿机制
-            - 返回的消息列表是发送回broker失败的消息，可能需要特殊的处理逻辑
-            - 成功发送回broker的消息将由broker负责重试调度，不需要本地处理
-        """
-        if self._config.message_model == MessageModel.CLUSTERING:
-            return [
-                msg
-                for msg in messages
-                if not self._send_back_message(message_queue, msg)
-            ]
-        # 广播模式，直接丢掉消息
-        logger.warning("Broadcast mode, discard failed messages")
-        return []
 
     def _update_consume_stats(
         self, success: bool, duration: float, message_count: int
@@ -2036,7 +1977,7 @@ class OrderlyConsumer(BaseConsumer):
                 )
 
     def _on_notify_consumer_ids_changed(
-        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+        self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
     ) -> None:
         logger.info("Received notification of consumer IDs changed")
         self._do_rebalance()

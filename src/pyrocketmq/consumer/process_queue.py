@@ -728,7 +728,7 @@ class ProcessQueue:
         # 使用写锁保证线程安全
         with self._lock:
             # 构建要回滚的消息的queue_offset集合
-            rollback_offsets = set()
+            rollback_offsets: set[int] = set()
             for msg in msgs:
                 if msg.queue_offset is not None:
                     rollback_offsets.add(msg.queue_offset)
