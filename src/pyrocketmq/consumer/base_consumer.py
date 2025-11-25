@@ -814,6 +814,72 @@ class BaseConsumer:
 
             return False, ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
 
+    def check_reconsume_times(
+        self, message_queue: MessageQueue, msgs: list[MessageExt]
+    ) -> bool:
+        """
+        检查消息的重试次数并决定是否继续重试。
+
+        这个方法是消息重试机制的核心，根据配置的最大重试次数来决定消息的处理方式：
+        - 当消息重试次数超过最大限制时，尝试将消息发送到死信队列
+        - 当消息重试次数未超过最大限制时，标记为需要继续重试
+        - 无论如何都会增加消息的重试计数器
+
+        Args:
+            message_queue (MessageQueue): 消息队列对象，用于发送死信消息
+            msgs (list[MessageExt]): 需要检查重试次数的消息列表
+
+        Returns:
+            bool: 返回是否需要暂停消费，True表示需要暂停重试，False表示可以继续消费
+
+        Note:
+            重试策略逻辑：
+            1. 如果消息重试次数 > 最大重试次数：
+               - 记录警告日志，包含消费者组、主题、消息ID等信息
+               - 在消息属性中设置 RECONSUME_TIME 属性
+               - 尝试将消息发送到死信队列（通过 _send_back_message）
+               - 如果发送失败，标记为需要暂停重试
+               - 无论成功与否，都增加重试计数器
+
+            2. 如果消息重试次数 <= 最大重试次数：
+               - 直接标记为需要暂停重试，等待下次重新消费
+               - 增加重试计数器
+
+        Warning:
+            这个方法会修改消息对象的状态（msg.reconsume_times 和消息属性），
+            调用者需要注意这个副作用。
+
+        Example:
+            >>> # 检查一批消息的重试状态
+            >>> should_suspend = consumer.check_reconsume_times(message_queue, messages)
+            >>> if should_suspend:
+            >>>     logger.info("消息需要暂停消费，等待重试")
+            >>> else:
+            >>>     logger.info("消息处理成功，可以继续消费")
+        """
+        suspend: bool = False
+        for msg in msgs:
+            if msg.reconsume_times > self._config.max_reconsume_times:
+                logger.warning(
+                    "Message has exceeded max reconsume times",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": msg.topic,
+                        "msg_id": msg.msg_id,
+                    },
+                )
+                msg.set_property(
+                    MessageProperty.RECONSUME_TIME, str(msg.reconsume_times)
+                )
+                if not self._send_back_message(message_queue, msg):
+                    suspend = True
+                    msg.reconsume_times += 1
+            else:
+                suspend = True
+                msg.reconsume_times += 1
+
+        return suspend
+
     # ==================== 状态查询方法 ====================
 
     def is_running(self) -> bool:
