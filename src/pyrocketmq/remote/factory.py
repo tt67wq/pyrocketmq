@@ -107,7 +107,7 @@ class RemoteFactory:
         # 创建远程通信实例
         remote = AsyncRemote(transport_config, config)
 
-        logger.info(
+        logger.debug(
             "异步远程通信实例创建成功",
             extra={"address": parsed_address},
         )

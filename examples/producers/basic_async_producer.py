@@ -26,7 +26,7 @@ async def main():
 
         # 设置日志
         pyrocketmq.logging.setup_logging(
-            LoggingConfig(level="INFO", file_path="producer.log")
+            LoggingConfig(level="DEBUG", file_path="producer.log")
         )
 
         # 创建异步Producer

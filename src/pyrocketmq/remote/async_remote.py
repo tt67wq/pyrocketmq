@@ -98,7 +98,7 @@ class AsyncRemote:
                     event.set()
                 self._waiters.clear()
 
-            self._logger.info("异步连接已关闭")
+            self._logger.debug("异步连接已关闭")
 
         except Exception as e:
             self._logger.error(
@@ -412,7 +412,7 @@ class AsyncRemote:
 
     async def _recv_worker(self) -> None:
         """消息接收工作协程"""
-        self._logger.info("异步消息接收协程开始工作")
+        self._logger.debug("异步消息接收协程开始工作")
 
         while True:
             try:
@@ -459,7 +459,7 @@ class AsyncRemote:
                 )
                 await asyncio.sleep(1.0)
 
-        self._logger.info("异步消息接收协程结束")
+        self._logger.debug("异步消息接收协程结束")
 
     async def _handle_response(self, command: RemotingCommand) -> None:
         """处理接收到的命令（响应或请求）"""

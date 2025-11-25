@@ -658,7 +658,7 @@ class AsyncConnectionStateMachine(StateMachine):
             try:
                 self._writer.close()
                 await self._writer.wait_closed()
-                self._logger.info("异步Writer已关闭")
+                self._logger.debug("异步Writer已关闭")
             except Exception as e:
                 self._logger.error(
                     "关闭异步Writer时发生错误",

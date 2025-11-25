@@ -740,7 +740,7 @@ class AsyncConnectionPool:
                     request_code, processor_func
                 )
 
-            self._logger.info(
+            self._logger.debug(
                 "成功异步连接",
                 extra={
                     "address": self.address,

@@ -124,7 +124,7 @@ class BaseConsumer:
             self._config.namesrv_addr
         )
         self._broker_manager: BrokerManager = BrokerManager(
-            RemoteConfig(connection_pool_size=16, connection_max_lifetime=60)
+            RemoteConfig(connection_pool_size=32, connection_max_lifetime=30)
         )
         # 创建偏移量存储
         self._offset_store: OffsetStore = OffsetStoreFactory.create_offset_store(

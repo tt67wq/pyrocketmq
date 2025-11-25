@@ -126,7 +126,7 @@ class AsyncBaseConsumer:
         )
 
         remote_config: RemoteConfig = RemoteConfig(
-            connection_pool_size=16, connection_max_lifetime=60
+            connection_pool_size=32, connection_max_lifetime=30
         )
         self._broker_manager: AsyncBrokerManager = AsyncBrokerManager(
             remote_config=remote_config

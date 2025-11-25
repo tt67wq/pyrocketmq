@@ -16,7 +16,7 @@ from typing import Any
 
 from pyrocketmq.consumer import AsyncConcurrentConsumer, ConcurrentConsumer
 from pyrocketmq.consumer.config import ConsumerConfig, create_consumer_config
-from pyrocketmq.consumer.oredrly_consumer import OrderlyConsumer
+from pyrocketmq.consumer.orderly_consumer import OrderlyConsumer
 from pyrocketmq.logging import get_logger
 
 logger: Any = get_logger(__name__)

@@ -26,7 +26,7 @@ class RemoteConfig:
     # 连接池配置
     connection_pool_size: int = 1  # 连接池大小
     connection_pool_timeout: float = 10.0  # 连接池获取超时时间
-    connection_max_lifetime: float = 300.0  # 连接最大存活时间（秒），0表示无限制
+    connection_max_lifetime: float = 60.0  # 连接最大存活时间（秒），0表示无限制
 
     # 传输层配置
     # transport_config: Optional[TransportConfig] = None
