@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PyRocketMQ TCP状态机设计详解</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #2c3e50;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .main-diagram {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        /* SVG样式 */
+        .state-node {
+            fill: #ffffff;
+            stroke: #2c3e50;
+            stroke-width: 3;
+            filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.2));
+        }
+
+        .state-initial {
+            fill: #e8f5e9;
+            stroke: #4caf50;
+            stroke-width: 3;
+        }
+
+        .state-transit {
+            fill: #fff3e0;
+            stroke: #ff9800;
+            stroke-width: 3;
+        }
+
+        .state-active {
+            fill: #e3f2fd;
+            stroke: #2196f3;
+            stroke-width: 3;
+        }
+
+        .state-terminating {
+            fill: #fce4ec;
+            stroke: #e91e63;
+            stroke-width: 3;
+        }
+
+        .state-terminal {
+            fill: #ffebee;
+            stroke: #f44336;
+            stroke-width: 3;
+        }
+
+        .state-transition {
+            stroke: #34495e;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#transition-arrow);
+        }
+
+        .state-transition-success {
+            stroke: #27ae60;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#success-arrow);
+        }
+
+        .state-transition-error {
+            stroke: #e74c3c;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#error-arrow);
+            stroke-dasharray: 5, 5;
+        }
+
+        .state-transition-retry {
+            stroke: #f39c12;
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#retry-arrow);
+            stroke-dasharray: 3, 3;
+        }
+
+        .text-state {
+            font-size: 14px;
+            font-weight: bold;
+            fill: #2c3e50;
+        }
+
+        .text-transition {
+            font-size: 12px;
+            fill: #34495e;
+        }
+
+        .text-transition-error {
+            font-size: 12px;
+            fill: #e74c3c;
+        }
+
+        .section {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+
+        .section h2 {
+            color: #2c3e50;
+            margin-bottom: 25px;
+            font-size: 1.8em;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 12px;
+        }
+
+        .state-detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+
+        .state-card {
+            background: #ffffff;
+            padding: 25px;
+            border-radius: 10px;
+            border-left: 5px solid;
+            box-shadow: 0 3px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .state-card.initial { border-left-color: #4caf50; }
+        .state-card.transit { border-left-color: #ff9800; }
+        .state-card.active { border-left-color: #2196f3; }
+        .state-card.terminating { border-left-color: #e91e63; }
+        .state-card.terminal { border-left-color: #f44336; }
+
+        .state-card h3 {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+
+        .state-card p {
+            line-height: 1.6;
+            color: #555;
+            margin-bottom: 12px;
+        }
+
+        .state-card ul {
+            margin-left: 20px;
+            margin-top: 10px;
+        }
+
+        .state-card li {
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }
+
+        .transition-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .transition-table th,
+        .transition-table td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .transition-table th {
+            background: #3498db;
+            color: white;
+            font-weight: 600;
+        }
+
+        .transition-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .code-block {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+
+        .code-keyword {
+            color: #9f7aea;
+        }
+
+        .code-string {
+            color: #48bb78;
+        }
+
+        .code-comment {
+            color: #a0aec0;
+            font-style: italic;
+        }
+
+        .code-function {
+            color: #4299e1;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .feature-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .feature-card h3 {
+            font-size: 1.4em;
+            margin-bottom: 15px;
+        }
+
+        .feature-card p {
+            font-size: 0.95em;
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+
+        @media (max-width: 768px) {
+            .content {
+                padding: 25px;
+            }
+
+            .state-detail-grid,
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔄 TCP状态机设计详解</h1>
+            <p>PyRocketMQ连接层核心 - 基于状态机的TCP连接管理</p>
+        </div>
+
+        <div class="content">
+            <!-- 主状态机图 -->
+            <div class="main-diagram">
+                <h2 style="margin-bottom: 25px; color: #2c3e50;">🔄 TCP连接状态机核心架构</h2>
+                <svg width="100%" height="400" viewBox="0 0 1200 400" xmlns="http://www.w3.org/2000/svg">
+                    <!-- 定义箭头 -->
+                    <defs>
+                        <marker id="transition-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#34495e" />
+                        </marker>
+                        <marker id="success-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#27ae60" />
+                        </marker>
+                        <marker id="error-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#e74c3c" />
+                        </marker>
+                        <marker id="retry-arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#f39c12" />
+                        </marker>
+                    </defs>
+
+                    <!-- 状态节点 -->
+                    <!-- DISCONNECTED -->
+                    <rect x="50" y="150" width="180" height="80" rx="40" class="state-node state-initial"/>
+                    <text x="140" y="185" text-anchor="middle" class="text-state">DISCONNECTED</text>
+                    <text x="140" y="205" text-anchor="middle" class="text-transition">初始/断开状态</text>
+
+                    <!-- CONNECTING -->
+                    <rect x="280" y="150" width="180" height="80" rx="40" class="state-node state-transit"/>
+                    <text x="370" y="185" text-anchor="middle" class="text-state">CONNECTING</text>
+                    <text x="370" y="205" text-anchor="middle" class="text-transition">连接中</text>
+
+                    <!-- CONNECTED -->
+                    <rect x="510" y="150" width="180" height="80" rx="40" class="state-node state-active"/>
+                    <text x="600" y="185" text-anchor="middle" class="text-state">CONNECTED</text>
+                    <text x="600" y="205" text-anchor="middle" class="text-transition">已连接</text>
+
+                    <!-- CLOSING -->
+                    <rect x="740" y="150" width="180" height="80" rx="40" class="state-node state-terminating"/>
+                    <text x="830" y="185" text-anchor="middle" class="text-state">CLOSING</text>
+                    <text x="830" y="205" text-anchor="middle" class="text-transition">关闭中</text>
+
+                    <!-- CLOSED -->
+                    <rect x="970" y="150" width="180" height="80" rx="40" class="state-node state-terminal"/>
+                    <text x="1060" y="185" text-anchor="middle" class="text-state">CLOSED</text>
+                    <text x="1060" y="205" text-anchor="middle" class="text-transition">已关闭</text>
+
+                    <!-- 状态转换线 -->
+                    <!-- DISCONNECTED -> CONNECTING -->
+                    <path d="M 230 190 L 280 190" class="state-transition-success"/>
+                    <text x="255" y="180" text-anchor="middle" class="text-transition">connect()</text>
+
+                    <!-- CONNECTING -> CONNECTED -->
+                    <path d="M 460 190 L 510 190" class="state-transition-success"/>
+                    <text x="485" y="180" text-anchor="middle" class="text-transition">连接成功</text>
+
+                    <!-- CONNECTED -> CLOSING -->
+                    <path d="M 690 190 L 740 190" class="state-transition"/>
+                    <text x="715" y="180" text-anchor="middle" class="text-transition">close()</text>
+
+                    <!-- CLOSING -> CLOSED -->
+                    <path d="M 920 190 L 970 190" class="state-transition"/>
+                    <text x="945" y="180" text-anchor="middle" class="text-transition">关闭完成</text>
+
+                    <!-- 错误转换 -->
+                    <!-- CONNECTING -> DISCONNECTED -->
+                    <path d="M 370 230 Q 370 280, 140 280 Q 140 280, 140 230" class="state-transition-error"/>
+                    <text x="255" y="295" text-anchor="middle" class="text-transition-error">连接失败</text>
+
+                    <!-- CONNECTED -> DISCONNECTED -->
+                    <path d="M 600 230 Q 600 300, 370 300 Q 370 300, 370 230" class="state-transition-error"/>
+                    <text x="485" y="315" text-anchor="middle" class="text-transition-error">连接断开</text>
+
+                    <!-- 重试路径 -->
+                    <!-- DISCONNECTED -> CONNECTING (重试) -->
+                    <path d="M 140 150 Q 140 100, 370 100 Q 370 100, 370 150" class="state-transition-retry"/>
+                    <text x="255" y="90" text-anchor="middle" class="text-transition">自动重连</text>
+
+                </svg>
+            </div>
+
+            <!-- 状态详细说明 -->
+            <div class="section">
+                <h2>🎯 状态详细解析</h2>
+                <div class="state-detail-grid">
+                    <div class="state-card initial">
+                        <h3>🔌 DISCONNECTED (断开状态)</h3>
+                        <p><strong>状态描述：</strong>连接对象的初始状态，表示连接尚未建立或已断开。</p>
+                        <p><strong>状态特征：</strong></p>
+                        <ul>
+                            <li>连接对象已创建但未建立网络连接</li>
+                            <li>Socket资源未分配或已释放</li>
+                            <li>可接收connect()请求</li>
+                            <li>不可进行数据传输操作</li>
+                        </ul>
+                        <p><strong>进入条件：</strong></p>
+                        <ul>
+                            <li>对象创建时的默认状态</li>
+                            <li>连接失败后的回退状态</li>
+                            <li>连接异常断开后的状态</li>
+                        </ul>
+                        <p><strong>可执行操作：</strong>connect()</p>
+                        <p><strong>后续状态：</strong>CONNECTING (调用connect后)</p>
+                    </div>
+
+                    <div class="state-card transit">
+                        <h3>⏳ CONNECTING (连接中)</h3>
+                        <p><strong>状态描述：</strong>正在执行连接建立过程，等待连接结果。</p>
+                        <p><strong>状态特征：</strong></p>
+                        <ul>
+                            <li>TCP握手过程正在进行</li>
+                            <li>网络连接正在建立</li>
+                            <li>等待连接响应或超时</li>
+                            <li>资源已部分分配</li>
+                        </ul>
+                        <p><strong>内部处理：</strong></p>
+                        <ul>
+                            <li>解析目标地址 (DNS解析)</li>
+                            <li>创建Socket连接</li>
+                            <li>执行TCP三次握手</li>
+                            <li>处理连接超时</li>
+                        </ul>
+                        <p><strong>后续状态：</strong></p>
+                        <ul>
+                            <li><strong>CONNECTED：</strong>连接成功</li>
+                            <li><strong>DISCONNECTED：</strong>连接失败</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card active">
+                        <h3>✅ CONNECTED (已连接)</h3>
+                        <p><strong>状态描述：</strong>TCP连接已成功建立，可进行数据传输。</p>
+                        <p><strong>状态特征：</strong></p>
+                        <ul>
+                            <li>TCP连接完全建立</li>
+                            <li>Socket可读写</li>
+                            <li>连接状态稳定</li>
+                            <li>支持双向数据传输</li>
+                        </ul>
+                        <p><strong>可执行操作：</strong></p>
+                        <ul>
+                            <li><strong>send_data(data)：</strong>发送数据</li>
+                            <li><strong>receive_data()：</strong>接收数据</li>
+                            <li><strong>close()：</strong>关闭连接</li>
+                            <li><strong>is_connected()：</strong>检查连接状态</li>
+                        </ul>
+                        <p><strong>监听事件：</strong></p>
+                        <ul>
+                            <li>网络中断检测</li>
+                            <li>心跳包维护</li>
+                            <li>连接健康检查</li>
+                        </ul>
+                        <p><strong>后续状态：</strong>CLOSED (调用close后) 或 DISCONNECTED (异常断开)</p>
+                    </div>
+
+                    <div class="state-card terminating">
+                        <h3>🔒 CLOSING (关闭中)</h3>
+                        <p><strong>状态描述：</strong>正在执行连接关闭流程，清理资源。</p>
+                        <p><strong>状态特征：</strong></p>
+                        <ul>
+                            <li>连接关闭流程已启动</li>
+                            <li>正在发送剩余数据</li>
+                            <li>资源正在清理</li>
+                            <li>不再接受新数据</li>
+                        </ul>
+                        <p><strong>关闭流程：</strong></p>
+                        <ul>
+                            <li>停止接收新数据</li>
+                            <li>发送缓冲区剩余数据</li>
+                            <li>发送FIN包到对方</li>
+                            <li>等待对方确认</li>
+                            <li>释放Socket资源</li>
+                        </ul>
+                        <p><strong>后续状态：</strong>CLOSED (关闭流程完成)</p>
+                    </div>
+
+                    <div class="state-card terminal">
+                        <h3>❌ CLOSED (已关闭)</h3>
+                        <p><strong>状态描述：</strong>连接已完全关闭，所有资源已释放。</p>
+                        <p><strong>状态特征：</strong></p>
+                        <ul>
+                            <li>连接完全终止</li>
+                            <li>所有Socket资源已释放</li>
+                            <li>对象状态稳定</li>
+                            <li>不可进行数据操作</li>
+                        </ul>
+                        <p><strong>进入条件：</strong></p>
+                        <ul>
+                            <li>正常关闭流程完成</li>
+                            <li>不可恢复的连接错误</li>
+                            <li>应用程序强制终止</li>
+                        </ul>
+                        <p><strong>可执行操作：</strong>无 (需要重新创建对象)</p>
+                        <p><strong>后续状态：</strong>无 (终端状态)</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 状态转换表 -->
+            <div class="section">
+                <h2>🔄 状态转换规则</h2>
+                <table class="transition-table">
+                    <thead>
+                        <tr>
+                            <th>当前状态</th>
+                            <th>触发事件</th>
+                            <th>转换条件</th>
+                            <th>目标状态</th>
+                            <th>回调方法</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>DISCONNECTED</strong></td>
+                            <td>connect()</td>
+                            <td>开始建立连接</td>
+                            <td><span style="color: #ff9800;">CONNECTING</span></td>
+                            <td><code>on_connect()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CONNECTING</strong></td>
+                            <td>连接成功</td>
+                            <td>TCP握手完成</td>
+                            <td><span style="color: #2196f3;">CONNECTED</span></td>
+                            <td><code>on_connect_success()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CONNECTING</strong></td>
+                            <td>连接失败</td>
+                            <td>网络错误/超时</td>
+                            <td><span style="color: #4caf50;">DISCONNECTED</span></td>
+                            <td><code>on_connect_error()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CONNECTED</strong></td>
+                            <td>close()</td>
+                            <td>主动关闭连接</td>
+                            <td><span style="color: #e91e63;">CLOSING</span></td>
+                            <td><code>on_close()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CONNECTED</strong></td>
+                            <td>连接断开</td>
+                            <td>网络中断/对方关闭</td>
+                            <td><span style="color: #4caf50;">DISCONNECTED</span></td>
+                            <td><code>on_disconnect()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CLOSING</strong></td>
+                            <td>关闭完成</td>
+                            <td>资源清理完成</td>
+                            <td><span style="color: #f44336;">CLOSED</span></td>
+                            <td><code>on_close_complete()</code></td>
+                        </tr>
+                        <tr>
+                            <td><strong>CLOSED</strong></td>
+                            <td>重连请求</td>
+                            <td>创建新对象</td>
+                            <td><span style="color: #4caf50;">DISCONNECTED</span></td>
+                            <td><code>on_reconnect()</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 状态机实现代码示例 -->
+            <div class="section">
+                <h2>💻 状态机实现示例</h2>
+                <div class="state-detail-grid">
+                    <div class="state-card">
+                        <h3>🔄 同步状态机实现</h3>
+                        <p>基于线程的同步状态机实现，使用传统的阻塞IO模式：</p>
+                        <div class="code-block">
+<span class="code-keyword">class</span> <span class="code-function">ConnectionStateMachine</span>:
+    <span class="code-keyword">def</span> <span class="code-function">__init__</span>(self, config: TransportConfig):
+        self.state = <span class="code-string">"DISCONNECTED"</span>
+        self.socket = <span class="code-keyword">None</span>
+        self.config = config
+        self.logger = get_logger(__name__)
+
+    <span class="code-keyword">def</span> <span class="code-function">connect</span>(self) -> <span class="code-keyword">None</span>:
+        <span class="code-keyword">if</span> self.state != <span class="code-string">"DISCONNECTED"</span>:
+            <span class="code-keyword">raise</span> ConnectionError(<span class="code-string">f"Invalid state: {self.state}"</span>)
+
+        self._set_state(<span class="code-string">"CONNECTING"</span>)
+        self.on_connect()
+
+        <span class="code-keyword">try</span>:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(self.config.connect_timeout)
+            self.socket.connect((self.config.host, self.config.port))
+            self._set_state(<span class="code-string">"CONNECTED"</span>)
+            self.on_connect_success()
+        <span class="code-keyword">except</span> Exception <span class="code-keyword">as</span> e:
+            self._set_state(<span class="code-string">"DISCONNECTED"</span>)
+            self.on_connect_error(e)
+            <span class="code-keyword">raise</span>
+                        </div>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>⚡ 异步状态机实现</h3>
+                        <p>基于asyncio的异步状态机实现，使用事件驱动和非阻塞IO：</p>
+                        <div class="code-block">
+<span class="code-keyword">class</span> <span class="code-function">AsyncConnectionStateMachine</span>:
+    <span class="code-keyword">def</span> <span class="code-function">__init__</span>(self, config: TransportConfig):
+        self.state = <span class="code-string">"DISCONNECTED"</span>
+        self.socket = <span class="code-keyword">None</span>
+        self.config = config
+        self.logger = get_logger(__name__)
+
+    <span class="code-keyword">async def</span> <span class="code-function">connect</span>(self) -> <span class="code-keyword">None</span>:
+        <span class="code-keyword">if</span> self.state != <span class="code-string">"DISCONNECTED"</span>:
+            <span class="code-keyword">raise</span> ConnectionError(<span class="code-string">f"Invalid state: {self.state}"</span>)
+
+        self._set_state(<span class="code-string">"CONNECTING"</span>)
+        <span class="code-keyword">await</span> self.on_connect()
+
+        <span class="code-keyword">try</span>:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setblocking(<span class="code-keyword">False</span>)
+
+            <span class="code-comment"># 异步连接</span>
+            <span class="code-keyword">await</span> asyncio.get_event_loop().sock_connect(
+                self.socket, (self.config.host, self.config.port)
+            )
+
+            self._set_state(<span class="code-string">"CONNECTED"</span>)
+            <span class="code-keyword">await</span> self.on_connect_success()
+        <span class="code-keyword">except</span> Exception <span class="code-keyword">as</span> e:
+            self._set_state(<span class="code-string">"DISCONNECTED"</span>)
+            <span class="code-keyword">await</span> self.on_connect_error(e)
+            <span class="code-keyword">raise</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 回调方法详解 -->
+            <div class="section">
+                <h2>🔔 状态回调方法</h2>
+                <div class="state-detail-grid">
+                    <div class="state-card">
+                        <h3>📞 on_connect() - 连接开始</h3>
+                        <p><strong>调用时机：</strong>在DISCONNECTED → CONNECTING状态转换时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>解析目标主机地址</li>
+                            <li>初始化Socket配置</li>
+                            <li>记录连接开始时间</li>
+                            <li>触发连接建立事件</li>
+                        </ul>
+                        <p><strong>实现要点：</strong></p>
+                        <ul>
+                            <li>参数验证和预检查</li>
+                            <li>资源预分配</li>
+                            <li>日志记录</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>✅ on_connect_success() - 连接成功</h3>
+                        <p><strong>调用时机：</strong>在CONNECTING → CONNECTED状态转换时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>配置Socket参数 (TCP_NODELAY等)</li>
+                            <li>启动心跳检测机制</li>
+                            <li>更新连接统计信息</li>
+                            <li>通知上层应用连接就绪</li>
+                        </ul>
+                        <p><strong>实现要点：</strong></p>
+                        <ul>
+                            <li>设置读写超时</li>
+                            <li>配置缓冲区大小</li>
+                            <li>启动健康检查</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>❌ on_connect_error() - 连接失败</h3>
+                        <p><strong>调用时机：</strong>连接过程中出现错误时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>清理已分配的资源</li>
+                            <li>记录错误信息</li>
+                            <li>触发重连机制</li>
+                            <li>通知上层应用连接失败</li>
+                        </ul>
+                        <p><strong>错误类型：</strong></p>
+                        <ul>
+                            <li>网络连接超时</li>
+                            <li>DNS解析失败</li>
+                            <li>连接被拒绝</li>
+                            <li>网络不可达</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>🔌 on_disconnect() - 连接断开</h3>
+                        <p><strong>调用时机：</strong>在CONNECTED → DISCONNECTED状态转换时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>处理异常断开情况</li>
+                            <li>保存未发送数据</li>
+                            <li>触发自动重连</li>
+                            <li>更新连接状态统计</li>
+                        </ul>
+                        <p><strong>断开原因：</strong></p>
+                        <ul>
+                            <li>网络中断</li>
+                            <li>对端主动关闭</li>
+                            <li>连接超时</li>
+                            <li>协议错误</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>🔒 on_close() - 连接关闭</h3>
+                        <p><strong>调用时机：</strong>在CONNECTED → CLOSING状态转换时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>停止接收新数据</li>
+                            <li>发送剩余缓冲区数据</li>
+                            <li>优雅关闭连接</li>
+                            <li>通知对端关闭意图</li>
+                        </ul>
+                        <p><strong>关闭流程：</strong></p>
+                        <ul>
+                            <li>停止读取操作</li>
+                            <li>继续发送剩余数据</li>
+                            <li>发送FIN标志</li>
+                            <li>等待确认</li>
+                        </ul>
+                    </div>
+
+                    <div class="state-card">
+                        <h3>🏁 on_close_complete() - 关闭完成</h3>
+                        <p><strong>调用时机：</strong>在CLOSING → CLOSED状态转换时触发</p>
+                        <p><strong>主要功能：</strong></p>
+                        <ul>
+                            <li>释放所有网络资源</li>
+                            <li>清理缓冲区内存</li>
+                            <li>更新最终统计信息</li>
+                            <li>通知上层应用连接关闭</li>
+                        </ul>
+                        <p><strong>资源清理：</strong></p>
+                        <ul>
+                            <li>关闭Socket文件描述符</li>
+                            <li>释放内存缓冲区</li>
+                            <li>取消定时器任务</li>
+                            <li>清理线程资源</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 设计特性 -->
+            <div class="section">
+                <h2>⭐ 状态机设计特性</h2>
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <h3>🔄 状态一致性</h3>
+                        <p>严格的状态转换规则，确保连接状态的一致性和可预测性。每次状态变更都有明确的触发条件和处理逻辑。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>🛡️ 线程安全</h3>
+                        <p>使用锁机制保护状态变更，确保在多线程环境下的状态机安全。支持并发访问和状态查询。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>📊 状态监控</h3>
+                        <p>提供完整的状态监控接口，支持实时状态查询、状态变更日志和性能指标收集。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>⚡ 异步支持</h3>
+                        <p>同时支持同步和异步两种实现模式，满足不同应用场景的性能需求。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>🔧 可扩展性</h3>
+                        <p>模块化设计，支持自定义状态和转换规则，便于扩展新的功能和协议支持。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>🎯 错误恢复</h3>
+                        <p>完善的错误处理和自动恢复机制，支持重连、故障转移和优雅降级。</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>
