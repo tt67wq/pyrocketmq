@@ -11,7 +11,6 @@
 import abc
 import random
 import threading
-from typing import override
 
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message
@@ -51,7 +50,6 @@ class RoundRobinSelector(QueueSelector):
         self._counters: dict[str, int] = {}
         self._lock: threading.RLock = threading.RLock()
 
-    @override
     def select(
         self,
         topic: str,
@@ -103,7 +101,6 @@ class RandomSelector(QueueSelector):
     - 高性能：计算复杂度O(1)
     """
 
-    @override
     def select(
         self,
         topic: str,
@@ -142,7 +139,6 @@ class MessageHashSelector(QueueSelector):
     - 容错处理：无分片键时回退到随机选择
     """
 
-    @override
     def select(
         self,
         topic: str,
