@@ -1621,6 +1621,210 @@ class OrderlyConsumer(BaseConsumer):
                 self._consume_tasks[message_queue] = []
             self._consume_tasks[message_queue].append(future)
 
+    def _acquire_consume_lock(
+        self, message_queue: MessageQueue, stop_event: threading.Event
+    ) -> tuple[threading.RLock | None, bool]:
+        """
+        获取消费锁（本地锁 + 远程锁验证）。
+
+        Args:
+            message_queue: 要处理的消息队列
+            stop_event: 停止事件
+
+        Returns:
+            tuple[RLock | None, bool]: (队列锁, 是否成功获取锁)
+        """
+        queue_lock = self._get_queue_lock(message_queue)
+        lock_acquired = False
+
+        # 尝试非阻塞获取锁，如果失败则等待10ms后重试
+        while not lock_acquired and self._is_running and not stop_event.is_set():
+            lock_acquired = queue_lock.acquire(blocking=False)
+            if not lock_acquired:
+                # 等待10ms
+                if stop_event.wait(timeout=0.01):
+                    break
+
+        # 如果获取锁失败或消费者停止，则返回
+        if not lock_acquired or not self._is_running:
+            if lock_acquired:
+                queue_lock.release()
+            return queue_lock, False
+
+        # 本地锁持有成功，检查远程锁是否需要重新获取
+        if not self._is_remote_lock_valid(message_queue):
+            # 远程锁已过期或不存在，需要重新获取
+            if not self._lock_remote_queue(message_queue):
+                logger.debug(
+                    f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "client_id": self._config.client_id,
+                        "queue": str(message_queue),
+                        "operation": "consume_messages_loop",
+                    },
+                )
+                # 释放本地锁并继续下一轮循环
+                queue_lock.release()
+                return queue_lock, False
+        else:
+            logger.debug(
+                f"Using cached remote lock for queue {message_queue}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "operation": "consume_messages_loop",
+                    "lock_cached": True,
+                },
+            )
+
+        return queue_lock, True
+
+    def _fetch_messages_from_queue(
+        self, message_queue: MessageQueue, stop_event: threading.Event
+    ) -> tuple[ProcessQueue, list[MessageExt]]:
+        """
+        从处理队列获取消息。
+
+        Args:
+            message_queue: 消息队列
+            stop_event: 停止事件
+
+        Returns:
+            tuple[ProcessQueue, list[MessageExt]]: (处理队列, 消息列表)
+        """
+        pq: ProcessQueue = self._get_or_create_process_queue(message_queue)
+        messages: list[MessageExt] = pq.take_messages(self._config.consume_batch_size)
+
+        if not messages:
+            stop_event.wait(timeout=3.0)
+        else:
+            # 重置消息的重试次数
+            for msg in messages:
+                self._reset_retry(msg)
+
+        return pq, messages
+
+    def _handle_auto_commit_result(
+        self,
+        pq: ProcessQueue,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        success: bool,
+        _result: ConsumeResult,
+    ) -> tuple[bool, bool]:
+        """
+        处理自动提交模式下的消费结果。
+
+        Args:
+            pq: 处理队列
+            message_queue: 消息队列
+            messages: 消息列表
+            success: 是否处理成功
+            result: 消费结果
+
+        Returns:
+            tuple[bool, bool]: (是否继续循环, 是否需要等待)
+        """
+        if success:
+            offset = pq.commit()
+            if offset:
+                self._offset_store.update_offset(message_queue, offset)
+            return False, False  # 跳出循环，不等待
+        else:
+            if self.check_reconsume_times(message_queue, messages):
+                return True, True  # 继续循环，需要等待
+            else:
+                offset = pq.commit()
+                if offset:
+                    self._offset_store.update_offset(message_queue, offset)
+                return False, False  # 跳出循环，不等待
+
+    def _handle_manual_commit_result(
+        self,
+        pq: ProcessQueue,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        success: bool,
+        result: ConsumeResult,
+    ) -> tuple[bool, bool]:
+        """
+        处理手动提交模式下的消费结果。
+
+        Args:
+            pq: 处理队列
+            message_queue: 消息队列
+            messages: 消息列表
+            success: 是否处理成功
+            result: 消费结果
+
+        Returns:
+            tuple[bool, bool]: (是否继续循环, 是否需要等待)
+        """
+        if success:
+            if result == ConsumeResult.SUCCESS:
+                # 啥也不做, 等待下次一起commit
+                return False, False  # 跳出循环，不等待
+            else:
+                # commit
+                offset = pq.commit()
+                if offset:
+                    self._offset_store.update_offset(message_queue, offset)
+                return False, False  # 跳出循环，不等待
+        else:
+            if result == ConsumeResult.ROLLBACK:
+                _ = pq.rollback(messages)
+                return False, True  # 跳出循环，需要等待
+            elif result == ConsumeResult.RECONSUME_LATER:
+                if self.check_reconsume_times(message_queue, messages):
+                    return True, True  # 继续循环，需要等待
+                else:
+                    return False, False  # 跳出循环，不等待
+
+        return False, False
+
+    def _process_messages_with_retry(
+        self,
+        pq: ProcessQueue,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        stop_event: threading.Event,
+    ) -> None:
+        """
+        处理消息并处理重试逻辑。
+
+        Args:
+            pq: 处理队列
+            message_queue: 消息队列
+            messages: 消息列表
+            stop_event: 停止事件
+        """
+        while True:
+            success, result, duration = self._process_messages_with_timing(
+                messages, message_queue
+            )
+
+            # 更新消费统计信息
+            self._update_consume_stats(success, duration, len(messages))
+
+            # 根据提交模式处理结果
+            if self._config.enable_auto_commit:
+                should_continue, should_wait = self._handle_auto_commit_result(
+                    pq, message_queue, messages, success, result
+                )
+            else:
+                should_continue, should_wait = self._handle_manual_commit_result(
+                    pq, message_queue, messages, success, result
+                )
+
+            if should_continue:
+                if should_wait:
+                    stop_event.wait(timeout=1.0)
+                continue
+            else:
+                break
+
     def _consume_messages_loop(
         self, message_queue: MessageQueue, stop_event: threading.Event
     ) -> None:
@@ -1642,13 +1846,10 @@ class OrderlyConsumer(BaseConsumer):
             - 处理重试机制和异常情况
 
         处理流程:
-            1. 从MessageQueue专属处理队列获取消息批次 (_get_messages_from_queue)
-            2. 调用消息监听器处理消息 (_process_messages_with_timing)
-            3. 根据处理结果执行后续操作：
-               - 成功: 更新偏移量，清理处理队列
-               - 失败: 发送回broker进行重试
-            4. 更新消费统计信息 (_update_consume_stats)
-            5. 对发送回broker失败的消息进行延迟重试
+            1. 获取消费锁（本地锁+远程锁验证）(_acquire_consume_lock)
+            2. 从处理队列获取消息 (_fetch_messages_from_queue)
+            3. 处理消息并处理重试逻辑 (_process_messages_with_retry)
+            4. 更新消费统计信息
 
         顺序性保证:
             - 每个MessageQueue有独立的处理队列和消费线程
@@ -1687,120 +1888,28 @@ class OrderlyConsumer(BaseConsumer):
         )
 
         while self._is_running and not stop_event.is_set():
-            queue_lock: threading.RLock = self._get_queue_lock(message_queue)
+            queue_lock: threading.RLock | None = None
             try:
-                # 开始消费这个message_queue之前，先持有本地锁，如果持有失败，则等待10ms
-                lock_acquired = False
-
-                # 尝试非阻塞获取锁，如果失败则等待10ms后重试
-                while (
-                    not lock_acquired and self._is_running and not stop_event.is_set()
-                ):
-                    lock_acquired = queue_lock.acquire(blocking=False)
-                    if not lock_acquired:
-                        # 等待10ms
-                        if stop_event.wait(timeout=0.01):
-                            break
-
-                # 如果获取锁失败或消费者停止，则继续下一轮循环
-                if not lock_acquired or not self._is_running:
-                    if lock_acquired:
-                        queue_lock.release()
+                # 获取消费锁
+                queue_lock, lock_success = self._acquire_consume_lock(
+                    message_queue, stop_event
+                )
+                if not lock_success:
+                    if stop_event.wait(timeout=3.0):
+                        break
                     continue
 
-                # 本地锁持有成功，检查远程锁是否需要重新获取
-                if not self._is_remote_lock_valid(message_queue):
-                    # 远程锁已过期或不存在，需要重新获取
-                    if not self._lock_remote_queue(message_queue):
-                        logger.debug(
-                            f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
-                            extra={
-                                "consumer_group": self._config.consumer_group,
-                                "client_id": self._config.client_id,
-                                "queue": str(message_queue),
-                                "operation": "consume_messages_loop",
-                            },
-                        )
-                        # 释放本地锁并继续下一轮循环
-                        queue_lock.release()
-                        # 等待3秒以减少锁竞争频率
-                        if stop_event.wait(timeout=3.0):
-                            break
-                        continue
-                else:
-                    logger.debug(
-                        f"Using cached remote lock for queue {message_queue}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "client_id": self._config.client_id,
-                            "queue": str(message_queue),
-                            "operation": "consume_messages_loop",
-                            "lock_cached": True,
-                        },
-                    )
-
-                pq: ProcessQueue | None = self._get_or_create_process_queue(
-                    message_queue
-                )
-                messages: list[MessageExt] = pq.take_messages(
-                    self._config.consume_batch_size
+                # 从处理队列获取消息
+                pq, messages = self._fetch_messages_from_queue(
+                    message_queue, stop_event
                 )
                 if not messages:
-                    stop_event.wait(timeout=3.0)
+                    continue
 
-                for msg in messages:
-                    self._reset_retry(msg)
-
-                while True:
-                    # while messages and self._is_running and not stop_event.is_set():
-                    success, result, duration = self._process_messages_with_timing(
-                        messages, message_queue
-                    )
-                    offset: int = -1
-                    if self._config.enable_auto_commit:
-                        # 自动提交模式
-                        if success:
-                            offset = pq.commit()
-                            if offset:
-                                self._offset_store.update_offset(message_queue, offset)
-                            break
-                        else:
-                            if self.check_reconsume_times(message_queue, messages):
-                                stop_event.wait(timeout=1.0)
-                            else:
-                                offset = pq.commit()
-                                if offset:
-                                    self._offset_store.update_offset(
-                                        message_queue, offset
-                                    )
-                                break
-
-                    else:
-                        # 手动提交模式
-                        if success:
-                            if result == ConsumeResult.SUCCESS:
-                                # 啥也不做, 等待下次一起commit
-                                pass
-                            else:
-                                # commit
-                                offset = pq.commit()
-                                if offset:
-                                    self._offset_store.update_offset(
-                                        message_queue, offset
-                                    )
-                            break
-                        else:
-                            if result == ConsumeResult.ROLLBACK:
-                                _ = pq.rollback(messages)
-                                stop_event.wait(timeout=1.0)
-                                break
-                            elif result == ConsumeResult.RECONSUME_LATER:
-                                if self.check_reconsume_times(message_queue, messages):
-                                    stop_event.wait(timeout=1.0)
-                                else:
-                                    break
-
-                    self._update_consume_stats(success, duration, len(messages))
+                # 处理消息并处理重试逻辑
+                self._process_messages_with_retry(
+                    pq, message_queue, messages, stop_event
+                )
 
             except Exception as e:
                 logger.error(
@@ -1816,7 +1925,7 @@ class OrderlyConsumer(BaseConsumer):
 
             finally:
                 # 释放本地锁
-                if queue_lock.locked():
+                if queue_lock is not None and queue_lock.locked():
                     queue_lock.release()
 
     def _take_messages(self) -> list[MessageExt] | None:
