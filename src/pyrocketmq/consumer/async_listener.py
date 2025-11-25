@@ -10,7 +10,7 @@
 
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from ..logging import get_logger
 from ..model import ConsumeResult
@@ -18,6 +18,9 @@ from ..model.message_ext import MessageExt
 from ..model.message_queue import MessageQueue
 
 logger = get_logger(__name__)
+
+# 异步消息处理函数类型别名
+AsyncMessageHandler = Callable[[list[MessageExt]], Awaitable[ConsumeResult]]
 
 
 class AsyncConsumeContext:
@@ -190,34 +193,40 @@ class SimpleAsyncMessageListener(AsyncMessageListener):
     用户只需要提供一个处理函数即可，无需继承类。
 
     使用示例:
-        >>> async def process_message_async(msg):
+        >>> async def process_message_async(messages):
         ...     # 异步处理逻辑
-        ...     await some_async_operation(msg)
-        ...     print(f"处理消息: {msg.body.decode()}")
+        ...     for msg in messages:
+        ...         await some_async_operation(msg)
+        ...         print(f"处理消息: {msg.body.decode()}")
         ...     return ConsumeResult.SUCCESS
         >>>
         >>> listener = SimpleAsyncMessageListener(process_message_async)
     """
 
-    def __init__(self, message_handler: Callable[[list[MessageExt]], Any]) -> None:
+    def __init__(self, message_handler: AsyncMessageHandler) -> None:
         """
         初始化简单异步消息监听器
 
         Args:
-            message_handler: 消息处理函数，可以是同步或异步函数，签名为:
-                           function(messages: list[MessageExt]) -> ConsumeResult
-                           或 async function(messages: list[MessageExt]) -> ConsumeResult
+            message_handler: 异步消息处理函数，签名为:
+                           async function(messages: list[MessageExt]) -> ConsumeResult
         """
         if not callable(message_handler):
             raise ValueError("message_handler 必须是可调用对象")
 
-        self.message_handler: Callable[[list[MessageExt]], Any] = message_handler
+        # 验证是否为异步函数
+        import inspect
+
+        if not inspect.iscoroutinefunction(message_handler):
+            raise ValueError("message_handler 必须是异步函数 (async def)")
+
+        self.message_handler: AsyncMessageHandler = message_handler
 
     async def consume_message(
         self, messages: list[MessageExt], context: AsyncConsumeContext
     ) -> ConsumeResult:
         """
-        使用用户提供的处理函数处理消息
+        使用用户提供的异步处理函数处理消息
 
         Args:
             messages: 消息列表
@@ -227,13 +236,8 @@ class SimpleAsyncMessageListener(AsyncMessageListener):
             消费结果
         """
         try:
-            result = self.message_handler(messages)
-
-            # 如果处理函数返回协程对象，等待其完成
-            if hasattr(result, "__await__"):
-                return await result
-            else:
-                return result
+            # 直接调用异步函数并等待结果
+            return await self.message_handler(messages)
         except Exception as e:
             logger.error(
                 f"简单异步消息监听器处理失败: {e}",
@@ -248,13 +252,14 @@ class SimpleAsyncMessageListener(AsyncMessageListener):
 
 
 def create_async_message_listener(
-    handler: Callable[[list[MessageExt]], Any],
+    handler: AsyncMessageHandler,
 ) -> AsyncMessageListener:
     """
     创建异步消息监听器的便利函数
 
     Args:
-        handler: 消息处理函数，可以是同步或异步函数
+        handler: 异步消息处理函数，签名为:
+                async function(messages: list[MessageExt]) -> ConsumeResult
 
     Returns:
         异步消息监听器实例
@@ -268,13 +273,5 @@ def create_async_message_listener(
         ...     return ConsumeResult.SUCCESS
         >>>
         >>> listener = create_async_message_listener(handle_messages_async)
-        >>>
-        >>> # 创建同步处理函数的异步监听器
-        >>> def handle_messages_sync(messages):
-        ...     for msg in messages:
-        ...         print(f"同步处理: {msg.body}")
-        ...     return ConsumeResult.SUCCESS
-        >>>
-        >>> listener = create_async_message_listener(handle_messages_sync)
     """
     return SimpleAsyncMessageListener(handler)
