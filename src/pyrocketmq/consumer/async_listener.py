@@ -10,7 +10,7 @@
 
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, override
+from typing import Any, Callable
 
 from ..logging import get_logger
 from ..model import ConsumeResult
@@ -213,7 +213,6 @@ class SimpleAsyncMessageListener(AsyncMessageListener):
 
         self.message_handler: Callable[[list[MessageExt]], Any] = message_handler
 
-    @override
     async def consume_message(
         self, messages: list[MessageExt], context: AsyncConsumeContext
     ) -> ConsumeResult:

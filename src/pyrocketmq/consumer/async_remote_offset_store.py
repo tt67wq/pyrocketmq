@@ -23,7 +23,7 @@ import asyncio
 import time
 from collections import defaultdict
 from types import CoroutineType
-from typing import Any, override
+from typing import Any
 
 from pyrocketmq.broker import AsyncBrokerClient, AsyncBrokerManager
 from pyrocketmq.consumer.async_offset_store import (
@@ -125,7 +125,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
         self._persist_task: asyncio.Task[None] | None = None
         self._running: bool = False
 
-    @override
     async def start(self) -> None:
         """异步启动偏移量存储服务
 
@@ -146,7 +145,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
             extra={"consumer_group": self.consumer_group},
         )
 
-    @override
     async def stop(self) -> None:
         """异步停止偏移量存储服务
 
@@ -171,7 +169,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
             extra={"consumer_group": self.consumer_group},
         )
 
-    @override
     async def load(self) -> None:
         """从Broker异步加载偏移量到本地缓存
 
@@ -195,7 +192,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
             )
             await self.metrics.record_load_failure()
 
-    @override
     async def update_offset(self, queue: MessageQueue, offset: int) -> None:
         """异步更新偏移量到本地缓存
 
@@ -223,7 +219,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
                 extra={"queue": str(queue), "offset": offset},
             )
 
-    @override
     async def persist(self, queue: MessageQueue) -> None:
         """异步持久化单个队列的偏移量到Broker
 
@@ -283,7 +278,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
             )
             raise
 
-    @override
     async def persist_all(self) -> None:
         """异步批量持久化所有偏移量
 
@@ -365,7 +359,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
                 extra={"success_count": success_count, "failure_count": failure_count},
             )
 
-    @override
     async def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
         """异步读取偏移量
 
@@ -462,7 +455,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
 
             return -1
 
-    @override
     async def remove_offset(self, queue: MessageQueue) -> None:
         """异步移除队列的偏移量
 
@@ -485,7 +477,6 @@ class AsyncRemoteOffsetStore(AsyncOffsetStore):
             extra={"queue": str(queue)},
         )
 
-    @override
     async def get_metrics(self) -> dict[str, Any]:
         """异步获取偏移量存储指标
 

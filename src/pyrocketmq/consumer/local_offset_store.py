@@ -16,7 +16,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, override
+from typing import Any
 
 from pyrocketmq.consumer.offset_store import (
     OffsetEntry,
@@ -69,7 +69,6 @@ class LocalOffsetStore(OffsetStore):
         self._running: bool = False
         self._stop_event: threading.Event = threading.Event()
 
-    @override
     def start(self) -> None:
         """启动偏移量存储服务"""
         if self._running:
@@ -92,7 +91,6 @@ class LocalOffsetStore(OffsetStore):
             },
         )
 
-    @override
     def stop(self) -> None:
         """停止偏移量存储服务"""
         if not self._running:
@@ -112,7 +110,6 @@ class LocalOffsetStore(OffsetStore):
             "LocalOffsetStore stopped", extra={"consumer_group": self.consumer_group}
         )
 
-    @override
     def load(self) -> None:
         """从本地文件加载偏移量"""
         try:
@@ -169,7 +166,6 @@ class LocalOffsetStore(OffsetStore):
             self.metrics.record_load_failure()
             raise
 
-    @override
     def update_offset(self, queue: MessageQueue, offset: int) -> None:
         """
         更新偏移量到内存缓存
@@ -185,7 +181,6 @@ class LocalOffsetStore(OffsetStore):
                 extra={"queue": str(queue), "offset": offset},
             )
 
-    @override
     def persist(self, queue: MessageQueue) -> None:
         """
         持久化单个队列的偏移量到本地文件
@@ -239,7 +234,6 @@ class LocalOffsetStore(OffsetStore):
                 logger.error(f"Failed to persist offset {queue} -> {offset}: {e}")
                 raise
 
-    @override
     def persist_all(self) -> None:
         """持久化所有偏移量到本地文件"""
         if not self.offset_table:
@@ -268,7 +262,6 @@ class LocalOffsetStore(OffsetStore):
                 logger.error(f"Failed to persist all offsets: {e}")
                 raise
 
-    @override
     def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
         """
         读取偏移量
@@ -324,7 +317,6 @@ class LocalOffsetStore(OffsetStore):
 
             return -1
 
-    @override
     def remove_offset(self, queue: MessageQueue) -> None:
         """
         移除队列的偏移量

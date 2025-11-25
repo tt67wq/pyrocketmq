@@ -16,7 +16,7 @@ RemoteOffsetStore - 集群模式偏移量存储
 import threading
 import time
 from collections import defaultdict
-from typing import Any, override
+from typing import Any
 
 from pyrocketmq.broker import BrokerClient, BrokerManager
 from pyrocketmq.consumer.offset_store import (
@@ -101,7 +101,6 @@ class RemoteOffsetStore(OffsetStore):
         self._persist_thread: threading.Thread | None = None
         self._running: bool = False
 
-    @override
     def start(self) -> None:
         """启动偏移量存储服务.
 
@@ -123,7 +122,6 @@ class RemoteOffsetStore(OffsetStore):
             "remote offset store started", extra={"consumer_group": self.consumer_group}
         )
 
-    @override
     def stop(self) -> None:
         """停止偏移量存储服务.
 
@@ -148,7 +146,6 @@ class RemoteOffsetStore(OffsetStore):
             "remote offset store stopped", extra={"consumer_group": self.consumer_group}
         )
 
-    @override
     def load(self) -> None:
         """从Broker加载偏移量到本地缓存.
 
@@ -171,7 +168,6 @@ class RemoteOffsetStore(OffsetStore):
             )
             self.metrics.record_load_failure()
 
-    @override
     def update_offset(self, queue: MessageQueue, offset: int) -> None:
         """更新偏移量到本地缓存.
 
@@ -196,7 +192,6 @@ class RemoteOffsetStore(OffsetStore):
                 extra={"queue": str(queue), "offset": offset},
             )
 
-    @override
     def persist(self, queue: MessageQueue) -> None:
         """持久化单个队列的偏移量到Broker.
 
@@ -254,7 +249,6 @@ class RemoteOffsetStore(OffsetStore):
                 )
                 raise
 
-    @override
     def persist_all(self) -> None:
         """批量持久化所有偏移量.
 
@@ -303,7 +297,6 @@ class RemoteOffsetStore(OffsetStore):
                 extra={"success_count": success_count, "failure_count": failure_count},
             )
 
-    @override
     def read_offset(self, queue: MessageQueue, read_type: ReadOffsetType) -> int:
         """读取偏移量.
 
@@ -394,7 +387,6 @@ class RemoteOffsetStore(OffsetStore):
 
             return -1
 
-    @override
     def remove_offset(self, queue: MessageQueue) -> None:
         """移除队列的偏移量.
 

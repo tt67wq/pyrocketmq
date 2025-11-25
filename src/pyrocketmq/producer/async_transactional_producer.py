@@ -6,7 +6,7 @@
 """
 
 import logging
-from typing import Any, override
+from typing import Any
 
 from pyrocketmq.broker.async_client import AsyncBrokerClient
 from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError
@@ -102,7 +102,6 @@ class AsyncTransactionProducer(AsyncProducer):
 
         self._failed_registrations: set[str] = set()
 
-    @override
     async def start(self) -> None:
         """启动AsyncTransactionProducer"""
         await super().start()

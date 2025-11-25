@@ -6,7 +6,7 @@
 """
 
 import logging
-from typing import Any, override
+from typing import Any
 
 from pyrocketmq.broker.client import BrokerClient
 from pyrocketmq.broker.errors import BrokerError, BrokerTimeoutError
@@ -96,13 +96,11 @@ class TransactionProducer(Producer):
 
         self._failed_registrations: set[str] = set()
 
-    @override
     def start(self) -> None:
         """启动TransactionProducer"""
         super().start()
         self._logger.info("TransactionProducer started")
 
-    @override
     def shutdown(self) -> None:
         """关闭TransactionProducer"""
         super().shutdown()

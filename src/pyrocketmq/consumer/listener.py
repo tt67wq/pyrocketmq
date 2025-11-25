@@ -9,7 +9,7 @@ MVP版本专注于核心功能，后续版本会扩展更多监听器类型。
 
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, override
+from typing import Any, Callable
 
 from ..logging import get_logger
 from ..model import ConsumeResult
@@ -208,7 +208,6 @@ class SimpleMessageListener(MessageListener):
             message_handler
         )
 
-    @override
     def consume_message(
         self, messages: list[MessageExt], context: ConsumeContext
     ) -> ConsumeResult:
