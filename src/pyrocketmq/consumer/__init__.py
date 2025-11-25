@@ -89,10 +89,10 @@ from .consume_from_where_manager import ConsumeFromWhereManager
 
 # ==================== Consumer便利工厂函数 ====================
 from .consumer_factory import (
-    create_async_concurrent_consumer,
     create_async_consumer,
     create_concurrent_consumer,
     create_consumer,
+    create_orderly_consumer,
 )
 
 # ==================== 异常类 ====================
@@ -142,6 +142,7 @@ from .offset_store_factory import (
     create_offset_store,
     validate_offset_store_config,
 )
+from .oredrly_consumer import OrderlyConsumer
 from .remote_offset_store import RemoteOffsetStore
 from .subscription_exceptions import (
     InvalidSelectorError,
@@ -176,6 +177,7 @@ __all__ = [
     "AsyncBaseConsumer",
     "AsyncConcurrentConsumer",
     "ConcurrentConsumer",
+    "OrderlyConsumer",
     # 配置管理
     "ConsumerConfig",
     "create_consumer_config",
@@ -184,7 +186,7 @@ __all__ = [
     "create_consumer",
     "create_concurrent_consumer",
     "create_async_consumer",
-    "create_async_concurrent_consumer",
+    "create_orderly_consumer",
     # 偏移量存储
     "OffsetStore",
     "ReadOffsetType",
