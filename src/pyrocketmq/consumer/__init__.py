@@ -143,7 +143,7 @@ from .offset_store_factory import (
     create_offset_store,
     validate_offset_store_config,
 )
-from .oredrly_consumer import OrderlyConsumer
+from .orderly_consumer import OrderlyConsumer
 from .remote_offset_store import RemoteOffsetStore
 from .subscription_exceptions import (
     InvalidSelectorError,

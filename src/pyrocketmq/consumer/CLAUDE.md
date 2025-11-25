@@ -259,11 +259,49 @@ class SimpleMessageListener(MessageListener):
         return self.handler(messages, context)
 
 class SimpleAsyncMessageListener(AsyncMessageListener):
-    def __init__(self, handler: Callable[[List[MessageExt], AsyncConsumeContext], Awaitable[ConsumeResult]]):
-        self.handler = handler
+    """
+    简单异步消息监听器
+    
+    提供最基础的异步消息处理功能，用户只需要提供一个异步处理函数。
+    
+    特性:
+    - 强制要求异步函数(async def)
+    - 类型安全的异步函数签名检查
+    - 简化的异步消息处理接口
+    """
+    
+    def __init__(self, message_handler: AsyncMessageHandler):
+        """
+        初始化简单异步消息监听器
         
-    async def consume_message(self, messages, context):
-        return await self.handler(messages, context)
+        Args:
+            message_handler: 异步消息处理函数，签名为:
+                           async function(messages: list[MessageExt]) -> ConsumeResult
+        """
+        # 验证是否为异步函数
+        import inspect
+        if not inspect.iscoroutinefunction(message_handler):
+            raise ValueError("message_handler 必须是异步函数 (async def)")
+            
+        self.message_handler = message_handler
+        
+    async def consume_message(self, messages: List[MessageExt], context: AsyncConsumeContext) -> ConsumeResult:
+        """
+        使用用户提供的异步处理函数处理消息
+        
+        Args:
+            messages: 消息列表
+            context: 异步消费上下文
+            
+        Returns:
+            消费结果
+        """
+        try:
+            # 直接调用异步函数并等待结果
+            return await self.message_handler(messages)
+        except Exception as e:
+            logger.error(f"简单异步消息监听器处理失败: {e}")
+            return ConsumeResult.RECONSUME_LATER
 ```
 
 **便利函数**:
@@ -271,10 +309,25 @@ class SimpleAsyncMessageListener(AsyncMessageListener):
 # 创建同步监听器
 listener = create_message_listener(lambda msgs, ctx: ConsumeResult.SUCCESS)
 
-# 创建异步监听器  
+# 创建异步监听器 - 必须使用异步函数
+async def async_handler(messages: List[MessageExt]) -> ConsumeResult:
+    # 异步处理逻辑
+    await some_async_operation()
+    return ConsumeResult.SUCCESS
+
+async_listener = create_async_message_listener(async_handler)
+
+# 或者使用 lambda 定义异步监听器 (不推荐，代码可读性差)
+import asyncio
 async_listener = create_async_message_listener(
-    lambda msgs, ctx: asyncio_coroutine_returning(ConsumeResult.SUCCESS)
+    lambda msgs: asyncio.coroutine(lambda: ConsumeResult.SUCCESS)()
 )
+```
+
+**类型别名**:
+```python
+# 异步消息处理函数类型
+AsyncMessageHandler = Callable[[List[MessageExt]], Awaitable[ConsumeResult]]
 ```
 
 ### 4. 订阅管理器 (subscription_manager.py)
@@ -873,6 +926,48 @@ class AsyncOrderProcessor(AsyncMessageListener):
         order = json.loads(order_data.decode())
         # 处理订单逻辑...
 
+# 使用 SimpleAsyncMessageListener 的简化示例
+async def simple_async_consumer_example():
+    """使用简单异步监听器的消费者示例"""
+    
+    # 创建异步消息处理函数
+    async def message_handler(messages: List[MessageExt]) -> ConsumeResult:
+        """异步消息处理函数"""
+        for message in messages:
+            # 模拟异步处理
+            await asyncio.sleep(0.01)
+            print(f"异步处理消息: {message.body.decode('utf-8', errors='ignore')}")
+        
+        return ConsumeResult.CONSUME_SUCCESS
+    
+    # 创建消费者配置
+    config = ConsumerConfig(
+        consumer_group="simple_async_consumer",
+        namesrv_addr="localhost:9876",
+        message_model=MessageModel.CLUSTERING,
+        consume_thread_max=16,
+        pull_batch_size=16
+    )
+    
+    # 创建异步消费者并注册简单异步监听器
+    consumer = await create_async_concurrent_consumer(config.group, config.nameserver)
+    
+    # 订阅主题并使用简单异步监听器
+    await consumer.subscribe(
+        "test_topic", 
+        "*", 
+        create_async_message_listener(message_handler)
+    )
+    
+    # 启动消费者
+    await consumer.start()
+    
+    try:
+        # 运行消费者
+        await asyncio.sleep(30)
+    finally:
+        await consumer.shutdown()
+
 async def async_consumer_example():
     # 创建消费者配置
     config = ConsumerConfig(
@@ -1034,10 +1129,28 @@ await cluster_store.stop()
 
 ### 3. 监听器优化
 
-- **异步处理**: 对于耗时操作，使用AsyncMessageListener
+- **异步处理**: 对于耗时操作，使用AsyncMessageListener或SimpleAsyncMessageListener
+- **类型安全**: SimpleAsyncMessageListener强制要求异步函数，提供编译时类型检查
+- **简化接口**: 使用SimpleAsyncMessageListener时，只需实现异步处理函数，无需继承类
 - **批量处理**: 合理设置consume_batch_size，提高处理效率
 - **异常处理**: 完善的异常处理，避免消息丢失
 - **超时控制**: 避免监听器执行时间过长
+
+**异步监听器选择指南**:
+```python
+# 复杂业务逻辑，需要上下文信息 -> 继承 AsyncMessageListener
+class ComplexAsyncListener(AsyncMessageListener):
+    async def consume_message(self, messages, context):
+        # 可以访问context中的消费者组、队列信息等
+        pass
+
+# 简单异步处理，只需要消息数据 -> 使用 SimpleAsyncMessageListener
+async def simple_handler(messages: List[MessageExt]) -> ConsumeResult:
+    # 纯异步处理逻辑，不依赖上下文
+    pass
+
+listener = create_async_message_listener(simple_handler)
+```
 
 ### 4. 配置参数调优
 
@@ -1108,6 +1221,13 @@ export PYTHONPATH=/Users/admin/Project/Python/pyrocketmq/src && python -m pytest
 - ✅ 丰富的监控指标和性能统计
 - ✅ 完整的异常体系和错误处理机制
 - ✅ 便利的工厂函数和简化的使用接口
+
+**异步监听器改进**:
+- ✅ SimpleAsyncMessageListener强制要求异步函数，提供类型安全
+- ✅ 添加AsyncMessageHandler类型别名，明确异步函数签名
+- ✅ 运行时验证异步函数，防止同步函数误用
+- ✅ 简化的异步消息处理接口，便于快速开发
+- ✅ 更新示例代码和文档，提供完整的异步使用指南
 
 **架构优化**:
 - 采用分层架构设计，职责清晰分离
