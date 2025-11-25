@@ -5,7 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 # pyrocketmq导入
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pyrocketmq.broker import BrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import (
@@ -1624,7 +1624,7 @@ class OrderlyConsumer(BaseConsumer):
 
     def _acquire_consume_lock(
         self, message_queue: MessageQueue, stop_event: threading.Event
-    ) -> tuple[threading.RLock | None, bool]:
+    ) -> tuple[Optional[threading.RLock], bool]:
         """
         获取消费锁（本地锁 + 远程锁验证）。
 
