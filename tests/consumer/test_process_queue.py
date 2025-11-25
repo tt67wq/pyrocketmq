@@ -889,5 +889,166 @@ class TestProcessQueueEdgeCases(unittest.TestCase):
         self.assertEqual(self.queue.get_max_offset(), large_offset)
 
 
+class TestProcessQueueRollback(unittest.TestCase):
+    """ProcessQueue回滚功能的单元测试"""
+
+    def setUp(self) -> None:
+        """设置测试环境"""
+        self.queue = ProcessQueue()
+
+    def test_rollback_all_messages(self) -> None:
+        """测试回滚所有消息"""
+        # 创建测试消息
+        messages = []
+        for i in range(3):
+            msg = MessageExt(topic="test", body=f"message{i}".encode())
+            msg.queue_offset = i
+            messages.append(msg)
+            self.queue.add_message(msg)
+
+        # 取出所有消息
+        taken_messages = self.queue.take_messages(3)
+        self.assertEqual(len(taken_messages), 3)
+        self.assertEqual(self.queue.get_count(), 0)
+
+        # 回滚所有消息
+        rollback_count = self.queue.rollback()
+        self.assertEqual(rollback_count, 3)
+        self.assertEqual(self.queue.get_count(), 3)
+
+        # 验证消息重新回到队列
+        remaining_messages = self.queue.take_messages(10)
+        self.assertEqual(len(remaining_messages), 3)
+
+    def test_rollback_specific_messages(self) -> None:
+        """测试回滚指定的消息"""
+        # 创建测试消息
+        messages = []
+        for i in range(5):
+            msg = MessageExt(topic="test", body=f"message{i}".encode())
+            msg.queue_offset = i
+            messages.append(msg)
+            self.queue.add_message(msg)
+
+        # 取出所有消息
+        taken_messages = self.queue.take_messages(5)
+        self.assertEqual(len(taken_messages), 5)
+        self.assertEqual(self.queue.get_count(), 0)
+
+        # 只回滚offset为1, 3的消息
+        rollback_msgs = [messages[1], messages[3]]  # offset 1, 3
+        rollback_count = self.queue.rollback(rollback_msgs)
+        self.assertEqual(rollback_count, 2)
+        self.assertEqual(self.queue.get_count(), 2)
+
+        # 验证只有指定的消息回到队列
+        remaining_messages = self.queue.take_messages(10)
+        self.assertEqual(len(remaining_messages), 2)
+
+        # 检查回滚的消息offset
+        offsets = [msg.queue_offset for msg in remaining_messages]
+        self.assertIn(1, offsets)
+        self.assertIn(3, offsets)
+        self.assertNotIn(0, offsets)
+        self.assertNotIn(2, offsets)
+        self.assertNotIn(4, offsets)
+
+    def test_rollback_empty_list(self) -> None:
+        """测试回滚空列表"""
+        # 创建测试消息
+        msg = MessageExt(topic="test", body=b"test")
+        msg.queue_offset = 1
+        self.queue.add_message(msg)
+
+        # 取出消息
+        taken_messages = self.queue.take_messages(1)
+        self.assertEqual(len(taken_messages), 1)
+
+        # 回滚空列表
+        rollback_count = self.queue.rollback([])
+        self.assertEqual(rollback_count, 0)
+        self.assertEqual(self.queue.get_count(), 0)
+
+    def test_rollback_nonexistent_messages(self) -> None:
+        """测试回滚不存在的消息"""
+        # 创建测试消息
+        msg = MessageExt(topic="test", body=b"test")
+        msg.queue_offset = 1
+        self.queue.add_message(msg)
+
+        # 取出消息
+        taken_messages = self.queue.take_messages(1)
+        self.assertEqual(len(taken_messages), 1)
+
+        # 尝试回滚不存在的消息
+        nonexistent_msg = MessageExt(topic="test", body=b"nonexistent")
+        nonexistent_msg.queue_offset = 99
+        rollback_count = self.queue.rollback([nonexistent_msg])
+        self.assertEqual(rollback_count, 0)
+        self.assertEqual(self.queue.get_count(), 0)
+
+    def test_rollback_duplicate_offsets(self) -> None:
+        """测试回滚重复偏移量的消息"""
+        # 创建测试消息
+        msg = MessageExt(topic="test", body=b"test")
+        msg.queue_offset = 1
+        self.queue.add_message(msg)
+
+        # 取出消息
+        taken_messages = self.queue.take_messages(1)
+        self.assertEqual(len(taken_messages), 1)
+
+        # 尝试回滚重复偏移量的消息（相同offset）
+        rollback_msg1 = MessageExt(topic="test", body=b"rollback1")
+        rollback_msg1.queue_offset = 1
+        rollback_msg2 = MessageExt(topic="test", body=b"rollback2")
+        rollback_msg2.queue_offset = 1  # 相同的offset
+
+        rollback_count = self.queue.rollback([rollback_msg1, rollback_msg2])
+        self.assertEqual(rollback_count, 1)  # 应该只回滚1条消息
+        self.assertEqual(self.queue.get_count(), 1)
+
+    def test_rollback_message_order(self) -> None:
+        """测试回滚消息的顺序性"""
+        # 创建测试消息
+        messages = []
+        for i in range(3):
+            msg = MessageExt(topic="test", body=f"message{i}".encode())
+            msg.queue_offset = 2 - i  # 降序: 2, 1, 0
+            messages.append(msg)
+            self.queue.add_message(msg)
+
+        # 取出所有消息
+        taken_messages = self.queue.take_messages(3)
+        self.assertEqual(len(taken_messages), 3)
+
+        # 回滚所有消息
+        rollback_count = self.queue.rollback(taken_messages)
+        self.assertEqual(rollback_count, 3)
+
+        # 验证消息回到队列后仍保持正确的顺序（升序）
+        remaining_messages = self.queue.take_messages(10)
+        self.assertEqual(len(remaining_messages), 3)
+
+        # 验证offset顺序：0, 1, 2
+        offsets = [msg.queue_offset for msg in remaining_messages]
+        self.assertEqual(offsets, [0, 1, 2])
+
+    def test_rollback_without_messages_in_queue(self) -> None:
+        """测试在没有任何消息的情况下回滚"""
+        # 不调用take_messages，直接尝试回滚
+        rollback_count = self.queue.rollback()
+        self.assertEqual(rollback_count, 0)
+
+        rollback_count = self.queue.rollback([])
+        self.assertEqual(rollback_count, 0)
+
+        # 尝试回滚不存在的消息
+        msg = MessageExt(topic="test", body=b"test")
+        msg.queue_offset = 1
+        rollback_count = self.queue.rollback([msg])
+        self.assertEqual(rollback_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

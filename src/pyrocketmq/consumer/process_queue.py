@@ -636,12 +636,15 @@ class ProcessQueue:
 
         return max_offset
 
-    def rollback(self) -> int:
+    def rollback(self, msgs: list[MessageExt] | None = None) -> int:
         """
         回滚正在处理的消息，将它们重新放回队列头部
 
         这个方法用于顺序消费处理失败时，将已取出但未成功处理的消息
         重新放回待处理队列，以便后续重新处理。
+
+        Args:
+            msgs: 要回滚的特定消息列表。如果为None，则回滚所有待提交区的消息
 
         Returns:
             int: 回滚的消息数量，如果没有消息则返回0
@@ -649,6 +652,20 @@ class ProcessQueue:
         if not self._consuming_orderly_msgs:
             return 0
 
+        # 如果没有指定消息，回滚所有待提交区的消息
+        if msgs is None:
+            return self._rollback_all()
+
+        # 选择性回滚指定的消息
+        return self._rollback_specific_messages(msgs)
+
+    def _rollback_all(self) -> int:
+        """
+        回滚所有待提交区的消息
+
+        Returns:
+            int: 回滚的消息数量
+        """
         rollback_count = 0
 
         # 使用写锁保证线程安全
@@ -683,5 +700,76 @@ class ProcessQueue:
 
             # 清空待提交区
             self._consuming_orderly_msgs.clear()
+
+        return rollback_count
+
+    def _rollback_specific_messages(self, msgs: list[MessageExt]) -> int:
+        """
+        回滚待提交区中指定的消息
+
+        Args:
+            msgs: 要回滚的消息列表
+
+        Returns:
+            int: 实际回滚的消息数量
+        """
+        if not msgs:
+            return 0
+
+        rollback_count = 0
+
+        # 使用写锁保证线程安全
+        with self._lock:
+            # 构建要回滚的消息的queue_offset集合
+            rollback_offsets = set()
+            for msg in msgs:
+                if msg.queue_offset is not None:
+                    rollback_offsets.add(msg.queue_offset)
+
+            # 找出要回滚的队列条目
+            entries_to_rollback: list[QueueEntry] = []
+            remaining_consuming_msgs: list[QueueEntry] = []
+
+            for entry in self._consuming_orderly_msgs:
+                if (
+                    not entry.is_tombstone
+                    and entry.message
+                    and entry.message.queue_offset in rollback_offsets
+                ):
+                    entries_to_rollback.append(entry)
+                    rollback_count += 1
+                else:
+                    # 保留在待提交区中的消息
+                    remaining_consuming_msgs.append(entry)
+
+            # 如果没有找到要回滚的消息，直接返回
+            if not entries_to_rollback:
+                return 0
+
+            # 按queue_offset排序要回滚的消息
+            entries_to_rollback.sort(key=lambda x: x.message_offset)
+
+            # 重新构建_entries列表：回滚消息 + 原有entries
+            self._entries = entries_to_rollback + self._entries
+
+            # 恢复计数和大小统计
+            for entry in entries_to_rollback:
+                if not entry.is_tombstone and entry.message:
+                    self._count += 1
+                    self._total_size += len(entry.message.body) if entry.message else 0
+
+            # 重新构建偏移量到索引的映射
+            self._offset_to_index.clear()
+            for index, entry in enumerate(self._entries):
+                if not entry.is_tombstone and entry.message:
+                    offset = entry.message.queue_offset
+                    if offset is not None:
+                        self._offset_to_index[offset] = index
+
+            # 重新计算偏移量范围
+            self._update_offset_ranges()
+
+            # 更新待提交区，移除已回滚的消息
+            self._consuming_orderly_msgs = remaining_consuming_msgs
 
         return rollback_count
