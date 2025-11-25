@@ -17,23 +17,37 @@ from pyrocketmq.model import (
 )
 
 
+# 颜色代码定义
+class Colors:
+    RED = "\033[91m"  # 错误/失败信息 - 红色
+    GREEN = "\033[92m"  # 成功信息 - 绿色
+    YELLOW = "\033[93m"  # 警告信息 - 黄色
+    BLUE = "\033[94m"  # 消息信息 - 蓝色
+    MAGENTA = "\033[95m"  # 标签信息 - 洋红色
+    CYAN = "\033[96m"  # 键值信息 - 青色
+    WHITE = "\033[97m"  # 标题信息 - 白色
+    BOLD = "\033[1m"  # 粗体
+    END = "\033[0m"  # 结束颜色
+
+
 def message_listener(messages: list[MessageExt]) -> ConsumeResult:
     import random
 
-    # 概率返回RECONSUME_LATER，模拟消费失败需要重试的场景
     if random.randint(1, 6) == 1:
-        print(f"模拟消费失败，返回RECONSUME_LATER进行重试，消息数量: {len(messages)}")
-        return ConsumeResult.RECONSUME_LATER
+        print(
+            f"{Colors.RED}{Colors.BOLD}⚠️  模拟消费失败，返回SUSPEND_CURRENT_QUEUE_A_MOMENT进行重试，消息数量: {len(messages)}{Colors.END}"
+        )
+        return ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
 
     for message in messages:
         print(
-            "【收到消息：】",
-            str(message.body),
-            "tags:",
-            message.get_tags(),
-            "keys:",
-            message.get_keys(),
+            f"{Colors.WHITE}{Colors.BOLD}【收到消息：】{Colors.END} "
+            f"{Colors.BLUE}{message.body.decode('utf-8', errors='ignore')}{Colors.END} "
+            f"{Colors.MAGENTA}tags: {message.get_tags()}{Colors.END} "
+            f"{Colors.CYAN}keys: {message.get_keys()}{Colors.END}"
         )
+
+    print(f"{Colors.GREEN}✅ 消息处理成功，数量: {len(messages)}{Colors.END}")
     return ConsumeResult.SUCCESS
 
 

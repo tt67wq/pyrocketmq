@@ -1518,6 +1518,7 @@ class OrderlyConsumer(BaseConsumer):
                         commit_offset=commit_offset > 0 and is_master
                     ),
                     commit_offset=commit_offset,
+                    timeout=30,
                 )
 
                 if result.messages:
