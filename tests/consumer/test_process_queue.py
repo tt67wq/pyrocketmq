@@ -1049,6 +1049,48 @@ class TestProcessQueueRollback(unittest.TestCase):
         rollback_count = self.queue.rollback([msg])
         self.assertEqual(rollback_count, 0)
 
+    def test_take_messages_maintains_ordering_with_additions(self) -> None:
+        """测试多次take_messages与添加新消息后的顺序性"""
+        # 添加初始消息 offset [5, 6, 7]
+        messages = []
+        for offset in [5, 6, 7]:
+            msg = MessageExt(topic="test", body=f"message{offset}".encode())
+            msg.queue_offset = offset
+            messages.append(msg)
+            self.queue.add_message(msg)
+
+        # 第一次 take_messages
+        taken1 = self.queue.take_messages(2)
+        self.assertEqual(len(taken1), 2)
+        self.assertEqual(len(self.queue._consuming_orderly_msgs), 2)
+
+        # 检查第一次后的顺序性
+        offsets1 = [entry.queue_offset for entry in self.queue._consuming_orderly_msgs]
+        self.assertEqual(offsets1, [5, 6])
+
+        # 添加新消息 offset [0, 1, 2]
+        for offset in [0, 1, 2]:
+            msg = MessageExt(topic="test", body=f"message{offset}".encode())
+            msg.queue_offset = offset
+            self.queue.add_message(msg)
+
+        # 第二次 take_messages
+        taken2 = self.queue.take_messages(3)
+        self.assertEqual(len(taken2), 3)
+        self.assertEqual(len(self.queue._consuming_orderly_msgs), 5)
+
+        # 检查最终的顺序性
+        final_offsets = [
+            entry.queue_offset for entry in self.queue._consuming_orderly_msgs
+        ]
+        expected_offsets = [0, 1, 2, 5, 6]  # 应该是升序的
+        self.assertEqual(final_offsets, expected_offsets)
+
+        # 验证消息内容
+        for i, entry in enumerate(self.queue._consuming_orderly_msgs):
+            expected_body = f"message{expected_offsets[i]}".encode()
+            self.assertEqual(entry.message.body, expected_body)
+
 
 if __name__ == "__main__":
     unittest.main()

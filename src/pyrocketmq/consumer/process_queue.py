@@ -575,6 +575,7 @@ class ProcessQueue:
             return []
 
         taken_messages: list[MessageExt] = []
+        newly_taken_entries: list[QueueEntry] = []
         taken_count = 0
 
         # 使用写锁保证线程安全
@@ -589,7 +590,7 @@ class ProcessQueue:
 
                 if not entry.is_tombstone and entry.message:
                     taken_messages.append(entry.message)
-                    self._consuming_orderly_msgs.append(entry)
+                    newly_taken_entries.append(entry)
                     taken_count += 1
                 else:
                     # 保留墓碑标记
@@ -598,7 +599,7 @@ class ProcessQueue:
             # 更新_entries列表
             if taken_count > 0:
                 # 更新计数和大小统计
-                for entry in self._consuming_orderly_msgs[-taken_count:]:
+                for entry in newly_taken_entries:
                     if not entry.is_tombstone:
                         self._count -= 1
                         self._total_size -= (
@@ -608,6 +609,12 @@ class ProcessQueue:
                 self._entries = remaining_entries
                 # 重新计算偏移量范围
                 self._update_offset_ranges()
+
+                # 将新取出的消息添加到_consuming_orderly_msgs并保持有序性
+                self._consuming_orderly_msgs.extend(newly_taken_entries)
+
+                # 按 queue_offset 重新排序整个 _consuming_orderly_msgs
+                self._consuming_orderly_msgs.sort(key=lambda entry: entry.queue_offset)
 
         return taken_messages
 
