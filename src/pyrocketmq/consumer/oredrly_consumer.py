@@ -1652,6 +1652,21 @@ class OrderlyConsumer(BaseConsumer):
             return queue_lock, False
 
         # 本地锁持有成功，检查远程锁是否需要重新获取
+        # 广播模式下不需要远程锁，每个消费者独立处理所有消息
+        if self._config.message_model == MessageModel.BROADCASTING:
+            logger.debug(
+                f"Broadcast mode - skipping remote lock for queue {message_queue}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "operation": "consume_messages_loop",
+                    "message_model": "BROADCASTING",
+                },
+            )
+            return queue_lock, True
+
+        # 集群模式下需要远程锁来保证消息的顺序性
         if not self._is_remote_lock_valid(message_queue):
             # 远程锁已过期或不存在，需要重新获取
             if not self._lock_remote_queue(message_queue):
@@ -1927,10 +1942,6 @@ class OrderlyConsumer(BaseConsumer):
                 # 释放本地锁
                 if queue_lock is not None and queue_lock.locked():
                     queue_lock.release()
-
-    def _take_messages(self) -> list[MessageExt] | None:
-        """ """
-        pass
 
     def _process_messages_with_timing(
         self, messages: list[MessageExt], message_queue: MessageQueue
