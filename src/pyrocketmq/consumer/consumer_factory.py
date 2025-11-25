@@ -211,7 +211,7 @@ def create_concurrent_consumer(
     return create_consumer(consumer_group, namesrv_addr, **kwargs)
 
 
-def create_async_consumer(
+def create_async_concurrent_consumer(
     consumer_group: str,
     namesrv_addr: str,
     **kwargs: Any,
@@ -236,7 +236,7 @@ def create_async_consumer(
 
     Examples:
         >>> # 基本使用
-        >>> from pyrocketmq.consumer import create_async_consumer
+        >>> from pyrocketmq.consumer import create_async_concurrent_consumer
         >>> from pyrocketmq.consumer.listener import AsyncMessageListenerConcurrently, ConsumeResult
         >>> import asyncio
         >>>
@@ -247,7 +247,7 @@ def create_async_consumer(
         ...         return ConsumeResult.CONSUME_SUCCESS
         >>>
         >>> async def main():
-        ...     consumer = await create_async_consumer("my_group", "localhost:9876", message_listener=MyAsyncListener())
+        ...     consumer = await create_async_concurrent_consumer("my_group", "localhost:9876", message_listener=MyAsyncListener())
         ...     await consumer.start()
         ...     await consumer.subscribe("test_topic", "*")
         ...     # 保持消费者运行
@@ -257,7 +257,7 @@ def create_async_consumer(
         >>> asyncio.run(main())
 
         >>> # 使用自定义配置
-        >>> consumer = await create_async_consumer(
+        >>> consumer = await create_async_concurrent_consumer(
         ...     "my_group",
         ...     "localhost:9876",
         ...     message_listener=MyAsyncListener(),
@@ -296,3 +296,35 @@ def create_async_consumer(
             exc_info=True,
         )
         raise
+
+
+def create_async_consumer(
+    consumer_group: str,
+    namesrv_addr: str,
+    **kwargs: Any,
+) -> AsyncConcurrentConsumer:
+    """创建异步并发消费者的别名函数（已废弃，请使用create_async_concurrent_consumer）。
+
+    这是为了向后兼容性而提供的别名函数，功能与create_async_concurrent_consumer完全相同。
+    建议使用新的函数名create_async_concurrent_consumer。
+
+    Args:
+        consumer_group (str): 消费者组名称，用于标识属于同一组的消费者实例
+        namesrv_addr (str): NameServer地址，格式为"host:port"，用于获取路由信息
+        **kwargs (Any): 其他可选配置参数，包括consume_thread_max、pull_batch_size等，
+                       具体参数参考ConsumerConfig类定义
+
+    Returns:
+        AsyncConcurrentConsumer: 创建的异步并发消费者实例，用于异步消息消费
+
+    Deprecated:
+        此函数已被废弃，请使用create_async_concurrent_consumer替代。
+    """
+    import warnings
+
+    warnings.warn(
+        "create_async_consumer is deprecated, use create_async_concurrent_consumer instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return create_async_concurrent_consumer(consumer_group, namesrv_addr, **kwargs)

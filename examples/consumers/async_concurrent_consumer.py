@@ -10,7 +10,7 @@ from config_loader import load_config, parse_config_file_path
 
 import pyrocketmq.logging
 from pyrocketmq.consumer import (
-    create_async_consumer,
+    create_async_concurrent_consumer,
     create_async_message_listener,
 )
 from pyrocketmq.logging import LoggingConfig
@@ -66,7 +66,7 @@ async def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     # 创建异步并发消费者
-    consumer = create_async_consumer(config.group, config.nameserver)
+    consumer = create_async_concurrent_consumer(config.group, config.nameserver)
 
     # 创建标签选择器，支持配置多个标签
     if config.tag:

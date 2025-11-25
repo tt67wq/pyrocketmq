@@ -89,7 +89,8 @@ from .consume_from_where_manager import ConsumeFromWhereManager
 
 # ==================== Consumer便利工厂函数 ====================
 from .consumer_factory import (
-    create_async_consumer,
+    create_async_concurrent_consumer,
+    create_async_consumer,  # 向后兼容
     create_concurrent_consumer,
     create_consumer,
     create_orderly_consumer,
@@ -185,7 +186,8 @@ __all__ = [
     # Consumer便利工厂函数
     "create_consumer",
     "create_concurrent_consumer",
-    "create_async_consumer",
+    "create_async_concurrent_consumer",
+    "create_async_consumer",  # 向后兼容
     "create_orderly_consumer",
     # 偏移量存储
     "OffsetStore",
