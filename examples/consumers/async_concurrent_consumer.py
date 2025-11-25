@@ -6,9 +6,11 @@ import asyncio
 import sys
 from types import FrameType
 
+from config_loader import load_config, parse_config_file_path
+
 import pyrocketmq.logging
 from pyrocketmq.consumer import (
-    create_async_concurrent_consumer,
+    create_async_consumer,
     create_async_message_listener,
 )
 from pyrocketmq.logging import LoggingConfig
@@ -36,6 +38,15 @@ def message_listener(messages: list[MessageExt]) -> ConsumeResult:
 
 
 async def main():
+    # 从命令行参数解析配置文件路径
+    config_path = parse_config_file_path()
+    config = load_config(config_path)
+    print(f"已加载配置文件: {config_path}")
+    print(
+        f"Topic: {config.topic}, Group: {config.group}, Nameserver: {config.nameserver}"
+    )
+
+    # 设置日志
     pyrocketmq.logging.setup_logging(
         LoggingConfig(level="INFO", file_path="async_consumer.log")
     )
@@ -54,13 +65,22 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    consumer = create_async_concurrent_consumer(
-        "GID_POETRY", "d1-dmq-namesrv.shizhuang-inc.net:31110"
-    )
+    # 创建异步并发消费者
+    consumer = create_async_consumer(config.group, config.nameserver)
 
+    # 创建标签选择器，支持配置多个标签
+    if config.tag:
+        selector = create_tag_selector(config.tag)
+    else:
+        # 如果没有配置标签，订阅所有消息
+        from pyrocketmq.model import SUBSCRIBE_ALL
+
+        selector = SUBSCRIBE_ALL
+
+    # 订阅主题
     await consumer.subscribe(
-        "test_im_015",
-        create_tag_selector("TAG1||TAG2"),
+        config.topic,
+        selector,
         create_async_message_listener(message_listener),
     )
 

@@ -5,7 +5,10 @@
 from config_loader import load_config, parse_config_file_path
 
 import pyrocketmq.logging
-from pyrocketmq.consumer import create_concurrent_consumer, create_message_listener
+from pyrocketmq.consumer import (
+    create_message_listener,
+    create_orderly_consumer,
+)
 from pyrocketmq.logging import LoggingConfig
 from pyrocketmq.model import (
     ConsumeResult,
@@ -48,8 +51,8 @@ def main():
         LoggingConfig(level="INFO", json_output=False, file_path="consumer.log")
     )
 
-    # 创建集群模式的并发消费者
-    consumer = create_concurrent_consumer(config.group, config.nameserver)
+    # 创建集群模式的顺序消费者
+    consumer = create_orderly_consumer(config.group, config.nameserver)
 
     # 创建标签选择器，支持配置多个标签
     if config.tag:
@@ -73,8 +76,6 @@ def main():
         consumer.start()
         print("消费者启动成功，开始处理消息...")
 
-        # 保持主线程运行
-        print("消费者正在运行，按 Ctrl+C 停止...")
         while True:
             import time
 
@@ -87,11 +88,7 @@ def main():
         print(f"消费者运行异常: {e}")
 
     finally:
-        try:
-            consumer.shutdown()
-            print("消费者已关闭")
-        except Exception as e:
-            print(f"关闭消费者时发生异常: {e}")
+        consumer.shutdown()
 
 
 if __name__ == "__main__":
