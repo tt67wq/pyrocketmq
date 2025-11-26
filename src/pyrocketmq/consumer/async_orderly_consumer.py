@@ -55,7 +55,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         self.logger = get_logger(__name__)
         # 顺序消费特有字段
-        self._queue_locks: dict[str, asyncio.Lock] = {}  # 队列级锁，确保顺序消费
+        self._queue_locks: dict[
+            MessageQueue, asyncio.Semaphore
+        ] = {}  # 队列级锁信号量，确保顺序消费
         self._consume_tasks: dict[str, asyncio.Task[None]] = {}  # 队列消费任务
         self._pull_tasks: dict[str, asyncio.Task[None]] = {}  # 队列拉取任务
 
@@ -445,6 +447,221 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 self._config.consumer_group
             )
 
+    async def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
+        """获取指定消息队列的锁信号量
+
+        使用双重检查锁定模式来避免竞争条件
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            asyncio.Semaphore: 该队列的异步锁信号量对象（值为1的信号量）
+        """
+        # 首先进行无锁检查，提高性能
+        if message_queue in self._queue_locks:
+            return self._queue_locks[message_queue]
+
+        # 由于字典操作本身是原子的，且我们在单线程事件循环中运行，
+        # 不需要额外的锁保护
+        if message_queue not in self._queue_locks:
+            self._queue_locks[message_queue] = asyncio.Semaphore(1)
+
+        return self._queue_locks[message_queue]
+
+    async def _is_locked(self, message_queue: MessageQueue) -> bool:
+        """检查指定队列是否已锁定
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            bool: True如果队列已锁定，False如果队列未锁定
+        """
+        if message_queue not in self._queue_locks:
+            return False
+
+        # asyncio.Semaphore有locked()方法，可以直接检查状态
+        return self._queue_locks[message_queue].locked()
+
+    async def _is_remote_lock_valid(self, message_queue: MessageQueue) -> bool:
+        """检查指定队列的远程锁是否仍然有效
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            True如果远程锁仍然有效，False如果已过期或不存在
+        """
+        async with self._remote_lock_cache_lock:
+            expiry_time = self._remote_lock_cache.get(message_queue)
+            if expiry_time is None:
+                return False
+
+            current_time = time.time()
+            return current_time < expiry_time
+
+    async def _set_remote_lock_expiry(self, message_queue: MessageQueue) -> None:
+        """设置指定队列的远程锁过期时间
+
+        Args:
+            message_queue: 消息队列
+        """
+        async with self._remote_lock_cache_lock:
+            expiry_time = time.time() + self._remote_lock_expire_time
+            self._remote_lock_cache[message_queue] = expiry_time
+
+    async def _invalidate_remote_lock(self, message_queue: MessageQueue) -> None:
+        """使指定队列的远程锁失效
+
+        Args:
+            message_queue: 消息队列
+        """
+        async with self._remote_lock_cache_lock:
+            self._remote_lock_cache.pop(message_queue, None)
+
+    async def _lock_remote_queue(self, message_queue: MessageQueue) -> bool:
+        """尝试远程锁定指定队列
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            True如果锁定成功，False如果锁定失败
+        """
+        try:
+            # 获取队列对应的Broker地址
+            broker_address: (
+                str | None
+            ) = await self._nameserver_manager.get_broker_address(
+                message_queue.broker_name
+            )
+            if not broker_address:
+                self.logger.warning(
+                    f"Broker address not found for queue: {message_queue}"
+                )
+                return False
+
+            connection_pool = await self._broker_manager.must_connection_pool(
+                broker_address
+            )
+
+            # 创建异步broker客户端
+            async with connection_pool.get_connection() as conn:
+                broker_client = AsyncBrokerClient(conn)
+
+                # 尝试锁定队列
+                locked_queues = await broker_client.lock_batch_mq(
+                    consumer_group=self._config.consumer_group,
+                    client_id=self._config.client_id,
+                    mqs=[message_queue],
+                )
+
+                # 检查锁定是否成功
+                if locked_queues and len(locked_queues) > 0:
+                    # 成功获取远程锁，设置过期时间
+                    await self._set_remote_lock_expiry(message_queue)
+                    self.logger.debug(
+                        f"Successfully locked remote queue: {message_queue}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "client_id": self._config.client_id,
+                            "queue": str(message_queue),
+                            "operation": "lock_remote_queue",
+                            "expire_seconds": self._remote_lock_expire_time,
+                        },
+                    )
+                    return True
+                else:
+                    self.logger.warning(
+                        f"Failed to lock remote queue: {message_queue}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "client_id": self._config.client_id,
+                            "queue": str(message_queue),
+                            "operation": "lock_remote_queue",
+                        },
+                    )
+                    return False
+
+        except Exception as e:
+            self.logger.error(
+                f"Exception occurred while locking remote queue {message_queue}: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "error": str(e),
+                    "operation": "lock_remote_queue",
+                },
+                exc_info=True,
+            )
+            return False
+
+    async def _unlock_remote_queue(self, message_queue: MessageQueue) -> bool:
+        """尝试远程解锁指定队列
+
+        Args:
+            message_queue: 消息队列
+
+        Returns:
+            True如果解锁成功，False如果解锁失败
+        """
+        try:
+            # 获取队列对应的Broker地址
+            broker_address: (
+                str | None
+            ) = await self._nameserver_manager.get_broker_address(
+                message_queue.broker_name
+            )
+            if not broker_address:
+                self.logger.warning(
+                    f"Broker address not found for queue: {message_queue}"
+                )
+                return False
+
+            connection_pool = await self._broker_manager.must_connection_pool(
+                broker_address
+            )
+
+            async with connection_pool.get_connection() as conn:
+                broker_client = AsyncBrokerClient(conn)
+
+                # 尝试解锁队列
+                await broker_client.unlock_batch_mq(
+                    consumer_group=self._config.consumer_group,
+                    client_id=self._config.client_id,
+                    mqs=[message_queue],
+                )
+
+                # 清除远程锁缓存
+                await self._invalidate_remote_lock(message_queue)
+
+                self.logger.debug(
+                    f"Successfully unlocked remote queue: {message_queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "client_id": self._config.client_id,
+                        "queue": str(message_queue),
+                        "operation": "unlock_remote_queue",
+                    },
+                )
+                return True
+
+        except Exception as e:
+            self.logger.error(
+                f"Exception occurred while unlocking remote queue {message_queue}: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "error": str(e),
+                    "operation": "unlock_remote_queue",
+                },
+                exc_info=True,
+            )
+            return False
+
     async def _cleanup_on_start_failure(self) -> None:
         """异步启动失败时的资源清理操作。
 
@@ -662,7 +879,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         }
 
         # 合并顺序消费统计信息
-        stats.update(self._orderly_stats)
+        stats.update(self._stats)
 
         # 添加队列相关信息
         async with self._assigned_queues_lock:
