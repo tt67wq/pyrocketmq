@@ -1137,7 +1137,6 @@ class OrderlyConsumer(BaseConsumer):
             has_messages: 上次拉取是否获取到消息，默认为True
             stop_event: 停止事件，用于支持优雅关闭，默认为None
         """
-        # TODO: 如果msg_cache中消息体积太大，需要调整拉取间隔
         if self._config.pull_interval > 0:
             if has_messages:
                 # 拉取到消息，不休眠继续拉取
@@ -1205,115 +1204,6 @@ class OrderlyConsumer(BaseConsumer):
 
         process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
         _ = process_queue.add_batch_messages(messages)
-
-    def _is_message_cached(self, queue: MessageQueue, queue_offset: int) -> bool:
-        """检查指定偏移量的消息是否已在ProcessQueue缓存中。
-
-        使用ProcessQueue的高效查找机制检查消息是否已存在，避免重复缓存。
-
-        Args:
-            queue: 消息队列
-            queue_offset: 要检查的消息偏移量
-
-        Returns:
-            bool: True表示消息已存在，False表示不存在
-        """
-        with self._cache_lock:
-            if queue not in self._msg_cache:
-                return False
-
-        # 使用ProcessQueue的contains_message方法
-        process_queue = self._msg_cache[queue]
-        return process_queue.contains_message(queue_offset)
-
-    def _remove_messages_from_cache(
-        self, queue: MessageQueue, messages: list[MessageExt]
-    ) -> int | None:
-        """
-        从ProcessQueue缓存中移除已处理的消息，并返回当前队列的最小offset
-
-        此方法用于从ProcessQueue中移除已经成功处理的消息，释放内存空间。
-        ProcessQueue提供高效的移除操作，确保在大量消息缓存中仍能保持良好的性能。
-        移除完成后直接返回当前缓存中最小消息的offset，避免额外的查询操作。
-
-        Args:
-            queue (MessageQueue): 目标消息队列
-            messages (list[MessageExt]): 要移除的消息列表，消息应包含有效的queue_offset
-
-        Returns:
-            int | None: 移除完成后缓存中最小消息的offset，如果缓存为空则返回None
-
-        Note:
-            - 使用ProcessQueue内置的线程安全机制
-            - ProcessQueue提供高效的remove_message操作
-            - 只移除完全匹配的消息（queue_offset相同），避免误删
-            - 自动过滤空消息列表，减少不必要的操作
-            - 如果消息未找到，静默跳过，不影响其他消息的处理
-            - 移除完成后直接返回最小offset，提高性能
-
-        Performance:
-            - 时间复杂度: O(m * log n)，其中m是要移除的消息数，n是缓存中的消息数
-            - 空间复杂度: O(1)，额外空间仅用于临时变量
-
-        Raises:
-            无异常抛出，确保消息移除流程的稳定性
-
-        See Also:
-            _add_messages_to_cache: 向缓存中添加消息
-            _update_offset_from_cache: 更新消费偏移量（独立方法）
-            _get_or_create_process_queue: 获取或创建ProcessQueue
-        """
-        process_queue = self._get_or_create_process_queue(queue)
-
-        if not messages:
-            # 如果没有消息要移除，直接返回当前最小offset
-            return process_queue.get_min_offset()
-
-        _ = process_queue.remove_batch_messages(
-            [x.queue_offset for x in messages if x.queue_offset is not None]
-        )
-
-        # 返回移除完成后当前缓存中的最小offset
-        return process_queue.get_min_offset()
-
-    def _update_offset_from_cache(self, queue: MessageQueue) -> None:
-        """从ProcessQueue缓存中获取最小offset并更新到offset_store"""
-        with self._cache_lock:
-            if queue not in self._msg_cache:
-                # ProcessQueue不存在，不需要更新
-                return
-
-        process_queue: ProcessQueue = self._msg_cache[queue]
-
-        # 获取缓存中最小的offset
-        min_offset: int | None = process_queue.get_min_offset()
-        if min_offset is None:
-            # 缓存为空，不需要更新
-            return
-
-        # 更新到offset_store
-        try:
-            self._offset_store.update_offset(queue, min_offset)
-            logger.debug(
-                f"Updated offset from cache: {min_offset}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": queue.topic,
-                    "queue_id": queue.queue_id,
-                    "offset": min_offset,
-                    "cache_stats": process_queue.get_stats(),
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to update offset from cache: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": queue.topic,
-                    "queue_id": queue.queue_id,
-                    "error": str(e),
-                },
-            )
 
     def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
         """获取或初始化消费偏移量。

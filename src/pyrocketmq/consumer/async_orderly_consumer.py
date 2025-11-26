@@ -30,7 +30,7 @@ from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.config import ConsumerConfig
 from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import MessageModel, MessageQueue
+from pyrocketmq.model import MessageExt, MessageModel, MessageQueue
 from pyrocketmq.remote import AsyncConnectionPool
 
 
@@ -885,6 +885,84 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     current_offset = 0
 
         return current_offset
+
+    async def _apply_pull_interval(
+        self, has_messages: bool = True, stop_event: asyncio.Event | None = None
+    ) -> None:
+        """应用智能拉取间隔控制。
+
+        根据上次拉取结果智能调整拉取间隔：
+        - 如果上次拉取到了消息，立即继续拉取以提高消费速度
+        - 如果上次拉取为空，则休眠配置的间隔时间以避免空轮询
+
+        Args:
+            has_messages: 上次拉取是否获取到消息，默认为True
+            stop_event: 停止事件，用于支持优雅关闭，默认为None
+        """
+        if self._config.pull_interval > 0:
+            if has_messages:
+                # 拉取到消息，不休眠继续拉取
+                self.logger.debug(
+                    "Messages pulled, continuing without interval",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                    },
+                )
+            else:
+                # 拉取为空，休眠配置的间隔时间，使用可中断等待
+                sleep_time: float = self._config.pull_interval / 1000.0
+                self.logger.debug(
+                    f"No messages pulled, sleeping for {sleep_time}s",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "sleep_time": sleep_time,
+                    },
+                )
+                if stop_event:
+                    try:
+                        await asyncio.wait_for(stop_event.wait(), timeout=sleep_time)
+                    except asyncio.TimeoutError:
+                        pass  # 超时是正常的，继续拉取
+                else:
+                    await asyncio.sleep(sleep_time)
+
+    async def _add_messages_to_cache(
+        self, queue: MessageQueue, messages: list[MessageExt]
+    ) -> None:
+        """将消息添加到ProcessQueue缓存中
+
+        此方法用于将从Broker拉取的消息添加到ProcessQueue中，为后续消费做准备。
+        ProcessQueue自动保持按queue_offset排序，并提供高效的插入、查询和统计功能。
+
+        Args:
+            queue: 目标消息队列
+            messages: 要添加的消息列表，消息应包含有效的queue_offset
+
+        Note:
+            - 使用ProcessQueue内置的线程安全机制
+            - 按queue_offset升序排列，方便后续按序消费
+            - 自动过滤空消息列表，避免不必要的操作
+            - 自动去重，避免重复缓存相同偏移量的消息
+            - 自动检查缓存限制（数量和大小）
+
+        See Also:
+            _get_or_create_process_queue: 获取或创建ProcessQueue
+        """
+        if not messages:
+            return
+
+        process_queue: ProcessQueue = await self._get_or_create_process_queue(queue)
+        _ = process_queue.add_batch_messages(messages)
+
+        self.logger.debug(
+            f"Added {len(messages)} messages to cache for queue: {queue}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": queue.topic,
+                "queue_id": queue.queue_id,
+                "message_count": len(messages),
+            },
+        )
 
     async def _cleanup_on_start_failure(self) -> None:
         """异步启动失败时的资源清理操作。
