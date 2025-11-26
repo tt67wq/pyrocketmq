@@ -89,6 +89,8 @@ class ConcurrentConsumer(BaseConsumer):
         >>> consumer.start()
     """
 
+    # ==================== 构造函数和属性初始化 ====================
+
     def __init__(self, config: ConsumerConfig) -> None:
         """
         初始化并发消费者
@@ -143,6 +145,16 @@ class ConcurrentConsumer(BaseConsumer):
                 "pull_batch_size": self._config.pull_batch_size,
             },
         )
+
+    # ==================== 生命周期管理模块 ====================
+    """
+    生命周期管理模块负责消费者的启动、停止等核心生命周期操作。
+    包括线程池创建、资源初始化、优雅关闭等功能。
+    主要方法:
+    - start(): 启动消费者，初始化所有组件和任务
+    - shutdown(): 优雅关闭消费者，清理资源并持久化状态
+    - _cleanup_on_start_failure(): 启动失败时的资源清理
+    """
 
     def start(self) -> None:
         """启动并发消费者。
@@ -330,7 +342,19 @@ class ConcurrentConsumer(BaseConsumer):
                     context={"consumer_group": self._config.consumer_group},
                 ) from e
 
-    # ==================== 内部方法：重平衡管理 ====================
+    # ==================== 重平衡管理模块 ====================
+    """
+    重平衡管理模块负责消费者组内队列的动态分配和调整。
+    当消费者加入或离开时，会触发重平衡过程，重新分配队列。
+    主要方法:
+    - _do_rebalance(): 执行完整的重平衡流程
+    - _allocate_queues(): 根据策略分配队列
+    - _update_assigned_queues(): 更新分配的队列
+    - _start_rebalance_task(): 启动定期重平衡任务
+    - _rebalance_loop(): 重平衡循环
+    - _find_consumer_list(): 查找消费者组列表
+    - _trigger_rebalance(): 触发重平衡
+    """
 
     def _pre_rebalance_check(self) -> bool:
         """执行重平衡前置检查。
@@ -671,7 +695,88 @@ class ConcurrentConsumer(BaseConsumer):
             # 唤醒重平衡循环，使其立即执行重平衡
             self._rebalance_event.set()
 
-    # ==================== 内部方法：消息拉取 ====================
+    def _start_rebalance_task(self) -> None:
+        """
+        启动定期重平衡任务
+        """
+        self._rebalance_thread = threading.Thread(
+            target=self._rebalance_loop,
+            name=f"{self._config.consumer_group}-rebalance-thread",
+            daemon=True,
+        )
+        self._rebalance_thread.start()
+
+    def _rebalance_loop(self) -> None:
+        """
+        定期重平衡循环
+        """
+        while self._is_running:
+            try:
+                # 使用Event.wait()替代time.sleep()
+                if self._rebalance_event.wait(timeout=self._rebalance_interval):
+                    # Event被触发，检查是否需要退出
+                    if not self._is_running:
+                        break
+                    # 重置事件状态
+                    self._rebalance_event.clear()
+
+                if self._is_running:
+                    self._do_rebalance()
+
+            except Exception as e:
+                logger.error(
+                    f"Error in rebalance loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+    def _on_notify_consumer_ids_changed(
+        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+    ) -> None:
+        logger.info("Received notification of consumer IDs changed")
+        self._do_rebalance()
+
+    def _find_consumer_list(self, topic: str) -> list[str]:
+        """
+        查找消费者列表
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            消费者列表
+        """
+
+        addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
+        if not addresses:
+            logger.warning(
+                "No broker addresses found for topic", extra={"topic": topic}
+            )
+            return []
+
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
+        with pool.get_connection(usage="查找消费者列表") as conn:
+            return BrokerClient(conn).get_consumers_by_group(
+                self._config.consumer_group
+            )
+
+    # ==================== 消息拉取管理模块 ====================
+    """
+    消息拉取管理模块负责从Broker持续拉取消息并处理。
+    每个队列都有独立的拉取线程，支持流量控制和智能间隔调整。
+    主要方法:
+    - _pull_messages_loop(): 持续拉取消息的核心循环
+    - _perform_single_pull(): 执行单次拉取操作
+    - _pull_messages(): 实际的Broker拉取请求
+    - _handle_pulled_messages(): 处理拉取到的消息
+    - _start_pull_tasks(): 启动所有拉取任务
+    - _stop_pull_tasks(): 停止拉取任务
+    - _apply_pull_interval(): 智能拉取间隔控制
+    - _build_sys_flag(): 构建系统标志位
+    """
 
     def _start_pull_tasks(self) -> None:
         """
@@ -972,6 +1077,164 @@ class ConcurrentConsumer(BaseConsumer):
                 )
                 time.sleep(sleep_time)
 
+    # ==================== 偏移量管理模块 ====================
+    """
+    偏移量管理模块负责消费偏移量的获取、初始化和更新。
+    确保消息消费的连续性和正确性，支持不同的消费起始位置策略。
+    主要方法:
+    - _get_or_initialize_offset(): 获取或初始化消费偏移量
+    - _update_offset_from_cache(): 从缓存更新偏移量
+    - _update_offset_to_store(): 更新偏移量到存储
+    """
+
+    def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
+        """获取或初始化消费偏移量。
+
+        如果本地缓存的偏移量为0（首次消费），则根据配置的消费策略
+        从ConsumeFromWhereManager获取正确的初始偏移量。
+
+        Args:
+            message_queue (MessageQueue): 要获取偏移量的消息队列
+
+        Returns:
+            int: 消费偏移量
+
+        Note:
+            - 如果偏移量不为0，直接返回缓存的值
+            - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
+            - 获取失败时使用默认偏移量0，确保消费流程不中断
+        """
+        with self._assigned_queues_lock:
+            current_offset: int = self._assigned_queues.get(message_queue, 0)
+
+        # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
+        if current_offset == 0:
+            try:
+                current_offset = self._consume_from_where_manager.get_consume_offset(
+                    message_queue,
+                    self._config.consume_from_where,
+                    self._config.consume_timestamp
+                    if hasattr(self._config, "consume_timestamp")
+                    else 0,
+                )
+                # 更新本地缓存的偏移量
+                with self._assigned_queues_lock:
+                    self._assigned_queues[message_queue] = current_offset
+
+                logger.info(
+                    f"初始化消费偏移量: {current_offset}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "offset": current_offset,
+                    },
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "strategy": self._config.consume_from_where,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 使用默认偏移量0
+                current_offset = 0
+
+        return current_offset
+
+    def _update_offset_from_cache(self, queue: MessageQueue) -> None:
+        """从ProcessQueue缓存中获取最小offset并更新到offset_store"""
+        with self._cache_lock:
+            if queue not in self._msg_cache:
+                # ProcessQueue不存在，不需要更新
+                return
+
+        process_queue: ProcessQueue = self._msg_cache[queue]
+
+        # 获取缓存中最小的offset
+        min_offset: int | None = process_queue.get_min_offset()
+        if min_offset is None:
+            # 缓存为空，不需要更新
+            return
+
+        # 更新到offset_store
+        try:
+            self._offset_store.update_offset(queue, min_offset)
+            logger.debug(
+                f"Updated offset from cache: {min_offset}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": queue.topic,
+                    "queue_id": queue.queue_id,
+                    "offset": min_offset,
+                    "cache_stats": process_queue.get_stats(),
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to update offset from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": queue.topic,
+                    "queue_id": queue.queue_id,
+                    "error": str(e),
+                },
+            )
+
+    def _update_offset_to_store(
+        self, message_queue: MessageQueue, min_offset: int
+    ) -> None:
+        """
+        更新偏移量到存储
+
+        Args:
+            message_queue: 消息队列
+            min_offset: 最小偏移量
+        """
+        try:
+            self._offset_store.update_offset(message_queue, min_offset)
+            logger.debug(
+                f"Updated offset from cache: {min_offset}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": min_offset,
+                    "cache_stats": self._msg_cache.get(
+                        message_queue, ProcessQueue()
+                    ).get_stats(),
+                },
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to update offset from cache: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": min_offset,
+                    "error": str(e),
+                },
+            )
+
+    # ==================== 消息缓存管理模块 ====================
+    """
+    消息缓存管理模块使用ProcessQueue实现高效的消息缓存和并发控制。
+    解决了并发消费中的偏移量管理问题，支持流量控制和统计监控。
+    主要方法:
+    - _get_or_create_process_queue(): 获取或创建ProcessQueue
+    - _add_messages_to_cache(): 添加消息到缓存
+    - _remove_messages_from_cache(): 从缓存移除消息
+    - _is_message_cached(): 检查消息是否已缓存
+    """
+
     def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
         """获取或创建指定队列的ProcessQueue"""
         with self._cache_lock:
@@ -1044,7 +1307,7 @@ class ConcurrentConsumer(BaseConsumer):
 
         此方法用于从ProcessQueue中移除已经成功处理的消息，释放内存空间。
         ProcessQueue提供高效的移除操作，确保在大量消息缓存中仍能保持良好的性能。
-        移除完成后直接返回当前缓存中最小消息的offset，避免额外的查询操作。
+        移除完成后直接返回当前队列中最小消息的offset，避免额外的查询操作。
 
         Args:
             queue (MessageQueue): 目标消息队列
@@ -1086,106 +1349,14 @@ class ConcurrentConsumer(BaseConsumer):
         # 返回移除完成后当前缓存中的最小offset
         return process_queue.get_min_offset()
 
-    def _update_offset_from_cache(self, queue: MessageQueue) -> None:
-        """从ProcessQueue缓存中获取最小offset并更新到offset_store"""
-        with self._cache_lock:
-            if queue not in self._msg_cache:
-                # ProcessQueue不存在，不需要更新
-                return
-
-        process_queue: ProcessQueue = self._msg_cache[queue]
-
-        # 获取缓存中最小的offset
-        min_offset: int | None = process_queue.get_min_offset()
-        if min_offset is None:
-            # 缓存为空，不需要更新
-            return
-
-        # 更新到offset_store
-        try:
-            self._offset_store.update_offset(queue, min_offset)
-            logger.debug(
-                f"Updated offset from cache: {min_offset}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": queue.topic,
-                    "queue_id": queue.queue_id,
-                    "offset": min_offset,
-                    "cache_stats": process_queue.get_stats(),
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to update offset from cache: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": queue.topic,
-                    "queue_id": queue.queue_id,
-                    "error": str(e),
-                },
-            )
-
-    def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
-        """获取或初始化消费偏移量。
-
-        如果本地缓存的偏移量为0（首次消费），则根据配置的消费策略
-        从ConsumeFromWhereManager获取正确的初始偏移量。
-
-        Args:
-            message_queue (MessageQueue): 要获取偏移量的消息队列
-
-        Returns:
-            int: 消费偏移量
-
-        Note:
-            - 如果偏移量不为0，直接返回缓存的值
-            - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
-            - 获取失败时使用默认偏移量0，确保消费流程不中断
-        """
-        with self._assigned_queues_lock:
-            current_offset: int = self._assigned_queues.get(message_queue, 0)
-
-        # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
-        if current_offset == 0:
-            try:
-                current_offset = self._consume_from_where_manager.get_consume_offset(
-                    message_queue,
-                    self._config.consume_from_where,
-                    self._config.consume_timestamp
-                    if hasattr(self._config, "consume_timestamp")
-                    else 0,
-                )
-                # 更新本地缓存的偏移量
-                with self._assigned_queues_lock:
-                    self._assigned_queues[message_queue] = current_offset
-
-                logger.info(
-                    f"初始化消费偏移量: {current_offset}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": message_queue.topic,
-                        "queue_id": message_queue.queue_id,
-                        "strategy": self._config.consume_from_where,
-                        "offset": current_offset,
-                    },
-                )
-
-            except Exception as e:
-                logger.error(
-                    f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": message_queue.topic,
-                        "queue_id": message_queue.queue_id,
-                        "strategy": self._config.consume_from_where,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
-                # 使用默认偏移量0
-                current_offset = 0
-
-        return current_offset
+    # ==================== 核心拉取实现模块 ====================
+    """
+    核心拉取实现模块包含与Broker通信的底层拉取逻辑。
+    处理系统标志位构建、地址解析、实际的拉取请求等核心功能。
+    主要方法:
+    - _pull_messages(): 核心拉取实现
+    - _build_sys_flag(): 构建系统标志位
+    """
 
     def _pull_messages(
         self, message_queue: MessageQueue, offset: int, suggest_id: int
@@ -1364,7 +1535,19 @@ class ConcurrentConsumer(BaseConsumer):
 
         return flag
 
-    # ==================== 内部方法：消息处理 ====================
+    # ==================== 消息处理模块 ====================
+    """
+    消息处理模块负责消息的实际消费和业务处理。
+    使用线程池进行并发处理，支持成功/失败的不同处理策略。
+    主要方法:
+    - _start_consume_tasks(): 启动消费任务
+    - _consume_messages_loop(): 消费消息的核心循环
+    - _process_messages_with_timing(): 带计时的消息处理
+    - _handle_successful_consume(): 处理成功消费的消息
+    - _handle_failed_consume(): 处理消费失败的消息
+    - _update_consume_stats(): 更新消费统计
+    - _wait_for_processing_completion(): 等待处理完成
+    """
 
     def _start_consume_tasks(self) -> None:
         """
@@ -1527,42 +1710,6 @@ class ConcurrentConsumer(BaseConsumer):
                 },
             )
 
-    def _update_offset_to_store(
-        self, message_queue: MessageQueue, min_offset: int
-    ) -> None:
-        """
-        更新偏移量到存储
-
-        Args:
-            message_queue: 消息队列
-            min_offset: 最小偏移量
-        """
-        try:
-            self._offset_store.update_offset(message_queue, min_offset)
-            logger.debug(
-                f"Updated offset from cache: {min_offset}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "offset": min_offset,
-                    "cache_stats": self._msg_cache.get(
-                        message_queue, ProcessQueue()
-                    ).get_stats(),
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to update offset from cache: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "offset": min_offset,
-                    "error": str(e),
-                },
-            )
-
     def _handle_failed_consume(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> list[MessageExt]:
@@ -1671,77 +1818,15 @@ class ConcurrentConsumer(BaseConsumer):
                 },
             )
 
-    # ==================== 内部方法：重平衡任务 ====================
-
-    def _start_rebalance_task(self) -> None:
-        """
-        启动定期重平衡任务
-        """
-        self._rebalance_thread = threading.Thread(
-            target=self._rebalance_loop,
-            name=f"{self._config.consumer_group}-rebalance-thread",
-            daemon=True,
-        )
-        self._rebalance_thread.start()
-
-    def _rebalance_loop(self) -> None:
-        """
-        定期重平衡循环
-        """
-        while self._is_running:
-            try:
-                # 使用Event.wait()替代time.sleep()
-                if self._rebalance_event.wait(timeout=self._rebalance_interval):
-                    # Event被触发，检查是否需要退出
-                    if not self._is_running:
-                        break
-                    # 重置事件状态
-                    self._rebalance_event.clear()
-
-                if self._is_running:
-                    self._do_rebalance()
-
-            except Exception as e:
-                logger.error(
-                    f"Error in rebalance loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
-
-    def _on_notify_consumer_ids_changed(
-        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
-    ) -> None:
-        logger.info("Received notification of consumer IDs changed")
-        self._do_rebalance()
-
-    def _find_consumer_list(self, topic: str) -> list[str]:
-        """
-        查找消费者列表
-
-        Args:
-            topic: 主题名称
-
-        Returns:
-            消费者列表
-        """
-
-        addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
-        if not addresses:
-            logger.warning(
-                "No broker addresses found for topic", extra={"topic": topic}
-            )
-            return []
-
-        pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
-        with pool.get_connection(usage="查找消费者列表") as conn:
-            return BrokerClient(conn).get_consumers_by_group(
-                self._config.consumer_group
-            )
-
-    # ==================== 内部方法：资源清理 ====================
+    # ==================== 资源清理模块 ====================
+    """
+    资源清理模块负责消费者关闭时的资源释放和清理工作。
+    确保所有资源都被正确释放，避免内存泄漏和资源浪费。
+    主要方法:
+    - _cleanup_on_start_failure(): 启动失败时的清理
+    - _shutdown_thread_pools(): 关闭线程池
+    - _cleanup_resources(): 清理内存资源
+    """
 
     def _cleanup_on_start_failure(self) -> None:
         """启动失败时的资源清理操作。
@@ -1859,7 +1944,14 @@ class ConcurrentConsumer(BaseConsumer):
         with self._assigned_queues_lock:
             self._assigned_queues.clear()
 
-    # ==================== 统计和监控方法 ====================
+    # ==================== 统计监控模块 ====================
+    """
+    统计监控模块提供消费者的实时状态和性能指标。
+    用于监控消费者健康状况和性能调优。
+    主要方法:
+    - get_stats(): 获取实时统计信息
+    - _get_final_stats(): 获取最终统计信息
+    """
 
     def _get_final_stats(self) -> dict[str, Any]:
         """
@@ -1960,7 +2052,15 @@ class ConcurrentConsumer(BaseConsumer):
         """
         return self._get_final_stats()
 
-    # ==================== 其他方法 ====================
+    # ==================== 远程通信模块 ====================
+    """
+    远程通信模块处理与Broker的远程通信和请求处理。
+    包括直接消费请求、消费者ID变更通知等。
+    主要方法:
+    - _prepare_consumer_remote(): 准备消费者远程通信处理器
+    - _on_notify_consume_message_directly(): 处理直接消费请求
+    """
+
     def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
         pool.register_request_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
