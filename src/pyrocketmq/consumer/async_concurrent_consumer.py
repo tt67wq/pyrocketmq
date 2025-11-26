@@ -882,7 +882,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
         # 根据订阅信息过滤消息
         if sub_data.tags_set:
-            messages = await self._filter_messages_by_tags(messages, sub_data.tags_set)
+            messages = self._filter_messages_by_tags(messages, sub_data.tags_set)
 
         return messages, next_begin_offset, next_suggest_id
 
