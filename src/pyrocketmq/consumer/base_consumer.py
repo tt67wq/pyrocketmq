@@ -6,6 +6,10 @@ BaseConsumer是pyrocketmq消费者模块的核心抽象基类，定义了所有�
 核心功能，为具体消费者实现（如ConcurrentConsumer、OrderlyConsumer等）
 提供坚实的基础。
 
+文件结构说明:
+本文件按照功能模块进行了重新组织，将实现相同或相似功能的函数集中到同一模块中，
+确保代码逻辑清晰、结构合理，便于阅读和理解。
+
 作者: pyrocketmq开发团队
 """
 
@@ -71,7 +75,7 @@ class BaseConsumer:
     Attributes:
         _config: 消费者配置实例
         _subscription_manager: 订阅关系管理器
-        _message_listener: 消息监听器实例
+        _message_listeners: 消息监听器字典，支持每个topic对应一个监听器
         _is_running: 消费者运行状态标志
         _lock: 线程安全锁
 
@@ -203,18 +207,22 @@ class BaseConsumer:
             },
         )
 
-    # ==================== 核心生命周期方法 ====================
+    # ==============================================================================
+    # 1. 核心生命周期管理模块
+    # 功能：管理消费者的启动、停止和运行状态
+    # 包含函数：start, shutdown, is_running, get_config
+    # ==============================================================================
 
     def start(self) -> None:
         """
         启动消费者.
 
-        子类必须实现这个方法，用于启动消息消费的各个组件。
-        典型实现包括:
-            - 启动网络连接
-            - 注册到NameServer
-            - 启动消费线程
-            - 开始拉取消息
+        启动消息消费的各个组件，包括：
+        - 设置运行状态
+        - 启动核心组件（NameServer、BrokerManager、OffsetStore）
+        - 启动路由刷新任务
+        - 启动心跳任务
+        - 订阅重试主题（集群模式下）
 
         Raises:
             ConsumerError: 启动失败时抛出
@@ -222,7 +230,6 @@ class BaseConsumer:
         Note:
             启动前需要确保已注册消息监听器和订阅了必要的Topic。
         """
-
         self._is_running = True
 
         # 启动background任务
@@ -244,13 +251,10 @@ class BaseConsumer:
         """
         停止消费者.
 
-        子类必须实现这个方法，用于优雅地停止消费者。
-        典型实现包括:
-            - 停止拉取消息
-            - 等待正在处理的消息完成
-            - 持久化偏移量
-            - 关闭网络连接
-            - 清理资源
+        优雅地停止消费者，包括：
+        - 触发后台任务停止事件
+        - 关闭线程池和专用线程
+        - 清理所有资源
 
         Raises:
             ConsumerError: 停止过程中发生错误时抛出
@@ -258,14 +262,37 @@ class BaseConsumer:
         Note:
             这是一个阻塞操作，会等待所有正在处理的消息完成。
         """
-
+        # 设置停止事件，通知后台线程退出
         self._route_refresh_event.set()
         self._heartbeat_event.set()
 
+        # 关闭线程池和清理资源
         self._shutdown_thread_pools()
         self._cleanup_resources()
 
-    # ==================== 订阅管理方法 ====================
+    def is_running(self) -> bool:
+        """
+        检查消费者是否正在运行
+
+        Returns:
+            bool: 如果消费者正在运行返回True，否则返回False
+        """
+        return self._is_running
+
+    def get_config(self) -> ConsumerConfig:
+        """
+        获取消费者配置
+
+        Returns:
+            ConsumerConfig: 消费者配置实例
+        """
+        return self._config
+
+    # ==============================================================================
+    # 2. 订阅管理模块
+    # 功能：管理Topic订阅关系，包括订阅、取消订阅和查询订阅状态
+    # 包含函数：subscribe, unsubscribe, get_subscribed_topics, is_subscribed
+    # ==============================================================================
 
     def subscribe(
         self, topic: str, selector: MessageSelector, listener: MessageListener
@@ -273,8 +300,8 @@ class BaseConsumer:
         """
         订阅Topic并注册对应的消息监听器。
 
-        这是简化的API设计，将订阅topic和注册listener合并为一个方法。
-        每个topic可以有独立的message listener，支持不同业务逻辑处理。
+        将订阅topic和注册listener合并为一个方法。每个topic可以有独立的message listener，
+        支持不同业务逻辑处理。
 
         Args:
             topic: 要订阅的Topic名称，不能为空字符串
@@ -282,7 +309,7 @@ class BaseConsumer:
             listener: 消息监听器，用于处理该topic的消息，不能为None
 
         Raises:
-            ConsumerError: 当消费者正在运行或订阅失败时抛出
+            ConsumerError: 当订阅失败时抛出
             ValueError: 当参数为空时抛出
 
         Example:
@@ -290,22 +317,11 @@ class BaseConsumer:
             >>> from pyrocketmq.model.client_data import create_tag_selector
             >>> order_listener = OrderMessageListener()
             >>> consumer.subscribe_with_listener("order_topic", create_tag_selector("pay||ship"), order_listener)
-            >>>
-            >>> # 为日志topic注册不同的处理逻辑
-            >>> log_listener = LogMessageListener()
-            >>> consumer.subscribe_with_listener("log_topic", create_tag_selector("*"), log_listener)
 
         Note:
             - 每个topic只能有一个listener，重复注册会覆盖之前的listener
-            - 必须在消费者启动前调用此方法
             - 支持为不同topic注册不同类型的listener（并发、顺序等）
         """
-        # if self._is_running:
-        #     raise ConsumerError(
-        #         "Cannot subscribe to topics while consumer is running",
-        #         context={"consumer_group": self._config.consumer_group},
-        #     )
-
         if not topic or not topic.strip():
             raise ValueError("Topic cannot be empty")
 
@@ -366,21 +382,15 @@ class BaseConsumer:
             topic: 要取消订阅的Topic名称，不能为空字符串
 
         Raises:
-            ConsumerError: 当消费者正在运行或取消订阅失败时抛出
+            ConsumerError: 当取消订阅失败时抛出
             ValueError: 当topic为空时抛出
 
         Example:
             >>> consumer.unsubscribe("order_topic")
 
         Note:
-            必须在消费者停止后调用此方法。如果Topic未订阅，此方法不会抛出异常。
+            如果Topic未订阅，此方法不会抛出异常。
         """
-        # if self._is_running:
-        #     raise ConsumerError(
-        #         "Cannot unsubscribe while consumer is running. Please shutdown first.",
-        #         context={"consumer_group": self._config.consumer_group},
-        #     )
-
         if not topic:
             raise ValueError("Topic must be a non-empty string")
 
@@ -464,7 +474,13 @@ class BaseConsumer:
         """
         return self._subscription_manager.is_subscribed(topic)
 
-    # ==================== 消息处理核心方法 ====================
+    # ==============================================================================
+    # 3. 消息消费处理模块
+    # 功能：处理消息消费的核心逻辑，包括并发消费、顺序消费和重试机制
+    # 包含函数：_prepare_message_consumption, _concurrent_consume_message,
+    #          _orderly_consume_message, check_reconsume_times,
+    #          _filter_messages_by_tags, _send_back_message, _reset_retry
+    # ==============================================================================
 
     def _prepare_message_consumption(
         self,
@@ -584,7 +600,6 @@ class BaseConsumer:
             >>> else:
             >>>     # 消息处理失败，将触发重试机制
             >>>     failed_messages.extend(messages)
-            >>>     pass
 
         Important Notes:
             - 这是ConcurrentConsumer的核心消息处理逻辑
@@ -901,34 +916,213 @@ class BaseConsumer:
 
         return suspend
 
-    # ==================== 状态查询方法 ====================
-
-    def is_running(self) -> bool:
+    def _filter_messages_by_tags(
+        self, messages: list[MessageExt], tags_set: list[str]
+    ) -> list[MessageExt]:
         """
-        检查消费者是否正在运行
+        根据标签过滤消息。
 
-        Returns:
-            bool: 如果消费者正在运行返回True，否则返回False
-        """
-        return self._is_running
-
-    def get_config(self) -> ConsumerConfig:
-        """
-        获取消费者配置
+        Args:
+            messages: 待过滤的消息列表
+            tags_set: 允许的标签集合
 
         Returns:
-            ConsumerConfig: 消费者配置实例
+            list[MessageExt]: 过滤后的消息列表
         """
-        return self._config
+        filtered_messages: list[MessageExt] = []
+        for message in messages:
+            if message.get_tags() in tags_set:
+                filtered_messages.append(message)
 
-    def get_subscription_manager(self) -> SubscriptionManager:
+        return filtered_messages
+
+    def _send_back_message(
+        self, message_queue: MessageQueue, message: MessageExt
+    ) -> bool:
         """
-        获取订阅管理器（主要用于内部使用和测试）
+        将消费失败的消息发送回broker重新消费。
+
+        当消息消费失败时，此方法负责将消息发送回原始broker，
+        以便后续重新消费。这是RocketMQ消息重试机制的重要组成部分。
+
+        Args:
+            message_queue (MessageQueue): 消息来自的队列信息
+            message (MessageExt): 需要发送回的消息对象
 
         Returns:
-            SubscriptionManager: 订阅管理器实例
+            bool: 发送成功返回True，发送失败返回False
+
+        处理流程:
+            1. 根据队列信息获取目标broker地址
+            2. 验证broker地址有效性
+            3. 建立与broker的连接池
+            4. 设置消息重试相关属性：
+               - RETRY_TOPIC: 设置重试主题名
+               - CONSUME_START_TIME: 记录消费开始时间
+               - reconsume_times: 递增重试次数
+            5. 调用broker的consumer_send_msg_back接口
+            6. 记录处理结果和统计信息
+
+        错误处理:
+            - 如果无法获取broker地址，记录错误日志并返回False
+            - 如果连接或发送失败，记录错误日志但不抛出异常
+            - 确保消费循环的连续性，避免单个消息失败影响整体消费
+
+        Examples:
+            >>> # 在消费循环中处理失败消息
+            >>> result = self._consume_message(messages, context)
+            >>> if result == ConsumeResult.RECONSUME_LATER:
+            >>>     for msg in messages:
+            >>>         if not self._send_back_message(msg.queue, msg):
+            >>>             logger.error(f"Failed to send back message: {msg.msg_id}")
+
+        Note:
+            - 该方法在消费失败时被调用，用于实现消息重试机制
+            - 消息会被重新放入重试队列等待重新消费
+            - 重试次数受max_reconsume_times配置限制，默认16次
+            - 超过最大重试次数后，消息会进入死信队列(%DLQ%{consumer_group})
+            - reconsume_times属性会递增，用于跟踪消息重试次数
+            - 方法不会抛出异常，确保消费循环的稳定性
         """
-        return self._subscription_manager
+        broker_addr = self._name_server_manager.get_broker_address(
+            message_queue.broker_name
+        )
+        if not broker_addr:
+            logger.error(
+                "Failed to get broker address for message send back",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "broker_name": message_queue.broker_name,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                },
+            )
+            return False
+
+        try:
+            pool: ConnectionPool = self._broker_manager.must_connection_pool(
+                broker_addr
+            )
+            with pool.get_connection(usage="发送消息回broker") as conn:
+                self._reset_retry(message)
+                message.reconsume_times += 1
+                BrokerClient(conn).consumer_send_msg_back(
+                    message,
+                    message.reconsume_times,
+                    self._config.consumer_group,
+                    self._config.max_reconsume_times,
+                )
+
+                logger.debug(
+                    "Message sent back to broker for reconsume",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "message_id": message.msg_id,
+                        "topic": message.topic,
+                        "queue_id": message.queue.queue_id if message.queue else 0,
+                        "broker_name": message_queue.broker_name,
+                        "reconsume_times": message.reconsume_times,
+                        "max_reconsume_times": self._config.max_reconsume_times,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to send message back to broker: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "message_id": message.msg_id,
+                    "topic": message.topic,
+                    "queue_id": message.queue.queue_id if message.queue else 0,
+                    "broker_name": message_queue.broker_name,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            return False
+        else:
+            return True
+
+    def _reset_retry(self, msg: MessageExt) -> None:
+        """
+        重置消息的重试相关属性。
+
+        当消息需要重新消费时，此方法负责重置或设置消息的重试相关属性，
+        确保消息能够正确地参与重试机制。这通常在消息处理前或需要重新处理时调用。
+
+        Args:
+            msg (MessageExt): 需要重置重试属性的消息对象
+
+        设置的属性:
+            - RETRY_TOPIC: 检查并设置重试主题名（如果存在）
+            - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
+
+        属性说明:
+            RETRY_TOPIC:
+                - 指示消息在消费失败时应该发送到的重试主题
+                - 由消费者组名唯一确定，确保重试消息的隔离性
+                - RocketMQ会根据该属性将失败消息投递到正确的重试主题
+                - 格式为：%RETRY%{consumer_group}
+
+            CONSUME_START_TIME:
+                - 记录消息开始消费的时间戳（毫秒）
+                - 用于监控消费延迟和性能分析
+                - 帮助判断消息处理的耗时情况
+                - 格式为Unix时间戳的毫秒表示
+
+        执行逻辑:
+            1. 检查消息是否包含RETRY_TOPIC属性
+            2. 如果存在，将该属性值设置为消息的topic字段
+            3. 设置当前时间戳作为CONSUME_START_TIME属性
+
+        使用场景:
+            - 消息处理前的属性初始化
+            - 消息重新消费前的属性重置
+            - 重试机制中的属性设置
+            - 从重试队列中消费的消息处理
+
+        Examples:
+            >>> # 在消息处理前调用
+            >>> message = MessageExt()
+            >>> message.set_property("RETRY_TOPIC", "%RETRY%my_group")
+            >>> self._reset_retry(message)
+            >>> # 现在消息topic已更新为重试主题，并具备消费时间戳
+            >>> print(f"Topic: {message.topic}")  # %RETRY%my_group
+            >>> print(f"Start time: {message.get_property('CONSUME_START_TIME')}")
+
+        重要注意事项:
+            - 该方法只处理已有的RETRY_TOPIC属性，不会创建新的重试主题
+            - 时间戳使用当前时刻，确保每次调用都更新为最新的消费开始时间
+            - 重试主题的切换是RocketMQ重试机制的关键环节
+            - 确保所有重试消息都具有一致的属性格式
+
+        RocketMQ重试流程:
+            1. 消费失败的消息调用_send_back_message发送回broker
+            2. Broker将消息投递到对应的重试主题
+            3. 消费者从重试主题拉取消息
+            4. 调用_reset_retry将消息topic重置为重试主题
+            5. 设置消费开始时间戳
+            6. 再次尝试消费处理
+
+        监控和调试:
+            - CONSUME_START_TIME用于计算消息处理延迟
+            - RETRY_TOPIC属性帮助追踪消息的重试路径
+            - 时间戳精度为毫秒级，支持细粒度性能分析
+            - 可通过消息属性查询重试次数和处理时长
+        """
+        retry_topic: str | None = msg.get_property(MessageProperty.RETRY_TOPIC)
+        if retry_topic:
+            msg.topic = retry_topic
+        msg.set_property(
+            MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+        )
+
+    # ==============================================================================
+    # 4. 监听器管理模块
+    # 功能：管理消息监听器，包括获取监听器、监听器查询等
+    # 包含函数：get_message_listener, get_all_listeners, get_subscription_manager
+    # ==============================================================================
 
     def get_message_listener(self, topic: str | None = None) -> MessageListener | None:
         """
@@ -965,194 +1159,21 @@ class BaseConsumer:
         """
         return self._message_listeners.copy()
 
-    # ==================== 状态摘要方法 ====================
-
-    def get_status_summary(self) -> dict[str, Any]:
+    def get_subscription_manager(self) -> SubscriptionManager:
         """
-        获取消费者状态摘要
+        获取订阅管理器（主要用于内部使用和测试）
 
         Returns:
-            dict: 包含消费者状态信息的字典
+            SubscriptionManager: 订阅管理器实例
         """
-        subscription_status: dict[str, Any] = (
-            self._subscription_manager.get_status_summary()
-        )
+        return self._subscription_manager
 
-        return {
-            "consumer_group": self._config.consumer_group,
-            "client_id": self._config.client_id,
-            "namesrv_addr": self._config.namesrv_addr,
-            "is_running": self._is_running,
-            "message_model": self._config.message_model,
-            "consume_from_where": self._config.consume_from_where,
-            "allocate_queue_strategy": self._config.allocate_queue_strategy,
-            "has_listeners": len(self._message_listeners) > 0,
-            "topic_listeners": {
-                topic: type(listener).__name__
-                for topic, listener in self._message_listeners.items()
-            },
-            "has_default_listener": getattr(self, "_message_listener", None)
-            is not None,
-            "default_listener_type": type(
-                getattr(self, "_message_listener", None)
-            ).__name__
-            if getattr(self, "_message_listener", None)
-            else None,
-            "subscription_status": subscription_status,
-        }
-
-    # ==================== 资源清理方法 ====================
-
-    def _shutdown_thread_pools(self) -> None:
-        """
-        关闭线程池和专用线程
-        """
-        try:
-            # 等待专用线程结束
-            self._route_refresh_event.set()  # 唤醒重平衡线程
-            self._heartbeat_event.set()  # 唤醒心跳线程
-
-            # 等待线程结束
-            threads_to_join: list[threading.Thread] = []
-
-            if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-                threads_to_join.append(self._heartbeat_thread)
-            if self._route_refresh_thread and self._route_refresh_thread.is_alive():
-                threads_to_join.append(self._route_refresh_thread)
-
-            # 并发等待所有线程结束
-            for thread in threads_to_join:
-                try:
-                    thread.join(timeout=5.0)
-                    if thread.is_alive():
-                        logger.warning(
-                            f"Thread did not stop gracefully: {thread.name}",
-                            extra={
-                                "consumer_group": self._config.consumer_group,
-                                "thread_name": thread.name,
-                            },
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error joining thread {thread.name}: {e}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "thread_name": thread.name,
-                            "error": str(e),
-                        },
-                    )
-
-        except Exception as e:
-            logger.warning(
-                f"Error shutting down thread pools and threads: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "error": str(e),
-                },
-            )
-
-    def _cleanup_resources(self) -> None:
-        """
-        清理资源（内部方法）
-
-        由shutdown方法调用，负责清理消费者使用的所有资源。
-        子类可以重写这个方法来添加特定的资源清理逻辑。
-
-        注意:
-            - 必须调用super()._cleanup_resources()来确保基类资源也被清理
-            - 应该处理所有可能的异常，避免资源清理失败
-        """
-        try:
-            logger.info(
-                "Cleaning up BaseConsumer resources",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "client_id": self._config.client_id,
-                },
-            )
-
-            # 清理核心组件
-            try:
-                # 1. 清理偏移量存储 - 优先清理，确保持久化完成
-                if hasattr(self, "_offset_store") and self._offset_store:
-                    try:
-                        # 尝试持久化未提交的偏移量
-                        if hasattr(self._offset_store, "persist_all"):
-                            self._offset_store.persist_all()
-                        # 关闭偏移量存储
-                        if hasattr(self._offset_store, "stop"):
-                            self._offset_store.stop()
-
-                        logger.info("OffsetStore cleaned up successfully")
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up offset_store: {e}")
-
-                # 2. 清理订阅管理器 - 在偏移量存储之后清理
-                if (
-                    hasattr(self, "_subscription_manager")
-                    and self._subscription_manager
-                ):
-                    try:
-                        # 保存订阅状态和清理非活跃订阅
-                        if hasattr(
-                            self._subscription_manager, "cleanup_inactive_subscriptions"
-                        ):
-                            self._subscription_manager.cleanup_inactive_subscriptions()
-
-                        # 清理订阅数据
-                        if hasattr(self._subscription_manager, "clear_all"):
-                            self._subscription_manager.clear_all()
-
-                        logger.info("SubscriptionManager cleaned up successfully")
-                    except Exception as e:
-                        logger.warning(f"Error cleaning up subscription_manager: {e}")
-
-                # 3. 清理Topic到Broker的映射(Need not to)
-
-                # 4. 清理Broker管理器 - 在依赖组件之后清理
-                if hasattr(self, "_broker_manager") and self._broker_manager:
-                    try:
-                        self._broker_manager.shutdown()
-                        logger.info("BrokerManager shutdown successfully")
-                    except Exception as e:
-                        logger.warning(f"Error shutting down broker_manager: {e}")
-
-                # 5. 清理NameServer管理器 - 最后清理网络连接
-                if hasattr(self, "_name_server_manager") and self._name_server_manager:
-                    try:
-                        self._name_server_manager.stop()
-                        logger.info("NameServerManager stopped successfully")
-                    except Exception as e:
-                        logger.warning(f"Error stopping name_server_manager: {e}")
-
-                # 7. 重置运行状态
-                self._is_running = False
-
-                logger.info("All core components cleaned up successfully")
-
-            except Exception as cleanup_error:
-                logger.error(f"Error during core components cleanup: {cleanup_error}")
-                raise
-
-            logger.info(
-                "BaseConsumer resources cleaned up successfully",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "client_id": self._config.client_id,
-                },
-            )
-
-        except Exception as e:
-            logger.error(
-                f"Error during BaseConsumer resource cleanup: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
-    # ==================== 内部方法：路由刷新 ====================
+    # ==============================================================================
+    # 5. 路由信息管理模块
+    # 功能：管理Topic路由信息，包括路由刷新、更新等
+    # 包含函数：_start_route_refresh_task, _route_refresh_loop, _refresh_all_routes,
+    #          _update_route_info
+    # ==============================================================================
 
     def _start_route_refresh_task(self) -> None:
         """启动路由刷新任务"""
@@ -1311,7 +1332,13 @@ class BaseConsumer:
         # 如果所有NameServer都失败，强制刷新缓存
         return self._topic_broker_mapping.force_refresh(topic)
 
-    # ==================== 内部方法：心跳 ====================
+    # ==============================================================================
+    # 6. 心跳管理模块
+    # 功能：管理与Broker的心跳连接，维持消费者在线状态
+    # 包含函数：_start_heartbeat_task, _heartbeat_loop, _collect_broker_addresses,
+    #          _build_heartbeat_data, _send_heartbeat_to_broker,
+    #          _update_heartbeat_statistics, _send_heartbeat_to_all_brokers
+    # ==============================================================================
 
     def _start_heartbeat_task(self) -> None:
         """启动心跳任务"""
@@ -1552,6 +1579,12 @@ class BaseConsumer:
                 exc_info=True,
             )
 
+    # ==============================================================================
+    # 7. 重试主题管理模块
+    # 功能：管理重试主题的订阅和相关逻辑
+    # 包含函数：_get_retry_topic, _is_retry_topic, _subscribe_retry_topic
+    # ==============================================================================
+
     def _get_retry_topic(self) -> str:
         """
         获取消费者组对应的重试主题名称。
@@ -1571,7 +1604,7 @@ class BaseConsumer:
             - 重试主题名前缀是固定的 %RETRY%
             - 重试主题使用消费者组名而不是原始主题名
             - 重试机制的消息会根据重试次数延迟投递
-            - 默认重试次数为16次，超过后消息会进入死信队列
+            - 默认重试次数为16次，超过后��息会进入死信队列
             - 每个消费者组都有自己独立的重试主题
         """
         return f"%RETRY%{self._config.consumer_group}"
@@ -1665,208 +1698,225 @@ class BaseConsumer:
             )
             # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
 
-    def _filter_messages_by_tags(
-        self, messages: list[MessageExt], tags_set: list[str]
-    ) -> list[MessageExt]:
-        """根据标签过滤消息。
+    # ==============================================================================
+    # 8. 资源清理模块
+    # 功能：清理消费者资源，包括线程池关闭、组件清理等
+    # 包含函数：_shutdown_thread_pools, _cleanup_resources
+    # ==============================================================================
 
-        Args:
-            messages: 待过滤的消息列表
-            tags_set: 允许的标签集合
-
-        Returns:
-            list[MessageExt]: 过滤后的消息列表
+    def _shutdown_thread_pools(self) -> None:
         """
-        filtered_messages: list[MessageExt] = []
-        for message in messages:
-            if message.get_tags() in tags_set:
-                filtered_messages.append(message)
-
-        return filtered_messages
-
-    def _send_back_message(
-        self, message_queue: MessageQueue, message: MessageExt
-    ) -> bool:
+        关闭线程池和专用线程
         """
-        将消费失败的消息发送回broker重新消费。
+        try:
+            # 等待专用线程结束
+            self._route_refresh_event.set()  # 唤醒重平衡线程
+            self._heartbeat_event.set()  # 唤醒心跳线程
 
-        当消息消费失败时，此方法负责将消息发送回原始broker，
-        以便后续重新消费。这是RocketMQ消息重试机制的重要组成部分。
+            # 等待线程结束
+            threads_to_join: list[threading.Thread] = []
 
-        Args:
-            message_queue (MessageQueue): 消息来自的队列信息
-            message (MessageExt): 需要发送回的消息对象
+            if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+                threads_to_join.append(self._heartbeat_thread)
+            if self._route_refresh_thread and self._route_refresh_thread.is_alive():
+                threads_to_join.append(self._route_refresh_thread)
 
-        Returns:
-            bool: 发送成功返回True，发送失败返回False
+            # 并发等待所有线程结束
+            for thread in threads_to_join:
+                try:
+                    thread.join(timeout=5.0)
+                    if thread.is_alive():
+                        logger.warning(
+                            f"Thread did not stop gracefully: {thread.name}",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "thread_name": thread.name,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Error joining thread {thread.name}: {e}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "thread_name": thread.name,
+                            "error": str(e),
+                        },
+                    )
 
-        处理流程:
-            1. 根据队列信息获取目标broker地址
-            2. 验证broker地址有效性
-            3. 建立与broker的连接池
-            4. 设置消息重试相关属性：
-               - RETRY_TOPIC: 设置重试主题名
-               - CONSUME_START_TIME: 记录消费开始时间
-               - reconsume_times: 递增重试次数
-            5. 调用broker的consumer_send_msg_back接口
-            6. 记录处理结果和统计信息
-
-        错误处理:
-            - 如果无法获取broker地址，记录错误日志并返回False
-            - 如果连接或发送失败，记录错误日志但不抛出异常
-            - 确保消费循环的连续性，避免单个消息失败影响整体消费
-
-        Examples:
-            >>> # 在消费循环中处理失败消息
-            >>> result = self._consume_message(messages, context)
-            >>> if result == ConsumeResult.RECONSUME_LATER:
-            >>>     for msg in messages:
-            >>>         if not self._send_back_message(msg.queue, msg):
-            >>>             logger.error(f"Failed to send back message: {msg.msg_id}")
-
-        Note:
-            - 该方法在消费失败时被调用，用于实现消息重试机制
-            - 消息会被重新放入重试队列等待重新消费
-            - 重试次数受max_reconsume_times配置限制，默认16次
-            - 超过最大重试次数后，消息会进入死信队列(%DLQ%{consumer_group})
-            - reconsume_times属性会递增，用于跟踪消息重试次数
-            - 方法不会抛出异常，确保消费循环的稳定性
-        """
-        broker_addr = self._name_server_manager.get_broker_address(
-            message_queue.broker_name
-        )
-        if not broker_addr:
-            logger.error(
-                "Failed to get broker address for message send back",
+        except Exception as e:
+            logger.warning(
+                f"Error shutting down thread pools and threads: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "broker_name": message_queue.broker_name,
-                    "message_id": message.msg_id,
-                    "topic": message.topic,
-                    "queue_id": message.queue.queue_id if message.queue else 0,
+                    "error": str(e),
                 },
             )
-            return False
 
+    def _cleanup_resources(self) -> None:
+        """
+        清理资源（内部方法）
+
+        由shutdown方法调用，负责清理消费者使用的所有资源。
+        子类可以重写这个方法来添加特定的资源清理逻辑。
+
+        注意:
+            - 必须调用super()._cleanup_resources()来确保基类资源也被清理
+            - 应该处理所有可能的异常，避免资源清理失败
+
+        清理顺序：
+        1. 偏移量存储 - 优先清理，确保持久化完成
+        2. 订阅管理器 - 在偏移量存储之后清理
+        3. Broker管理器 - 在依赖组件之后清理
+        4. NameServer管理器 - 最后清理网络连接
+        5. 重置运行状态
+        """
         try:
-            pool: ConnectionPool = self._broker_manager.must_connection_pool(
-                broker_addr
+            logger.info(
+                "Cleaning up BaseConsumer resources",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                },
             )
-            with pool.get_connection(usage="发送消息回broker") as conn:
-                self._reset_retry(message)
-                message.reconsume_times += 1
-                BrokerClient(conn).consumer_send_msg_back(
-                    message,
-                    message.reconsume_times,
-                    self._config.consumer_group,
-                    self._config.max_reconsume_times,
-                )
 
-                logger.debug(
-                    "Message sent back to broker for reconsume",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "message_id": message.msg_id,
-                        "topic": message.topic,
-                        "queue_id": message.queue.queue_id if message.queue else 0,
-                        "broker_name": message_queue.broker_name,
-                        "reconsume_times": message.reconsume_times,
-                        "max_reconsume_times": self._config.max_reconsume_times,
-                    },
-                )
+            # 清理核心组件
+            try:
+                # 1. 清理偏移量存储 - 优先清理，确保持久化完成
+                if hasattr(self, "_offset_store") and self._offset_store:
+                    try:
+                        # 尝试持久化未提交的偏移量
+                        if hasattr(self._offset_store, "persist_all"):
+                            self._offset_store.persist_all()
+                        # 关闭偏移量存储
+                        if hasattr(self._offset_store, "stop"):
+                            self._offset_store.stop()
+
+                        logger.info("OffsetStore cleaned up successfully")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up offset_store: {e}")
+
+                # 2. 清理订阅管理器 - 在偏移量存储之后清理
+                if (
+                    hasattr(self, "_subscription_manager")
+                    and self._subscription_manager
+                ):
+                    try:
+                        # 保存订阅状态和清理非活跃订阅
+                        if hasattr(
+                            self._subscription_manager, "cleanup_inactive_subscriptions"
+                        ):
+                            self._subscription_manager.cleanup_inactive_subscriptions()
+
+                        # 清理订阅数据
+                        if hasattr(self._subscription_manager, "clear_all"):
+                            self._subscription_manager.clear_all()
+
+                        logger.info("SubscriptionManager cleaned up successfully")
+                    except Exception as e:
+                        logger.warning(f"Error cleaning up subscription_manager: {e}")
+
+                # 3. 清理Topic到Broker的映射(Need not to)
+
+                # 4. 清理Broker管理器 - 在依赖组件之后清理
+                if hasattr(self, "_broker_manager") and self._broker_manager:
+                    try:
+                        self._broker_manager.shutdown()
+                        logger.info("BrokerManager shutdown successfully")
+                    except Exception as e:
+                        logger.warning(f"Error shutting down broker_manager: {e}")
+
+                # 5. 清理NameServer管理器 - 最后清理网络连接
+                if hasattr(self, "_name_server_manager") and self._name_server_manager:
+                    try:
+                        self._name_server_manager.stop()
+                        logger.info("NameServerManager stopped successfully")
+                    except Exception as e:
+                        logger.warning(f"Error stopping name_server_manager: {e}")
+
+                # 6. 重置运行状态
+                self._is_running = False
+
+                logger.info("All core components cleaned up successfully")
+
+            except Exception as cleanup_error:
+                logger.error(f"Error during core components cleanup: {cleanup_error}")
+                raise
+
+            logger.info(
+                "BaseConsumer resources cleaned up successfully",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                },
+            )
 
         except Exception as e:
             logger.error(
-                f"Failed to send message back to broker: {e}",
+                f"Error during BaseConsumer resource cleanup: {e}",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "message_id": message.msg_id,
-                    "topic": message.topic,
-                    "queue_id": message.queue.queue_id if message.queue else 0,
-                    "broker_name": message_queue.broker_name,
                     "error": str(e),
                 },
                 exc_info=True,
             )
-            return False
-        else:
-            return True
 
-    def _reset_retry(self, msg: MessageExt) -> None:
+    # ==============================================================================
+    # 9. 状态查询和监控模块
+    # 功能：提供消费者状态查询和监控功能
+    # 包含函数：get_status_summary
+    # ==============================================================================
+
+    def get_status_summary(self) -> dict[str, Any]:
         """
-        重置消息的重试相关属性。
+        获取消费者状态摘要
 
-        当消息需要重新消费时，此方法负责重置或设置消息的重试相关属性，
-        确保消息能够正确地参与重试机制。这通常在消息处理前或需要重新处理时调用。
-
-        Args:
-            msg (MessageExt): 需要重置重试属性的消息对象
-
-        设置的属性:
-            - RETRY_TOPIC: 检查并设置重试主题名（如果存在）
-            - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
-
-        属性说明:
-            RETRY_TOPIC:
-                - 指示消息在消费失败时应该发送到的重试主题
-                - 由消费者组名唯一确定，确保重试消息的隔离性
-                - RocketMQ会根据该属性将失败消息投递到正确的重试主题
-                - 格式为：%RETRY%{consumer_group}
-
-            CONSUME_START_TIME:
-                - 记录消息开始消费的时间戳（毫秒）
-                - 用于监控消费延迟和性能分析
-                - 帮助判断消息处理的耗时情况
-                - 格式为Unix时间戳的毫秒表示
-
-        执行逻辑:
-            1. 检查消息是否包含RETRY_TOPIC属性
-            2. 如果存在，将该属性值设置为消息的topic字段
-            3. 设置当前时间戳作为CONSUME_START_TIME属性
-
-        使用场景:
-            - 消息处理前的属性初始化
-            - 消息重新消费前的属性重置
-            - 重试机制中的属性设置
-            - 从重试队列中消费的消息处理
-
-        Examples:
-            >>> # 在消息处理前调用
-            >>> message = MessageExt()
-            >>> message.set_property("RETRY_TOPIC", "%RETRY%my_group")
-            >>> self._reset_retry(message)
-            >>> # 现在消息topic已更新为重试主题，并具备消费时间戳
-            >>> print(f"Topic: {message.topic}")  # %RETRY%my_group
-            >>> print(f"Start time: {message.get_property('CONSUME_START_TIME')}")
-
-        重要注意事项:
-            - 该方法只处理已有的RETRY_TOPIC属性，不会创建新的重试主题
-            - 时间戳使用当前时刻，确保每次调用都更新为最新的消费开始时间
-            - 重试主题的切换是RocketMQ重试机制的关键环节
-            - 确保所有重试消息都具有一致的属性格式
-
-        RocketMQ重试流程:
-            1. 消费失败的消息调用_send_back_message发送回broker
-            2. Broker将消息投递到对应的重试主题
-            3. 消费者从重试主题拉取消息
-            4. 调用_reset_retry将消息topic重置为重试主题
-            5. 设置消费开始时间戳
-            6. 再次尝试消费处理
-
-        监控和调试:
-            - CONSUME_START_TIME用于计算消息处理延迟
-            - RETRY_TOPIC属性帮助追踪消息的重试路径
-            - 时间戳精度为毫秒级，支持细粒度性能分析
-            - 可通过消息属性查询重试次数和处理时长
+        Returns:
+            dict: 包含消费者状态信息的字典，包括：
+                - consumer_group: 消费者组名
+                - client_id: 客户端ID
+                - namesrv_addr: NameServer地址
+                - is_running: 运行状态
+                - message_model: 消息模型
+                - consume_from_where: 消费起始位置
+                - allocate_queue_strategy: 队列分配策略
+                - has_listeners: 是否有监听器
+                - topic_listeners: topic到监听器的映射
+                - has_default_listener: 是否有默认监听器
+                - default_listener_type: 默认监听器类型
+                - subscription_status: 订阅状态信息
         """
-        retry_topic: str | None = msg.get_property(MessageProperty.RETRY_TOPIC)
-        if retry_topic:
-            msg.topic = retry_topic
-        msg.set_property(
-            MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
+        subscription_status: dict[str, Any] = (
+            self._subscription_manager.get_status_summary()
         )
 
-    # ==================== 字符串表示方法 ====================
+        return {
+            "consumer_group": self._config.consumer_group,
+            "client_id": self._config.client_id,
+            "namesrv_addr": self._config.namesrv_addr,
+            "is_running": self._is_running,
+            "message_model": self._config.message_model,
+            "consume_from_where": self._config.consume_from_where,
+            "allocate_queue_strategy": self._config.allocate_queue_strategy,
+            "has_listeners": len(self._message_listeners) > 0,
+            "topic_listeners": {
+                topic: type(listener).__name__
+                for topic, listener in self._message_listeners.items()
+            },
+            "has_default_listener": getattr(self, "_message_listener", None)
+            is not None,
+            "default_listener_type": type(
+                getattr(self, "_message_listener", None)
+            ).__name__
+            if getattr(self, "_message_listener", None)
+            else None,
+            "subscription_status": subscription_status,
+        }
+
+    # ==============================================================================
+    # 10. 工具和辅助方法模块
+    # 功能：提供字符串表示等辅助功能
+    # 包含函数：__str__, __repr__
+    # ==============================================================================
 
     def __str__(self) -> str:
         """
