@@ -56,7 +56,19 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     继承AsyncBaseConsumer，专注于顺序消费逻辑。保证同一消息队列中的消息
     按照偏移量严格顺序处理，每个队列同时只能有一个消费任务。
+
+    功能模块组织：
+    1. 核心生命周期管理：初始化、启动、关闭
+    2. 重平衡管理：队列分配、负载均衡
+    3. 队列锁定管理：本地锁和远程锁机制
+    4. 消息拉取模块：从Broker拉取消息
+    5. 消息消费处理：消息处理和重试逻辑
+    6. 统计与监控：性能统计和状态监控
+    7. 远程通信处理：处理Broker通知
+    8. 资源清理与错误处理：异常处理和资源管理
     """
+
+    # ==================== 1. 核心生命周期管理模块 ====================
 
     def __init__(self, config: ConsumerConfig):
         """
@@ -313,6 +325,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     context={"consumer_group": self._config.consumer_group},
                 ) from e
 
+    # ==================== 2. 重平衡管理模块 ====================
+
     async def _pre_rebalance_check(self) -> bool:
         """执行重平衡前置检查。
 
@@ -465,6 +479,202 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             },
         )
 
+    async def _update_assigned_queues(self, new_queues: list[MessageQueue]) -> None:
+        """更新当前消费者的分配队列集合。
+
+        比较新旧队列分配，执行增量更新：
+        - 停止被回收队列的拉取任务
+        - 启动新分配队列的拉取任务
+        - 维护队列偏移量信息
+        - 管理每个队列的消费任务
+
+        Args:
+            new_queues (list[MessageQueue]): 新分配给当前消费者的队列列表
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会处理所有异常情况
+
+        Note:
+            - 队列变更不会中断正在处理的消息
+            - 被回收的队列会等待当前消息处理完成后才停止
+            - 新队列会立即开始拉取消息
+            - 偏移量信息会在队列分配变更时保留
+            - 每个队列的消费任务会在队列分配变更时进行管理
+        """
+        # 使用_assigned_queues_lock保护整个队列更新过程
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues的完整操作
+            old_queues: set[MessageQueue] = set(self._assigned_queues.keys())
+            new_queue_set: set[MessageQueue] = set(new_queues)
+
+            removed_queues: set[MessageQueue] = old_queues - new_queue_set
+            added_queues: set[MessageQueue] = new_queue_set - old_queues
+
+            # 移除旧队列的偏移量信息
+            for q in removed_queues:
+                _ = self._assigned_queues.pop(q, None)
+
+            # 添加新队列的偏移量初始化
+            for q in added_queues:
+                self._assigned_queues[q] = 0  # 初始化偏移量为0，后续会更新
+
+        # 在锁外处理其他资源的清理和创建，避免死锁
+        # 停止不再分配的队列的拉取任务和消费任务
+        for q in removed_queues:
+            if q in self._pull_tasks:
+                task: asyncio.Task[None] | None = self._pull_tasks.pop(q)
+                if task and not task.done():
+                    task.cancel()
+
+            # 停止并移除该队列的消费任务
+            if q in self._consume_tasks:
+                consume_tasks = self._consume_tasks.pop(q)
+                for task in consume_tasks:
+                    if task and not task.done():
+                        task.cancel()
+
+            # 清理队列锁
+            if q in self._queue_locks:
+                del self._queue_locks[q]
+
+        # 为新分配的队列创建资源
+        for q in added_queues:
+            # 为新队列创建锁
+            self._queue_locks[q] = asyncio.Semaphore(1)
+
+            # 为新队列初始化消费任务列表
+            self._consume_tasks[q] = []
+
+        # 如果消费者正在运行，启动新队列的拉取任务和消费任务
+        if self._is_running and added_queues:
+            await self._start_pull_tasks_for_queues(added_queues)
+            await self._start_consume_tasks_for_queues(added_queues)
+
+    async def _do_rebalance(self) -> None:
+        """执行消费者重平衡操作。
+
+        根据当前订阅的所有Topic，重新计算和分配队列给当前消费者。
+        重平衡是RocketMQ实现负载均衡的核心机制，确保消费者组内的队列分配合理。
+
+        执行流程：
+        1. 执行重平衡前置检查
+        2. 收集所有Topic的可用队列
+        3. 执行队列分配算法
+        4. 更新分配的队列并启动拉取任务
+        5. 完成重平衡后处理
+
+        重平衡触发条件：
+        - 消费者启动时
+        - 新订阅或取消订阅Topic时
+        - 定期重平衡检查（默认20秒间隔）
+        - 收到消费者组变更通知时
+
+        Returns:
+            None
+
+        Raises:
+            None: 此方法会捕获所有异常并记录日志，不会向上抛出
+
+        Note:
+            - 重平衡过程中可能会短暂停止消息拉取
+            - 新分配的队列会自动开始拉取消息
+            - 被回收的队列会停止拉取并等待当前消息处理完成
+            - 重平衡失败不会影响已运行的队列，会在下次重试
+        """
+        # 前置检查
+        if not await self._pre_rebalance_check():
+            return
+
+        try:
+            self.logger.debug(
+                "Starting rebalance",
+                extra={"consumer_group": self._config.consumer_group},
+            )
+
+            # 更新统计信息
+            self._stats["rebalance_count"] += 1
+
+            # 收集所有可用队列并执行分配
+            allocated_queues = await self._collect_and_allocate_queues()
+
+            # 更新分配的队列
+            if allocated_queues:
+                await self._update_assigned_queues(allocated_queues)
+
+            # 完成重平衡处理
+            await self._finalize_rebalance(
+                len(self._subscription_manager.get_topics()), len(allocated_queues)
+            )
+
+        except Exception as e:
+            self.logger.error(
+                f"Rebalance failed: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            # 更新失败统计
+            self._stats["rebalance_failure_count"] += 1
+
+        finally:
+            # 释放重平衡锁
+            self._rebalance_lock.release()
+            self.logger.debug(
+                "Rebalance lock released",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "rebalance_count": self._stats["rebalance_count"],
+                },
+            )
+
+    async def _trigger_rebalance(self) -> None:
+        """触发重平衡"""
+        if self._is_running:
+            # 唤醒重平衡循环，使其立即执行重平衡
+            self._rebalance_event.set()
+
+    async def _start_rebalance_task(self) -> None:
+        """启动定期重平衡任务"""
+        self._rebalance_task = asyncio.create_task(
+            self._rebalance_loop(),
+            name=f"{self._config.consumer_group}-rebalance-task",
+        )
+
+    async def _rebalance_loop(self) -> None:
+        """定期重平衡循环"""
+        while self._is_running:
+            try:
+                # 使用Event.wait()替代asyncio.sleep()
+                try:
+                    await asyncio.wait_for(
+                        self._rebalance_event.wait(), timeout=self._rebalance_interval
+                    )
+                    # Event被触发，检查是否需要退出
+                    if not self._is_running:
+                        break
+                    # 重置事件状态
+                    self._rebalance_event.clear()
+                except asyncio.TimeoutError:
+                    # 超时是正常情况，继续执行重平衡
+                    pass
+
+                if self._is_running:
+                    await self._do_rebalance()
+
+            except Exception as e:
+                self.logger.error(
+                    f"Error in rebalance loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
     async def _find_consumer_list(self, topic: str) -> list[str]:
         """
         查找消费者列表
@@ -491,6 +701,13 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             return await AsyncBrokerClient(conn).get_consumers_by_group(
                 self._config.consumer_group
             )
+
+    # ==================== 3. 队列锁定管理模块 ====================
+    #
+    # 该模块负责管理顺序消费的锁定机制，包括：
+    # - 本地队列锁：确保单个队列的顺序消费
+    # - 远程队列锁：在集群模式下保证跨消费者的顺序性
+    # - 锁状态缓存：优化性能，减少远程锁请求
 
     def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
         """获取指定消息队列的锁信号量
@@ -706,6 +923,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 exc_info=True,
             )
             return False
+
+    # ==================== 4. 消息拉取模块 ====================
+    #
+    # 该模块负责从RocketMQ Broker拉取消息，包括：
+    # - 拉取任务管理：为每个队列创建独立的拉取任务
+    # - 偏移量管理：跟踪和维护消费偏移量
+    # - 流量控制：防止消息积压过多
+    # - 智能间隔：根据拉取结果调整拉取频率
 
     async def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """为指定队列启动拉取任务
@@ -977,6 +1202,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # flag |= 0x1 << 3  # bit 3: 0x8
 
         return flag
+
+    # ==================== 5. 消息消费处理模块 ====================
+    #
+    # 该模块负责处理拉取到的消息，包括：
+    # - 消费任务管理：为每个队列创建独立的消费任务
+    # - 顺序消费保证：通过队列锁确保消息顺序性
+    # - 重试机制：处理失败消息的重试逻辑
+    # - 结果处理：处理消费成功/失败的结果
 
     async def _start_consume_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """为指定的队列集合启动消费任务
@@ -1409,6 +1642,13 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # TODO: 实现具体的消息处理逻辑
         # 这里需要调用用户的MessageListener来处理消息
 
+    # ==================== 6. 统计与监控模块 ====================
+    #
+    # 该模块负责收集和统计消费者运行时的各种指标，包括：
+    # - 消费统计：成功率、延迟、吞吐量
+    # - 性能监控：锁等待时间、处理时间
+    # - 状态跟踪：队列分配、任务状态
+
     def _update_consume_stats(
         self, success: bool, duration: float, message_count: int
     ) -> None:
@@ -1747,6 +1987,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "message_count": len(messages),
             },
         )
+
+    # ==================== 8. 资源清理与错误处理模块 ====================
+    #
+    # 该模块负责处理各种异常情况和资源清理，包括：
+    # - 启动失败清理：启动过程中出错时的资源回滚
+    # - 优雅关闭：确保所有任务正常结束
+    # - 异步任务管理：创建、监控和清理异步任务
+    # - 资源释放：清理内存、连接和锁资源
 
     async def _cleanup_on_start_failure(self) -> None:
         """异步启动失败时的资源清理操作。
