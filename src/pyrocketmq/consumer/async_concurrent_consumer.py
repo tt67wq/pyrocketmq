@@ -918,25 +918,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             self._stats["messages_consumed"] += message_count
             self._stats["pull_requests"] += 1
 
-    async def _filter_messages_by_tags(
-        self, messages: list[MessageExt], tags_set: list[str]
-    ) -> list[MessageExt]:
-        """根据标签过滤消息。
-
-        Args:
-            messages: 待过滤的消息列表
-            tags_set: 允许的标签集合
-
-        Returns:
-            list[MessageExt]: 过滤后的消息列表
-        """
-        filtered_messages: list[MessageExt] = []
-        for message in messages:
-            if message.get_tags() in tags_set:
-                filtered_messages.append(message)
-
-        return filtered_messages
-
     async def _submit_messages_for_processing(
         self, message_queue: MessageQueue, messages: list[MessageExt]
     ) -> None:
