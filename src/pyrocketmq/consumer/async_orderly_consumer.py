@@ -310,7 +310,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         """
         # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
         # 使用可重入锁保护重平衡操作
-        if not await self._rebalance_lock.acquire():
+        if not self._rebalance_lock.acquire():
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
             self._stats["rebalance_skipped_count"] += 1
             self.logger.debug(
@@ -330,6 +330,84 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             return False
 
         return True
+
+    async def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
+        """为指定队列启动拉取任务
+
+        Args:
+            queues: 要启动拉取任务的队列集合
+        """
+        for queue in queues:
+            if queue not in self._pull_tasks:
+                # 为每个队列创建停止事件
+                async with self._stop_events_lock:
+                    pull_stop_event = asyncio.Event()
+                    consume_stop_event = asyncio.Event()
+                    self._pull_stop_events[str(queue)] = pull_stop_event
+                    self._consume_stop_events[str(queue)] = consume_stop_event
+
+                # 启动拉取任务，传入停止事件
+                task = asyncio.create_task(
+                    self._pull_messages_loop(queue, pull_stop_event)
+                )
+                self._pull_tasks[str(queue)] = task
+
+                self.logger.debug(
+                    f"Started pull task for queue: {queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": queue.topic,
+                        "queue_id": queue.queue_id,
+                    },
+                )
+
+    async def _stop_pull_tasks(self) -> None:
+        """停止所有消息拉取任务 - 使用停止事件优雅关闭"""
+        if not self._pull_tasks:
+            return
+
+        # 设置所有停止事件
+        async with self._stop_events_lock:
+            for queue_key in self._pull_tasks.keys():
+                # 设置拉取停止事件
+                if queue_key in self._pull_stop_events:
+                    self._pull_stop_events[queue_key].set()
+                # 设置消费停止事件
+                if queue_key in self._consume_stop_events:
+                    self._consume_stop_events[queue_key].set()
+
+        # 取消所有异步任务
+        for queue_key, task in self._pull_tasks.items():
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    self.logger.debug(
+                        f"Pull task cancelled for queue: {queue_key}",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
+
+        self._pull_tasks.clear()
+
+        # 清理停止事件
+        async with self._stop_events_lock:
+            self._pull_stop_events.clear()
+            self._consume_stop_events.clear()
+
+        self.logger.debug(
+            "All pull tasks stopped",
+            extra={"consumer_group": self._config.consumer_group},
+        )
+
+        # 检查是否有订阅的Topic
+        topics: set[str] = self._subscription_manager.get_topics()
+        if not topics:
+            self.logger.debug("No topics subscribed, skipping rebalance")
+            self._rebalance_lock.release()
+            return
+
+        return
 
     async def _collect_and_allocate_queues(self) -> list[MessageQueue]:
         """收集所有Topic的可用队列并执行分配。
@@ -661,6 +739,152 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 exc_info=True,
             )
             return False
+
+    async def _pull_messages_loop(
+        self,
+        message_queue: MessageQueue,
+        pull_stop_event: asyncio.Event,
+    ) -> None:
+        """持续拉取指定队列的消息。
+
+        为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
+        并放入处理队列。这是消费者消息拉取的核心执行循环。
+
+        Args:
+            message_queue: 要持续拉取消息的目标队列
+            pull_stop_event: 拉取任务停止事件
+        """
+        suggest_broker_id = 0
+        while self._is_running and not pull_stop_event.is_set():
+            try:
+                # TODO: 实现实际的异步拉取逻辑
+                # 这里需要实现类似OrderlyConsumer中的_perform_single_pull的异步版本
+                # 暂时使用等待来模拟拉取过程
+
+                # 控制拉取频率 - 可中断的等待
+                try:
+                    await asyncio.wait_for(pull_stop_event.wait(), timeout=1.0)
+                    break  # 如果收到停止信号，退出循环
+                except asyncio.TimeoutError:
+                    pass  # 超时是正常的，继续拉取
+
+                self.logger.debug(
+                    f"Pulling messages from queue: {message_queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                    },
+                )
+
+            except asyncio.CancelledError:
+                self.logger.debug(
+                    f"Pull loop cancelled for queue: {message_queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                    },
+                )
+                break
+            except Exception as e:
+                self.logger.error(
+                    f"Error in pull messages loop for {message_queue}: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                # 错误时短暂等待后继续
+                try:
+                    await asyncio.wait_for(pull_stop_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    break
+
+    async def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
+        """获取或创建指定队列的ProcessQueue（消息缓存队列）
+
+        Args:
+            queue: 消息队列
+
+        Returns:
+            ProcessQueue: 指定队列的处理队列对象
+        """
+        async with self._cache_lock:
+            if queue not in self._msg_cache:
+                self._msg_cache[queue] = ProcessQueue(
+                    max_cache_count=self._config.max_cache_count_per_queue,
+                    max_cache_size_mb=self._config.max_cache_size_per_queue,
+                )
+            return self._msg_cache[queue]
+
+    async def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
+        """获取或初始化消费偏移量。
+
+        如果本地缓存的偏移量为0（首次消费），则根据配置的消费策略
+        从ConsumeFromWhereManager获取正确的初始偏移量。
+
+        Args:
+            message_queue: 要获取偏移量的消息队列
+
+        Returns:
+            int: 消费偏移量
+
+        Note:
+            - 如果偏移量不为0，直接返回缓存的值
+            - 如果偏移量为0，根据consume_from_where策略获取初始偏移量
+            - 获取失败时使用默认偏移量0，确保消费流程不中断
+        """
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            current_offset: int = self._assigned_queues.get(message_queue, 0)
+
+            # 如果current_offset为0（首次消费），则从_consume_from_where_manager中获取正确的初始偏移量
+            if current_offset == 0:
+                try:
+                    # 调用异步版本的偏移量获取
+                    current_offset = (
+                        await self._consume_from_where_manager.get_consume_offset(
+                            message_queue,
+                            self._config.consume_from_where,
+                            self._config.consume_timestamp
+                            if hasattr(self._config, "consume_timestamp")
+                            else 0,
+                        )
+                    )
+                    # 更新本地缓存的偏移量
+                    self._assigned_queues[message_queue] = current_offset
+
+                    self.logger.info(
+                        f"初始化消费偏移量: {current_offset}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "strategy": self._config.consume_from_where,
+                            "offset": current_offset,
+                        },
+                    )
+
+                except Exception as e:
+                    self.logger.error(
+                        f"获取初始消费偏移量失败，使用默认偏移量0: {e}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "strategy": self._config.consume_from_where,
+                            "error": str(e),
+                        },
+                        exc_info=True,
+                    )
+                    # 使用默认偏移量0
+                    current_offset = 0
+
+        return current_offset
 
     async def _cleanup_on_start_failure(self) -> None:
         """异步启动失败时的资源清理操作。
