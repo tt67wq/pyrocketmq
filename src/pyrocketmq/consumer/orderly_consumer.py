@@ -1856,44 +1856,6 @@ class OrderlyConsumer(BaseConsumer):
         process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
         _ = process_queue.add_batch_messages(messages)
 
-    # ==================== 偏移量管理模块 ====================
-
-    def _update_offset_to_store(
-        self, message_queue: MessageQueue, min_offset: int
-    ) -> None:
-        """
-        更新偏移量到存储
-
-        Args:
-            message_queue: 消息队列
-            min_offset: 最小偏移量
-        """
-        try:
-            self._offset_store.update_offset(message_queue, min_offset)
-            logger.debug(
-                f"Updated offset from cache: {min_offset}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "offset": min_offset,
-                    "cache_stats": self._msg_cache.get(
-                        message_queue, ProcessQueue()
-                    ).get_stats(),
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to update offset from cache: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": message_queue.topic,
-                    "queue_id": message_queue.queue_id,
-                    "offset": min_offset,
-                    "error": str(e),
-                },
-            )
-
     # ==================== 统计监控模块 ====================
 
     def _update_consume_stats(
@@ -2269,7 +2231,8 @@ class OrderlyConsumer(BaseConsumer):
         for msg in msgs:
             self._reset_retry(msg)
 
-        if self._concurrent_consume_message(msgs, q):
+        success, _ = self._orderly_consume_message(msgs, q)
+        if success:
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
                 order=False,
                 auto_commit=True,
