@@ -33,6 +33,7 @@ from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
+    ConsumeResult,
     MessageExt,
     MessageModel,
     MessageQueue,
@@ -484,7 +485,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 self._config.consumer_group
             )
 
-    async def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
+    def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
         """获取指定消息队列的锁信号量
 
         使用双重检查锁定模式来避免竞争条件
@@ -1015,7 +1016,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 self._consume_stop_events[queue_key].set()
 
         # 等待所有任务完成
-        tasks_to_cancel = []
+        tasks_to_cancel: list[asyncio.Task[None]] = []
         for queue_key, task in self._consume_tasks.items():
             if not task.done():
                 # 给任务一些时间来优雅退出
@@ -1057,15 +1058,12 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Returns:
             tuple[asyncio.Semaphore, bool]: (队列锁, 是否成功获取锁)
         """
-        queue_semaphore = self._get_queue_lock(message_queue)
-        lock_acquired = False
+        queue_semaphore: asyncio.Semaphore = self._get_queue_lock(message_queue)
+        lock_acquired: bool = False
 
         # 尝试非阻塞获取锁，如果失败则等待10ms后重试
         while not lock_acquired and self._is_running and not stop_event.is_set():
-            try:
-                lock_acquired = queue_semaphore.acquire_nowait()
-            except:
-                lock_acquired = False
+            lock_acquired = await queue_semaphore.acquire()
 
             if not lock_acquired:
                 # 等待10ms
@@ -1141,22 +1139,19 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         """
         pq: ProcessQueue = await self._get_or_create_process_queue(message_queue)
 
-        # 尝试获取消息
-        messages = []
+        # 使用ProcessQueue的take_messages方法
+        messages: list[MessageExt] = pq.take_messages(self._config.consume_batch_size)
 
-        # 使用异步方式从队列获取消息
-        while len(messages) < self._config.consume_message_batch_max_size:
-            if stop_event.is_set():
-                break
-
+        if not messages:
+            # 没有消息时等待
             try:
-                # 非阻塞获取消息
-                msg = pq.get_message(blocking=False)
-                if msg is None:
-                    break
-                messages.append(msg)
-            except:
-                break
+                await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            # 重置消息的重试次数
+            for msg in messages:
+                self._reset_retry(msg)
 
         return pq, messages
 
@@ -1267,12 +1262,113 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "orderly_consume_success_count", 0
             ) + len(messages)
 
-        except Exception as e:
+        except Exception as _:
             # 更新失败统计
             self._stats["orderly_consume_fail_count"] = self._stats.get(
                 "orderly_consume_fail_count", 0
             ) + len(messages)
             raise
+
+    async def _handle_auto_commit_result(
+        self,
+        pq: ProcessQueue,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        success: bool,
+        result: ConsumeResult,
+    ) -> tuple[bool, bool]:
+        """
+        处理自动提交模式下的消费结果。
+
+        Args:
+            pq: 处理队列
+            message_queue: 消息队列
+            messages: 消息列表
+            success: 是否处理成功
+            result: 消费结果
+
+        Returns:
+            tuple[bool, bool]: (是否继续循环, 是否需要等待)
+        """
+        if success:
+            offset = pq.commit()
+            if offset:
+                await self._offset_store.update_offset(message_queue, offset)
+            return False, False  # 跳出循环，不等待
+        else:
+            if await self._check_reconsume_times(message_queue, messages):
+                return True, True  # 继续循环，需要等待
+            else:
+                offset = pq.commit()
+                if offset:
+                    await self._offset_store.update_offset(message_queue, offset)
+                return False, False  # 跳出循环，不等待
+
+    async def _handle_manual_commit_result(
+        self,
+        pq: ProcessQueue,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        success: bool,
+        result: ConsumeResult,
+    ) -> tuple[bool, bool]:
+        """
+        处理手动提交模式下的消费结果。
+
+        Args:
+            pq: 处理队列
+            message_queue: 消息队列
+            messages: 消息列表
+            success: 是否处理成功
+            result: 消费结果
+
+        Returns:
+            tuple[bool, bool]: (是否继续循环, 是否需要等待)
+        """
+        if success:
+            if result == ConsumeResult.SUCCESS:
+                # 啥也不做, 等待下次一起commit
+                return False, False  # 跳出循环，不等待
+            else:
+                # commit
+                offset = pq.commit()
+                if offset:
+                    await self._offset_store.update_offset(message_queue, offset)
+                return False, False  # 跳出循环，不等待
+        else:
+            if result == ConsumeResult.ROLLBACK:
+                _ = pq.rollback(messages)
+                return False, True  # 跳出循环，需要等待
+            elif result == ConsumeResult.RECONSUME_LATER:
+                if await self._check_reconsume_times(message_queue, messages):
+                    return True, True  # 继续循环，需要等待
+                else:
+                    return False, False  # 跳出循环，不等待
+
+        return False, False
+
+    async def _check_reconsume_times(
+        self, message_queue: MessageQueue, messages: list[MessageExt]
+    ) -> bool:
+        """检查消息是否还需要重新消费
+
+        Args:
+            message_queue: 消息队列
+            messages: 消息列表
+
+        Returns:
+            bool: 是否需要重新消费
+        """
+        max_reconsume_times = self._config.max_reconsume_times
+
+        for message in messages:
+            reconsume_times = getattr(message, "reconsume_times", 0)
+            if reconsume_times >= max_reconsume_times:
+                # 超过最大重试次数，不再重试
+                return False
+
+        # 所有消息都还可以重试
+        return True
 
     async def _process_messages_with_retry(
         self, message_queue: MessageQueue, pq: ProcessQueue, messages: list[MessageExt]
