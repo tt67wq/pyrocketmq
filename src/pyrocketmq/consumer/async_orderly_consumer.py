@@ -970,6 +970,335 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         return flag
 
+    async def _start_consume_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
+        """为指定的队列集合启动消费任务
+
+        Args:
+            queues: 需要启动消费任务的队列集合
+        """
+        for message_queue in queues:
+            queue_key = str(message_queue)
+
+            # 获取或创建停止事件
+            async with self._stop_events_lock:
+                if queue_key not in self._consume_stop_events:
+                    self._consume_stop_events[queue_key] = asyncio.Event()
+                consume_stop_event = self._consume_stop_events[queue_key]
+
+            # 启动消费任务
+            if (
+                queue_key not in self._consume_tasks
+                or self._consume_tasks[queue_key].done()
+            ):
+                task = asyncio.create_task(
+                    self._consume_messages_loop(message_queue, consume_stop_event)
+                )
+                self._consume_tasks[queue_key] = task
+
+                self.logger.debug(
+                    f"Started consume task for queue: {message_queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                    },
+                )
+
+    async def _stop_consume_tasks(self) -> None:
+        """停止所有消息消费任务 - 使用停止事件优雅关闭"""
+        if not self._consume_tasks:
+            return
+
+        # 设置所有停止事件
+        async with self._stop_events_lock:
+            for queue_key in self._consume_stop_events:
+                self._consume_stop_events[queue_key].set()
+
+        # 等待所有任务完成
+        tasks_to_cancel = []
+        for queue_key, task in self._consume_tasks.items():
+            if not task.done():
+                # 给任务一些时间来优雅退出
+                try:
+                    await asyncio.wait_for(task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    # 超时则取消任务
+                    tasks_to_cancel.append(task)
+
+        # 取消超时的任务
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        # 等待取消完成
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        self._consume_tasks.clear()
+
+        # 清理停止事件
+        async with self._stop_events_lock:
+            self._consume_stop_events.clear()
+
+        self.logger.debug(
+            "All consume tasks stopped",
+            extra={"consumer_group": self._config.consumer_group},
+        )
+
+    async def _acquire_consume_lock(
+        self, message_queue: MessageQueue, stop_event: asyncio.Event
+    ) -> tuple[asyncio.Semaphore, bool]:
+        """
+        获取消费锁（本地锁 + 远程锁验证）。
+
+        Args:
+            message_queue: 要处理的消息队列
+            stop_event: 停止事件
+
+        Returns:
+            tuple[asyncio.Semaphore, bool]: (队列锁, 是否成功获取锁)
+        """
+        queue_semaphore = self._get_queue_lock(message_queue)
+        lock_acquired = False
+
+        # 尝试非阻塞获取锁，如果失败则等待10ms后重试
+        while not lock_acquired and self._is_running and not stop_event.is_set():
+            try:
+                lock_acquired = queue_semaphore.acquire_nowait()
+            except:
+                lock_acquired = False
+
+            if not lock_acquired:
+                # 等待10ms
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=0.01)
+                    break  # 如果收到停止信号，退出循环
+                except asyncio.TimeoutError:
+                    pass  # 超时是正常的，继续尝试获取锁
+
+        # 如果获取锁失败或消费者停止，则返回
+        if not lock_acquired or not self._is_running:
+            if lock_acquired:
+                queue_semaphore.release()
+            return queue_semaphore, False
+
+        # 本地锁持有成功，检查远程锁是否需要重新获取
+        # 广播模式下不需要远程锁，每个消费者独立处理所有消息
+        if self._config.message_model == MessageModel.BROADCASTING:
+            self.logger.debug(
+                f"Broadcast mode - skipping remote lock for queue {message_queue}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "operation": "consume_messages_loop",
+                    "message_model": "BROADCASTING",
+                },
+            )
+            return queue_semaphore, True
+
+        # 集群模式下需要远程锁来保证消息的顺序性
+        if not await self._is_remote_lock_valid(message_queue):
+            # 远程锁已过期或不存在，需要重新获取
+            if not await self._lock_remote_queue(message_queue):
+                self.logger.debug(
+                    f"Failed to acquire remote lock for queue {message_queue}, skipping this round",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "client_id": self._config.client_id,
+                        "queue": str(message_queue),
+                        "operation": "consume_messages_loop",
+                    },
+                )
+                # 释放本地锁并继续下一轮循环
+                queue_semaphore.release()
+                return queue_semaphore, False
+        else:
+            self.logger.debug(
+                f"Using cached remote lock for queue {message_queue}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "client_id": self._config.client_id,
+                    "queue": str(message_queue),
+                    "operation": "consume_messages_loop",
+                    "lock_cached": True,
+                },
+            )
+
+        return queue_semaphore, True
+
+    async def _fetch_messages_from_queue(
+        self, message_queue: MessageQueue, stop_event: asyncio.Event
+    ) -> tuple[ProcessQueue, list[MessageExt]]:
+        """
+        从处理队列获取消息。
+
+        Args:
+            message_queue: 消息队列
+            stop_event: 停止事件
+
+        Returns:
+            tuple[ProcessQueue, list[MessageExt]]: (处理队列, 消息列表)
+        """
+        pq: ProcessQueue = await self._get_or_create_process_queue(message_queue)
+
+        # 尝试获取消息
+        messages = []
+
+        # 使用异步方式从队列获取消息
+        while len(messages) < self._config.consume_message_batch_max_size:
+            if stop_event.is_set():
+                break
+
+            try:
+                # 非阻塞获取消息
+                msg = pq.get_message(blocking=False)
+                if msg is None:
+                    break
+                messages.append(msg)
+            except:
+                break
+
+        return pq, messages
+
+    async def _consume_messages_loop(
+        self, message_queue: MessageQueue, stop_event: asyncio.Event
+    ) -> None:
+        """消费消息的主循环
+
+        Args:
+            message_queue: 要消费的队列
+            stop_event: 停止事件
+        """
+        self.logger.debug(
+            f"Starting consume messages loop for queue: {message_queue}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": message_queue.topic,
+                "queue_id": message_queue.queue_id,
+            },
+        )
+
+        while self._is_running and not stop_event.is_set():
+            try:
+                # 获取消费锁
+                queue_semaphore, lock_acquired = await self._acquire_consume_lock(
+                    message_queue, stop_event
+                )
+
+                if not lock_acquired:
+                    continue
+
+                try:
+                    # 从队列获取消息
+                    pq, messages = await self._fetch_messages_from_queue(
+                        message_queue, stop_event
+                    )
+
+                    if messages:
+                        # 处理消息
+                        await self._process_messages_with_timing(
+                            message_queue, pq, messages
+                        )
+                    else:
+                        # 没有消息，短暂休眠
+                        try:
+                            await asyncio.wait_for(stop_event.wait(), timeout=0.1)
+                        except asyncio.TimeoutError:
+                            pass
+
+                finally:
+                    # 释放锁
+                    queue_semaphore.release()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self.logger.error(
+                    f"Error in consume messages loop for {message_queue}: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+                # 错误时短暂等待后继续
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+        self.logger.debug(
+            f"Consume messages loop ended for queue: {message_queue}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": message_queue.topic,
+                "queue_id": message_queue.queue_id,
+            },
+        )
+
+    async def _process_messages_with_timing(
+        self, message_queue: MessageQueue, pq: ProcessQueue, messages: list[MessageExt]
+    ) -> None:
+        """处理消息并记录时间
+
+        Args:
+            message_queue: 消息队列
+            pq: 处理队列
+            messages: 要处理的消息列表
+        """
+        start_time = time.time()
+
+        try:
+            # 调用消息处理逻辑
+            await self._process_messages_with_retry(message_queue, pq, messages)
+
+            # 更新统计
+            process_time = (time.time() - start_time) * 1000  # 转换为毫秒
+            self._stats["orderly_consume_rt_total"] = (
+                self._stats.get("orderly_consume_rt_total", 0.0) + process_time
+            )
+            self._stats["orderly_consume_rt_count"] = (
+                self._stats.get("orderly_consume_rt_count", 0) + 1
+            )
+            self._stats["orderly_consume_success_count"] = self._stats.get(
+                "orderly_consume_success_count", 0
+            ) + len(messages)
+
+        except Exception as e:
+            # 更新失败统计
+            self._stats["orderly_consume_fail_count"] = self._stats.get(
+                "orderly_consume_fail_count", 0
+            ) + len(messages)
+            raise
+
+    async def _process_messages_with_retry(
+        self, message_queue: MessageQueue, pq: ProcessQueue, messages: list[MessageExt]
+    ) -> None:
+        """带重试机制的消息处理
+
+        Args:
+            message_queue: 消息队列
+            pq: 处理队列
+            messages: 要处理的消息列表
+        """
+        # 这里应该调用具体的消息处理逻辑
+        # 暂时使用简单的日志记录
+        self.logger.debug(
+            f"Processing {len(messages)} messages from queue: {message_queue}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": message_queue.topic,
+                "queue_id": message_queue.queue_id,
+                "message_count": len(messages),
+            },
+        )
+
+        # TODO: 实现具体的消息处理逻辑
+        # 这里需要调用用户的MessageListener来处理消息
+
     async def _pull_messages_loop(
         self,
         message_queue: MessageQueue,
@@ -980,12 +1309,36 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         为每个分配的队列创建独立的拉取循环，持续从Broker拉取消息
         并放入处理队列。这是消费者消息拉取的核心执行循环。
 
+        执行流程：
+        1. 从队列的当前偏移量开始拉取消息
+        2. 如果拉取到消息，更新本地偏移量记录
+        3. 将消息添加到处理队列缓存
+        4. 根据配置的拉取间隔进行休眠控制
+
         Args:
             message_queue: 要持续拉取消息的目标队列
             pull_stop_event: 拉取任务停止事件
+
+        Note:
+            - 每个队列有独立的拉取任务，避免队列间相互影响
+            - 偏移量在本地维护，定期或在消息处理成功后更新到Broker
+            - 拉取失败会记录日志并等待重试，不会影响其他队列
+            - 消费者停止时此循环会自动退出
+            - 支持通过配置控制拉取频率
+            - 支持通过停止事件优雅关闭
         """
         suggest_broker_id = 0
         while self._is_running and not pull_stop_event.is_set():
+            # 检查是否需要流量控制
+            pq = await self._get_or_create_process_queue(message_queue)
+            if pq.need_flow_control():
+                # 使用可中断的等待，检查停止事件
+                try:
+                    await asyncio.wait_for(pull_stop_event.wait(), timeout=3.0)
+                    break  # 收到停止信号
+                except asyncio.TimeoutError:
+                    continue  # 超时是正常的，继续检查流量控制
+
             try:
                 # 执行单次拉取操作
                 pull_result = await self._perform_single_pull(
@@ -993,57 +1346,48 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 )
 
                 if pull_result is None:
-                    # 没有订阅信息，停止拉取
+                    # 如果返回None，说明没有订阅信息，停止消费
                     self.logger.warning(
-                        f"No subscription found for topic: {message_queue.topic}",
+                        "No subscription found for topic, stopping pull loop",
                         extra={
                             "consumer_group": self._config.consumer_group,
                             "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
                         },
                     )
                     break
 
                 messages, next_begin_offset, next_suggest_id = pull_result
-
-                if messages:
-                    # 将消息添加到缓存队列
-                    await self._add_messages_to_cache(message_queue, messages)
-
-                    self.logger.debug(
-                        f"Pulled {len(messages)} messages from queue: {message_queue}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "topic": message_queue.topic,
-                            "queue_id": message_queue.queue_id,
-                            "message_count": len(messages),
-                        },
-                    )
-                else:
-                    self.logger.debug(
-                        f"No messages pulled from queue: {message_queue}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "topic": message_queue.topic,
-                            "queue_id": message_queue.queue_id,
-                        },
-                    )
-
-                # 更新下次拉取的建议Broker ID
                 suggest_broker_id = next_suggest_id
 
-                # 应用智能拉取间隔控制
+                if messages:
+                    # 处理拉取到的消息
+                    await self._handle_pulled_messages(
+                        message_queue, messages, next_begin_offset
+                    )
+                else:
+                    # 没有拉取到消息，只更新请求统计
+                    self._stats["pull_requests"] = (
+                        self._stats.get("pull_requests", 0) + 1
+                    )
+
+                # 控制拉取频率 - 传入是否有消息的标志，使用可中断等待
                 await self._apply_pull_interval(
-                    has_messages=bool(messages), pull_stop_event=pull_stop_event
+                    has_messages=bool(messages), stop_event=pull_stop_event
                 )
 
-            except asyncio.CancelledError:
-                self.logger.debug(
-                    f"Pull loop cancelled for queue: {message_queue}",
+            except MessagePullError as e:
+                self.logger.warning(
+                    "The pull request is illegal",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "topic": message_queue.topic,
+                        "queue_id": message_queue.queue_id,
+                        "error": str(e),
                     },
                 )
+                break
+            except asyncio.CancelledError:
                 break
             except Exception as e:
                 self.logger.error(
@@ -1056,13 +1400,15 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     },
                     exc_info=True,
                 )
-                # 错误时短暂等待后继续
+
+                self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+
+                # 拉取失败时等待一段时间再重试，使用可中断等待
                 try:
-                    await asyncio.wait_for(pull_stop_event.wait(), timeout=5.0)
+                    await asyncio.wait_for(pull_stop_event.wait(), timeout=3.0)
+                    break  # 收到停止信号
                 except asyncio.TimeoutError:
-                    continue
-                except asyncio.CancelledError:
-                    break
+                    continue  # 超时是正常的，继续重试
 
     async def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
         """获取或创建指定队列的ProcessQueue（消息缓存队列）
@@ -1144,6 +1490,47 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     current_offset = 0
 
         return current_offset
+
+    async def _handle_pulled_messages(
+        self,
+        message_queue: MessageQueue,
+        messages: list[MessageExt],
+        next_begin_offset: int,
+    ) -> None:
+        """处理拉取到的消息。
+
+        包括更新偏移量、缓存消息、统计信息等。
+
+        Args:
+            message_queue: 消息队列
+            messages: 拉取到的消息列表
+            next_begin_offset: 下次拉取的起始偏移量
+        """
+        # 更新偏移量
+        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            self._assigned_queues[message_queue] = next_begin_offset
+
+        # 将消息添加到缓存中（用于解决并发偏移量问题）
+        await self._add_messages_to_cache(message_queue, messages)
+
+        # 更新统计信息
+        message_count = len(messages)
+        self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
+        self._stats["messages_consumed"] = (
+            self._stats.get("messages_consumed", 0) + message_count
+        )
+        self._stats["pull_requests"] = self._stats.get("pull_requests", 0) + 1
+
+        self.logger.debug(
+            f"Pulled {len(messages)} messages from queue: {message_queue}",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "topic": message_queue.topic,
+                "queue_id": message_queue.queue_id,
+                "message_count": len(messages),
+                "next_begin_offset": next_begin_offset,
+            },
+        )
 
     async def _apply_pull_interval(
         self, has_messages: bool = True, stop_event: asyncio.Event | None = None
