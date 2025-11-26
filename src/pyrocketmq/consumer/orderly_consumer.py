@@ -8,13 +8,9 @@ from datetime import datetime
 from typing import Any, Optional
 
 from pyrocketmq.broker import BrokerClient, MessagePullError
-from pyrocketmq.consumer.allocate_queue_strategy import (
-    AllocateContext,
-    AllocateQueueStrategyFactory,
-)
+from pyrocketmq.consumer.allocate_queue_strategy import AllocateContext
 from pyrocketmq.consumer.base_consumer import BaseConsumer
 from pyrocketmq.consumer.config import ConsumerConfig
-from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManager
 from pyrocketmq.consumer.errors import (
     ConsumerShutdownError,
     ConsumerStartError,
@@ -46,20 +42,6 @@ logger = get_logger(__name__)
 class OrderlyConsumer(BaseConsumer):
     def __init__(self, config: ConsumerConfig) -> None:
         super().__init__(config)
-
-        # 创建消费起始位置管理器
-        self._consume_from_where_manager: ConsumeFromWhereManager = (
-            ConsumeFromWhereManager(
-                consume_group=self._config.consumer_group,
-                namesrv_manager=self._name_server_manager,
-                broker_manager=self._broker_manager,
-            )
-        )
-
-        # 创建队列分配策略
-        self._allocate_strategy = AllocateQueueStrategyFactory.create_strategy(
-            self._config.allocate_queue_strategy
-        )
 
         # 线程池和队列管理
         # 顺序消息消费者每个message_queue一个消费线程

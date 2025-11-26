@@ -16,6 +16,11 @@ from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.broker import BrokerClient, BrokerManager
+from pyrocketmq.consumer.allocate_queue_strategy import (
+    AllocateQueueStrategyBase,
+    AllocateQueueStrategyFactory,
+)
+from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManager
 from pyrocketmq.consumer.offset_store import OffsetStore
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
@@ -133,6 +138,22 @@ class BaseConsumer:
             namesrv_manager=self._name_server_manager,
             broker_manager=self._broker_manager,
             persist_interval=self._config.persist_interval,
+        )
+
+        # 创建消费起始位置管理器
+        self._consume_from_where_manager: ConsumeFromWhereManager = (
+            ConsumeFromWhereManager(
+                consume_group=self._config.consumer_group,
+                namesrv_manager=self._name_server_manager,
+                broker_manager=self._broker_manager,
+            )
+        )
+
+        # 创建队列分配策略
+        self._allocate_strategy: AllocateQueueStrategyBase = (
+            AllocateQueueStrategyFactory.create_strategy(
+                self._config.allocate_queue_strategy
+            )
         )
 
         self._is_running: bool = False
