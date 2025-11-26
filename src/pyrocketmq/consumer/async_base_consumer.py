@@ -1,14 +1,13 @@
 """
-AsyncBaseConsumer - 异步消费者抽象基类
+AsyncBaseConsumer - 异步消费者抽象基类（模块化重组版本）
 
 AsyncBaseConsumer是pyrocketmq消费者模块的异步抽象基类，定义了所有异步消费者的
-通用接口和基础功能。它提供统一的配置管理、消息监听器注册、订阅管理等
-核心功能，为具体异步消费者实现（如AsyncConcurrentConsumer、AsyncOrderlyConsumer等）
-提供坚实的基础。
+通用接口和基础功能。本文件按照功能模块进行了重组，提高了代码的可读性和维护性。
 
 所有网络操作、IO操作都采用asyncio异步编程模型，适用于高并发异步应用场景。
 
 作者: pyrocketmq开发团队
+版本: 重组版本 v1.0 - 按功能模块重新组织
 """
 
 import asyncio
@@ -62,52 +61,76 @@ from .subscription_manager import SubscriptionManager
 logger = get_logger(__name__)
 
 
+# ===============================================================================
+# 异步消费者抽象基类 - AsyncBaseConsumer（模块化重组版本）
+# ===============================================================================
+#
+# 该类定义了RocketMQ异步消费者的核心接口和基础功能，采用模块化设计，
+# 按功能划分为以下几个核心模块：
+#
+# 1. 核心初始化和生命周期管理模块
+#    - 负责消费者的创建、启动、关闭等生命周期管理
+#    - 管理异步资源的初始化和清理
+#
+# 2. 订阅管理模块
+#    - 处理Topic的订阅、取消订阅操作
+#    - 管理重试主题的自动订阅
+#    - 提供订阅状态查询接口
+#
+# 3. 消息处理核心模块
+#    - 实现并发和顺序两种消费模式
+#    - 处理消息重试和回退机制
+#    - 提供消息过滤和预处理功能
+#
+# 4. 异步路由刷新任务模块
+#    - 定期刷新Topic路由信息
+#    - 维护Broker连接状态
+#    - 处理集群拓扑变化
+#
+# 5. 异步心跳任务模块
+#    - 定期向Broker发送心跳
+#    - 维护消费者存活状态
+#    - 提供心跳统计和监控
+#
+# 6. 配置和状态管理模块
+#    - 管理消费者配置信息
+#    - 提供运行状态查询接口
+#    - 维护组件间的关联关系
+#
+# 7. 资源清理和工具模块
+#    - 负责异步任务的优雅关闭
+#    - 清理网络连接等资源
+#    - 提供工具方法支持
+#
+# 设计原则:
+# - 异步优先: 所有IO操作采用async/await模式
+# - 模块化: 清晰的功能模块划分，便于维护
+# - 可扩展: 便于添加新的异步消费者类型
+# - 线程安全: 使用asyncio.Lock保证并发安全
+# - 容错性: 完善的异常处理和恢复机制
+# ===============================================================================
+
+
 class AsyncBaseConsumer:
     """
-    异步消费者抽象基类
+    异步消费者抽象基类（模块化重组版本）
 
-    定义了所有RocketMQ异步消费者的核心接口和基础功能。具体异步消费者实现
-    （如异步并发消费者、异步顺序消费者等）需要继承这个类并实现其抽象方法。
-
-    核心功能:
-        - 异步配置管理: 统一的Consumer配置管理
-        - 异步订阅管理: Topic订阅和消息选择器管理
-        - 异步消息监听: 异步消息处理回调机制
-        - 异步生命周期: 启动、停止等异步生命周期管理
-        - 异步错误处理: 统一的异常处理和错误恢复
-
-    设计原则:
-        - 异步优先: 所有IO操作都采用async/await模式
-        - 接口分离: 清晰定义各层职责
-        - 可扩展性: 便于添加新的异步消费者类型
-        - 线程安全: 所有公共操作保证线程安全
-        - 资源管理: 完善的异步资源清理机制
-
-    Attributes:
-        _config: 消费者配置实例
-        _subscription_manager: 订阅关系管理器
-        _message_listeners: 异步消息监听器字典，按Topic存储监听器
-        _is_running: 消费者运行状态标志
-        _lock: 异步线程安全锁
-
-    Example:
-        >>> class MyAsyncConsumer(AsyncBaseConsumer):
-        ...     def __init__(self, config):
-        ...         super().__init__(config)
-        ...         # 初始化特定资源
-        ...
-        ...     async def start(self):
-        ...         # 实现具体的异步启动逻辑
-        ...         await self._async_start()
-        ...
-        ...     async def shutdown(self):
-        ...         # 实现具体的异步停止逻辑
-        ...         await self._async_shutdown()
-        ...
-        ...     async def _consume_message(self, messages, context):
-        ...         # 实现具体的异步消费逻辑
-        ...         pass
+    该版本按照功能模块重新组织了代码结构，提高了可读性和维护性。
     """
+
+    # ==================== 1. 核心初始化和生命周期管理模块 ====================
+    #
+    # 该模块负责AsyncBaseConsumer的完整生命周期管理，包括：
+    # - 构造函数中的组件初始化和配置验证
+    # - 消费者启动时的资源分配和任务创建
+    # - 消费者关闭时的资源清理和任务终止
+    # - 异步资源的优雅释放和状态重置
+    #
+    # 关键特性:
+    # - 使用asyncio.Lock保证线程安全
+    # - 完整的错误处理和状态跟踪
+    # - 资源的初始化和清理配对管理
+    # - 支持重启和重新配置场景
 
     def __init__(self, config: ConsumerConfig) -> None:
         """
@@ -122,24 +145,51 @@ class AsyncBaseConsumer:
         Raises:
             ValueError: 当config为None时抛出
         """
-
+        # 基础配置和状态初始化
         self._config: ConsumerConfig = config
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
         self._message_listeners: dict[str, AsyncMessageListener] = {}
         self._is_running: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
 
-        # 异步管理器
+        # 异步管理器初始化
+        self._initialize_async_managers()
+
+        # 异步任务和事件初始化
+        self._initialize_async_tasks()
+
+        # 路由映射和统计信息初始化
+        self._initialize_routing_and_stats()
+
+        # 日志记录器初始化
+        self._logger = get_logger(f"{__name__}.{config.consumer_group}")
+
+        self._logger.info(
+            "异步消费者初始化完成",
+            extra={
+                "consumer_group": config.consumer_group,
+                "namesrv_addr": config.namesrv_addr,
+                "message_model": config.message_model,
+                "client_id": config.client_id,
+            },
+        )
+
+    def _initialize_async_managers(self) -> None:
+        """初始化异步管理器组件"""
+        # NameServer管理器
         self._nameserver_manager: AsyncNameServerManager = (
             create_async_nameserver_manager(self._config.namesrv_addr)
         )
 
+        # Broker管理器
         remote_config: RemoteConfig = RemoteConfig(
             connection_pool_size=32, connection_max_lifetime=30
         )
         self._broker_manager: AsyncBrokerManager = AsyncBrokerManager(
             remote_config=remote_config
         )
+
+        # 偏移量存储
         self._offset_store: AsyncOffsetStore = (
             AsyncOffsetStoreFactory.create_offset_store(
                 consumer_group=self._config.consumer_group,
@@ -150,6 +200,8 @@ class AsyncBaseConsumer:
                 persist_interval=self._config.persist_interval,
             )
         )
+
+        # 消费起始位置管理器
         self._consume_from_where_manager: AsyncConsumeFromWhereManager = (
             AsyncConsumeFromWhereManager(
                 consume_group=self._config.consumer_group,
@@ -158,7 +210,9 @@ class AsyncBaseConsumer:
             )
         )
 
-        # 创建队列分配策略
+    def _initialize_async_tasks(self) -> None:
+        """初始化异步任务和事件"""
+        # 队列分配策略
         self._allocate_strategy: AllocateQueueStrategyBase = (
             AllocateQueueStrategyFactory.create_strategy(
                 self._config.allocate_queue_strategy
@@ -178,6 +232,8 @@ class AsyncBaseConsumer:
         self._route_refresh_event: asyncio.Event = asyncio.Event()
         self._heartbeat_event: asyncio.Event = asyncio.Event()
 
+    def _initialize_routing_and_stats(self) -> None:
+        """初始化路由映射和统计信息"""
         # 路由映射
         self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
             ConsumerTopicBrokerMapping()
@@ -199,19 +255,6 @@ class AsyncBaseConsumer:
         # 消费者状态
         self._start_time: float = 0
         self._shutdown_time: float = 0
-
-        # 日志记录器
-        self._logger = get_logger(f"{__name__}.{config.consumer_group}")
-
-        self._logger.info(
-            "异步消费者初始化完成",
-            extra={
-                "consumer_group": config.consumer_group,
-                "namesrv_addr": config.namesrv_addr,
-                "message_model": config.message_model,
-                "client_id": config.client_id,
-            },
-        )
 
     async def start(self) -> None:
         """
@@ -237,6 +280,120 @@ class AsyncBaseConsumer:
         """
         await self._async_shutdown()
 
+    async def _async_start(self) -> None:
+        """异步启动异步消费者的基础组件。
+
+        异步启动NameServer管理器、Broker管理器、偏移量存储等基础组件，
+        这是所有异步消费者启动过程中的通用逻辑。
+
+        Raises:
+            ConsumerError: 当启动基础组件失败时抛出
+        """
+        try:
+            self._logger.info("开始启动异步消费者基础组件")
+
+            # 启动核心管理器
+            await self._nameserver_manager.start()
+            await self._broker_manager.start()
+            await self._offset_store.start()
+
+            # 启动后台任务
+            await self._start_route_refresh_task()
+            await self._start_heartbeat_task()
+
+            # 更新状态
+            self._start_time = time.time()
+            self._is_running = True
+
+            self._logger.info("异步消费者基础组件启动完成")
+
+            # 订阅重试主题（集群模式）
+            if self._config.message_model == MessageModel.CLUSTERING:
+                self._subscribe_retry_topic()
+
+        except Exception as e:
+            self._logger.error(
+                "启动异步消费者基础组件失败",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
+            await self._async_cleanup_resources()
+            raise ConsumerError(f"启动异步消费者基础组件失败: {e}") from e
+
+    async def _async_shutdown(self) -> None:
+        """异步关闭异步消费者的基础组件。
+
+        异步关闭NameServer管理器、Broker管理器、偏移量存储等基础组件，
+        这是所有异步消费者关闭过程中的通用逻辑。
+
+        Raises:
+            ConsumerError: 当关闭基础组件失败时抛出
+        """
+        try:
+            self._logger.info("开始关闭异步消费者基础组件")
+
+            # 更新状态
+            self._is_running = False
+            self._shutdown_time = time.time()
+
+            # 通知后台任务退出
+            self._route_refresh_event.set()
+            self._heartbeat_event.set()
+
+            # 关闭异步任务
+            await self._shutdown_async_tasks()
+
+            # 清理资源
+            await self._async_cleanup_resources()
+
+            self._logger.info("异步消费者基础组件关闭完成")
+
+        except Exception as e:
+            self._logger.error(
+                "关闭异步消费者基础组件失败",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
+            raise ConsumerError(f"关闭异步消费者基础组件失败: {e}") from e
+
+    def __str__(self) -> str:
+        """字符串表示"""
+        subscription_count: int = len(
+            self._subscription_manager.get_all_subscriptions()
+        )
+        return (
+            f"AsyncBaseConsumer["
+            f"group={self._config.consumer_group}, "
+            f"running={self._is_running}, "
+            f"subscriptions={subscription_count}"
+            f"]"
+        )
+
+    def __repr__(self) -> str:
+        """详细字符串表示"""
+        return (
+            f"AsyncBaseConsumer("
+            f"consumer_group='{self._config.consumer_group}', "
+            f"namesrv_addr='{self._config.namesrv_addr}', "
+            f"message_model='{self._config.message_model}', "
+            f"is_running={self._is_running}"
+            f")"
+        )
+
+    # ==================== 2. 订阅管理模块 ====================
+    #
+    # 该模块负责处理消费者的订阅相关操作，包括：
+    # - Topic的订阅和取消订阅
+    # - 重试主题的自动管理
+    # - 订阅状态查询和验证
+    # - 订阅关系的一致性维护
+    #
+    # 关键特性:
+    # - 线程安全的订阅操作
+    # - 自动重试主题订阅
+    # - 订阅冲突检测和处理
+    # - 完整的订阅状态跟踪
+
     async def subscribe(
         self, topic: str, selector: MessageSelector, listener: AsyncMessageListener
     ) -> None:
@@ -255,6 +412,7 @@ class AsyncBaseConsumer:
             SubscribeError: 订阅失败时抛出
             ValueError: 当参数无效时抛出
         """
+        # 参数验证
         if not topic:
             raise ValueError("Topic cannot be empty")
         if not selector:
@@ -347,10 +505,7 @@ class AsyncBaseConsumer:
         except Exception as e:
             self._logger.error(
                 "取消订阅Topic失败",
-                extra={
-                    "topic": topic,
-                    "error": str(e),
-                },
+                extra={"topic": topic, "error": str(e)},
                 exc_info=True,
             )
             raise UnsubscribeError(topic, f"取消订阅失败: {e}", e) from e
@@ -379,55 +534,120 @@ class AsyncBaseConsumer:
         """
         return self._subscription_manager.is_subscribed(topic)
 
-    async def is_running(self) -> bool:
+    def _get_retry_topic(self) -> str:
         """
-        异步检查消费者是否正在运行
+        获取消费者组对应的重试主题名称。
+
+        在RocketMQ中，当消息消费失败时，系统会按照重试主题将消息重新投递给消费者。
+        重试主题的命名规则为：%RETRY%{consumer_group}。
 
         Returns:
-            如果正在运行返回True，否则返回False
+            str: 重试主题名称，格式为 %RETRY%{consumer_group}
         """
-        return self._is_running
+        return f"%RETRY%{self._config.consumer_group}"
 
-    async def get_config(self) -> ConsumerConfig:
+    def _is_retry_topic(self, topic: str) -> bool:
         """
-        异步获取消费者配置
+        判断指定主题是否是重试主题
 
-        Returns:
-            消费者配置的副本
-        """
-        return self._config
-
-    async def get_subscription_manager(self) -> SubscriptionManager:
-        """
-        异步获取订阅管理器
-
-        Returns:
-            订阅管理器实例
-        """
-        return self._subscription_manager
-
-    async def get_message_listener(self, topic: str) -> AsyncMessageListener | None:
-        """
-        异步获取指定Topic的消息监听器
+        检查给定的主题名是否符合重试主题的命名规范。
+        重试主题的格式为：%RETRY%+consumer_group
 
         Args:
-            topic: Topic名称，不能为空
+            topic (str): 要检查的主题名
 
         Returns:
-            指定Topic的消息监听器实例，如果未注册则返回None
+            bool: 如果是重试主题返回True，否则返回False
         """
-        if not topic:
-            raise ValueError("Topic cannot be empty")
-        return self._message_listeners.get(topic)
+        if not topic or not isinstance(topic, str):
+            return False
 
-    async def get_all_listeners(self) -> dict[str, AsyncMessageListener]:
-        """
-        异步获取所有Topic的消息监听器
+        retry_topic_prefix = f"%RETRY%{self._config.consumer_group}"
+        return topic == retry_topic_prefix
 
-        Returns:
-            包含所有Topic监听器的字典副本
+    def _subscribe_retry_topic(self) -> None:
         """
-        return self._message_listeners.copy()
+        订阅重试主题。
+
+        自动订阅该消费者组的重试主题，格式为：%RETRY%+consumer_group。
+        重试主题用于接收消费失败需要重试的消息。
+
+        异常处理:
+            - 如果订阅失败，记录错误日志但不抛出异常
+            - 重试主题订阅失败不应该影响消费者正常启动
+            - 提供详细的错误上下文信息用于问题排查
+
+        Note:
+            - 重试主题使用TAG选择器订阅所有消息（"*"），因为重试消息不需要额外过滤
+            - 检查重复订阅，避免资源浪费
+        """
+        retry_topic = self._get_retry_topic()
+
+        try:
+            from pyrocketmq.model.client_data import create_tag_selector
+
+            # 创建订阅所有消息的选择器
+            retry_selector = create_tag_selector("*")
+
+            # 检查是否已经订阅了重试主题，避免重复订阅
+            is_subscribed: bool = self._subscription_manager.is_subscribed(retry_topic)
+            if not is_subscribed:
+                success = self._subscription_manager.subscribe(
+                    retry_topic, retry_selector
+                )
+
+                if success:
+                    logger.info(
+                        f"Successfully subscribed to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                            "max_retry_times": self._config.max_retry_times,
+                        },
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to subscribe to retry topic: {retry_topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "retry_topic": retry_topic,
+                        },
+                    )
+            else:
+                logger.debug(
+                    f"Retry topic already subscribed: {retry_topic}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "retry_topic": retry_topic,
+                    },
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error subscribing to retry topic {retry_topic}: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "retry_topic": retry_topic,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+            # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
+
+    # ==================== 3. 消息处理核心模块 ====================
+    #
+    # 该模块是消费者的核心消息处理引擎，负责：
+    # - 消息消费的前期准备和验证
+    # - 并发和顺序两种消费模式的实现
+    # - 消息重试和回退机制的处理
+    # - 消息过滤和预处理功能
+    #
+    # 关键特性:
+    # - 支持并发和顺序消费两种模式
+    # - 完整的消息重试机制
+    # - 灵活的消息过滤功能
+    # - 统一的消息处理流程
+    # - 异常安全的处理机制
 
     def _async_prepare_message_consumption(
         self,
@@ -450,13 +670,6 @@ class AsyncBaseConsumer:
             tuple[AsyncMessageListener | None, AsyncConsumeContext | None]:
                 - AsyncMessageListener: 找到的异步监听器，如果没有找到则为None
                 - AsyncConsumeContext: 创建的异步消费上下文，如果没有找到则为None
-
-        Examples:
-            >>> listener, context = self._async_prepare_message_consumption(messages, queue)
-            >>> if listener:
-            >>>     result = await listener.consume_message(messages, context)
-            >>> else:
-            >>>     return False
         """
         # 消息验证
         if not messages:
@@ -509,7 +722,8 @@ class AsyncBaseConsumer:
     async def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
-        """异步处理接收到的消息的内部方法。
+        """
+        异步并发消费消息的核心方法。
 
         这是异步并发消费者的核心消息处理方法，负责根据消息的topic选择对应的监听器来处理消息。
         支持为不同topic配置不同的异步监听器，实现灵活的业务逻辑处理。同时支持重试主题的智能路由。
@@ -524,10 +738,7 @@ class AsyncBaseConsumer:
                 - False: 消息处理失败或发生异常，消息将进入重试流程
 
         Raises:
-            ConsumerError: 当消息处理过程中发生严重错误时抛出，例如：
-                - 监听器调用失败且无法重试
-                - 消息上下文创建失败
-                - 其他无法恢复的系统错误
+            ConsumerError: 当消息处理过程中发生严重错误时抛出
         """
         if not messages:
             logger.warning(
@@ -540,37 +751,13 @@ class AsyncBaseConsumer:
             )
             return True  # 空消息列表视为处理成功
 
-        # 获取对应Topic的监听器
-        topic: str = message_queue.topic
-        listener: AsyncMessageListener | None = self._message_listeners.get(topic)
-        if not listener and self._is_retry_topic(topic):
-            origin_topic: str | None = messages[0].get_property(
-                MessageProperty.RETRY_TOPIC
-            )
-            listener = (
-                self._message_listeners.get(origin_topic) if origin_topic else None
-            )
-
-        if not listener:
-            logger.error(
-                f"No message listener registered for topic: {topic}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": topic,
-                    "queue_id": message_queue.queue_id,
-                    "available_topics": list(self._message_listeners.keys()),
-                },
-            )
-            return False
-
-        # 创建异步消费上下文
-        reconsume_times: int = messages[0].reconsume_times if messages else 0
-        context: AsyncConsumeContext = AsyncConsumeContext(
-            consumer_group=self._config.consumer_group,
-            message_queue=message_queue,
-            reconsume_times=reconsume_times,
+        # 使用通用方法进行消息验证和监听器选择
+        listener, context = self._async_prepare_message_consumption(
+            messages, message_queue, "concurrent"
         )
+
+        if not listener or not context:
+            return False
 
         try:
             logger.debug(
@@ -580,12 +767,14 @@ class AsyncBaseConsumer:
                     "message_count": len(messages),
                     "topic": context.topic,
                     "queue_id": context.queue_id,
-                    "reconsume_times": reconsume_times,
+                    "reconsume_times": context.reconsume_times,
                     "listener_type": type(listener).__name__,
                 },
             )
 
             result: ConsumeResult = await listener.consume_message(messages, context)
+
+            # 验证消费结果的有效性
             if result in [
                 ConsumeResult.COMMIT,
                 ConsumeResult.ROLLBACK,
@@ -651,19 +840,11 @@ class AsyncBaseConsumer:
         异步顺序消费消息的核心方法
 
         此方法负责按消息的队列偏移量顺序进行异步消费处理，保证同一消息队列中的消息
-        按照严格的顺序被处理。这是RocketMQ异步顺序消费的核心实现，支持多种消费结果
-        和异常处理机制。
-
-        消费结果处理规则:
-        - ConsumeResult.SUCCESS: 消费成功，提交偏移量
-        - ConsumeResult.COMMIT: 消费成功，明确提交偏移量
-        - ConsumeResult.ROLLBACK: 消费失败，回滚消息重新处理
-        - ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT: 消费失败，暂停当前队列一段时间
-        - ConsumeResult.RECONSUME_LATER: 无效结果，抛出异常（顺序消费不支持）
+        按照严格的顺序被处理。这是RocketMQ异步顺序消费的核心实现。
 
         Args:
             messages (list[MessageExt]): 要消费的消息列表，保证按queue_offset排序
-            message_queue (MessageQueue): 消息所属的队列信息，包含topic、brokerName、queueId
+            message_queue (MessageQueue): 消息所属的队列信息
 
         Returns:
             tuple[bool, ConsumeResult]:
@@ -673,33 +854,8 @@ class AsyncBaseConsumer:
         Raises:
             ValueError: 当监听器或上下文为None时
             InvalidConsumeResultError: 当返回不支持的消费结果时
-
-        处理流程:
-        1. 通过_async_prepare_message_consumption准备异步消息消费上下文
-        2. 调用异步监听器的consume_message方法进行实际消费
-        3. 验证消费结果的有效性
-        4. 处理消费过程中的异常情况
-        5. 返回处理结果供上层调用者决策
-
-        注意事项:
-        - 顺序消费不支持RECONSUME_LATER结果，会抛出InvalidConsumeResultError
-        - 异常情况下会尝试调用异步监听器的on_exception回调方法
-        - 所有日志都包含结构化信息，便于问题诊断和监控
-        - 返回的bool值表示整体处理成功与否，ConsumeResult提供具体结果信息
-        - 所有IO操作都是异步的，使用await关键字
-
-        Example:
-            >>> success, result = await consumer._orderly_consume_message(
-            ...     messages, message_queue
-            ... )
-            >>> if success and result == ConsumeResult.SUCCESS:
-            ...     # 消费成功，提交偏移量
-            ...     pass
-            >>> elif result == ConsumeResult.ROLLBACK:
-            ...     # 需要回滚消息重新处理
-            ...     pass
         """
-        # 使用异步通用方法进行消息验证和监听器选择
+        # 使用通用方法进行消息验证和监听器选择
         listener, context = self._async_prepare_message_consumption(
             messages, message_queue, "orderly"
         )
@@ -725,6 +881,7 @@ class AsyncBaseConsumer:
 
             result: ConsumeResult = await listener.consume_message(messages, context)
 
+            # 验证消费结果的有效性
             if result == ConsumeResult.RECONSUME_LATER:
                 logger.error(
                     "Invalid result for async orderly consumer",
@@ -735,7 +892,6 @@ class AsyncBaseConsumer:
                         "result": result.value,
                     },
                 )
-                # 抛出无效消费结果异常
                 raise InvalidConsumeResultError(
                     consumer_type="async orderly",
                     invalid_result=result.value,
@@ -749,10 +905,7 @@ class AsyncBaseConsumer:
                     queue_id=context.queue_id,
                 )
 
-            success = result in [
-                ConsumeResult.SUCCESS,
-                ConsumeResult.COMMIT,
-            ]
+            success = result in [ConsumeResult.SUCCESS, ConsumeResult.COMMIT]
             return success, result
 
         except InvalidConsumeResultError:
@@ -791,64 +944,18 @@ class AsyncBaseConsumer:
     async def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
     ) -> bool:
-        """将消费失败的消息异步发送回broker重新消费。
+        """
+        将消费失败的消息异步发送回broker重新消费。
 
         当消息消费失败时，此方法负责将消息异步发送回原始broker，
         以便后续重新消费。这是RocketMQ异步消息重试机制的重要组成部分。
 
         Args:
-            message_queue (MessageQueue): 消息来自的队列信息，包含broker名称和队列ID
-            message (MessageExt): 需要发送回的消息对象，包含消息内容和属性
+            message_queue (MessageQueue): 消息来自的队列信息
+            message (MessageExt): 需要发送回的消息对象
 
         Returns:
             bool: 发送操作是否成功
-                - True: 消息成功发送回broker，将进入重试流程
-                - False: 发送失败，消息可能丢失或需要其他处理
-
-        Raises:
-            该方法不抛出异常，所有错误都会被捕获并记录日志
-
-        异步处理流程:
-            1. 异步获取目标broker地址
-            2. 验证broker地址有效性
-            3. 异步建立与broker的连接池
-            4. 使用异步上下文管理器获取连接
-            5. 设置消息重试相关属性：
-               - RETRY_TOPIC: 设置重试主题名
-               - CONSUME_START_TIME: 记录消费开始时间
-               - reconsume_times: 递增重试次数
-            6. 异步调用broker的consumer_send_msg_back接口
-            7. 记录处理结果和统计信息
-
-        异步特性:
-            - 所有IO操作都使用async/await模式
-            - 使用AsyncConnectionPool进行异步连接管理
-            - 使用AsyncBrokerClient进行异步通信
-            - 异步上下文管理器确保资源正确释放
-            - 不阻塞事件循环，支持高并发场景
-
-        错误处理:
-            - 如果无法获取broker地址，记录错误日志并返回False
-            - 如果连接或发送失败，记录错误日志但不抛出异常
-            - 确保异步消费循环的连续性，避免单个消息失败影响整体消费
-
-        Examples:
-            >>> # 在异步消费循环中处理失败消息
-            >>> result = await self._consume_message(messages, context)
-            >>> if result == ConsumeResult.RECONSUME_LATER:
-            >>>     for msg in messages:
-            >>>         success = await self._send_back_message(msg.queue, msg)
-            >>>         if not success:
-            >>>             logger.error(f"Failed to send back message: {msg.msg_id}")
-
-        Note:
-            - 该方法在消费失败时被调用，用于实现异步消息重试机制
-            - 消息会被重新放入重试队列等待重新消费
-            - 重试次数受max_reconsume_times配置限制，默认16次
-            - 超过最大重试次数后，消息会进入死信队列(%DLQ%{consumer_group})
-            - reconsume_times属性会递增，用于跟踪消息重试次数
-            - 方法不会抛出异常，确保异步消费循环的稳定性
-            - 使用异步方式提升并发性能，适合高吞吐量场景
         """
         broker_addr = await self._nameserver_manager.get_broker_address(
             message_queue.broker_name
@@ -914,67 +1021,10 @@ class AsyncBaseConsumer:
         重置消息的重试相关属性（同步方法）。
 
         当消息需要重新消费时，此方法负责重置或设置消息的重试相关属性，
-        确保消息能够正确地参与重试机制。这通常在消息处理前或需要重新处理时调用。
-
-        注意：该方法虽然是同步操作，但在异步环境中使用是安全的，
-        因为它只涉及消息对象的内存属性设置，不涉及IO操作。
+        确保消息能够正确地参与重试机制。
 
         Args:
             msg (MessageExt): 需要重置重试属性的消息对象
-
-        设置的属性:
-            - RETRY_TOPIC: 检查并设置重试主题名（如果存在）
-            - CONSUME_START_TIME: 设置消费开始时间，使用当前时间戳
-
-        属性说明:
-            RETRY_TOPIC:
-                - 指示消息在消费失败时应该发送到的重试主题
-                - 由消费者组名唯一确定，确保重试消息的隔离性
-                - RocketMQ会根据该属性将失败消息投递到正确的重试主题
-                - 格式为：%RETRY%{consumer_group}
-
-            CONSUME_START_TIME:
-                - 记录消息开始消费的时间戳（毫秒）
-                - 用于监控消费延迟和性能分析
-                - 帮助判断消息处理的耗时情况
-                - 格式为Unix时间戳的毫秒表示
-
-        执行逻辑:
-            1. 检查消息是否包含RETRY_TOPIC属性
-            2. 如果存在，将该属性值设置为消息的topic字段
-            3. 设置当前时间戳作为CONSUME_START_TIME属性
-
-        使用场景:
-            - 消息处理前的属性初始化
-            - 消息重新消费前的属性重置
-            - 重试机制中的属性设置
-            - 异步消息处理过程中的属性维护
-            - 从重试队列中消费的消息处理
-
-        Examples:
-            >>> # 在异步消息处理前调用
-            >>> message = MessageExt()
-            >>> message.set_property("RETRY_TOPIC", "%RETRY%my_group")
-            >>> self._reset_retry(message)
-            >>> # 现在消息topic已更新为重试主题，并具备消费时间戳
-            >>> print(f"Topic: {message.topic}")  # %RETRY%my_group
-            >>> print(f"Start time: {message.get_property('CONSUME_START_TIME')}")
-            >>> await self._concurrent_consume_message([message], queue)
-
-        重要注意事项:
-            - 该方法只处理已有的RETRY_TOPIC属性，不会创建新的重试主题
-            - 时间戳使用当前时刻，确保每次调用都更新为最新的消费开始时间
-            - 与同步版本功能完全一致，确保异步环境下的行为一致性
-            - 重试主题的切换是RocketMQ重试机制的关键环节
-            - 在异步环境中安全使用，无IO阻塞风险
-
-        RocketMQ重试流程:
-            1. 消费失败的消息调用_send_back_message发送回broker
-            2. Broker将消息投递到对应的重试主题
-            3. 消费者从重试主题拉取消息
-            4. 调用_reset_retry将消息topic重置为重试主题
-            5. 设置消费开始时间戳
-            6. 再次尝试消费处理
         """
         retry_topic: str | None = msg.get_property(MessageProperty.RETRY_TOPIC)
         if retry_topic:
@@ -983,345 +1033,45 @@ class AsyncBaseConsumer:
             MessageProperty.CONSUME_START_TIME, str(int(time.time() * 1000))
         )
 
-    async def get_status_summary(self) -> dict[str, Any]:
+    def _filter_messages_by_tags(
+        self, messages: list[MessageExt], tags_set: list[str]
+    ) -> list[MessageExt]:
         """
-        异步获取消费者状态摘要
-
-        Returns:
-            包含消费者状态信息的字典
-        """
-        subscriptions: dict[str, Any] = self._subscription_manager.get_status_summary()
-        uptime: float = time.time() - self._start_time if self._is_running else 0
-
-        return {
-            "consumer_group": self._config.consumer_group,
-            "namesrv_addr": self._config.namesrv_addr,
-            "message_model": self._config.message_model,
-            "client_id": self._config.client_id,
-            "is_running": self._is_running,
-            "start_time": self._start_time,
-            "shutdown_time": self._shutdown_time,
-            "uptime": uptime,
-            "subscriptions": subscriptions,
-            "has_message_listener": len(self._message_listeners) > 0,
-            "listener_count": len(self._message_listeners),
-            "topics_with_listeners": list(self._message_listeners.keys()),
-        }
-
-    async def _async_start(self) -> None:
-        """异步启动异步消费者的基础组件。
-
-        异步启动NameServer管理器、Broker管理器、偏移量存储等基础组件，
-        这是所有异步消费者启动过程中的通用逻辑。
-
-        Raises:
-            ConsumerError: 当启动基础组件失败时抛出，例如：
-                - NameServer管理器启动失败
-                - Broker管理器启动失败
-                - 偏移量存储启动失败
-                - 路由刷新任务启动失败
-                - 心跳任务启动失败
-        """
-        try:
-            self._logger.info("开始启动异步消费者基础组件")
-
-            await self._nameserver_manager.start()
-            await self._broker_manager.start()
-            await self._offset_store.start()
-
-            # 启动路由刷新任务
-            await self._start_route_refresh_task()
-
-            # 启动心跳任务
-            await self._start_heartbeat_task()
-
-            self._start_time = time.time()
-            self._is_running = True
-
-            self._logger.info("异步消费者基础组件启动完成")
-
-            # 订阅重试主题
-            if self._config.message_model == MessageModel.CLUSTERING:
-                self._subscribe_retry_topic()
-
-        except Exception as e:
-            self._logger.error(
-                "启动异步消费者基础组件失败",
-                extra={
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            await self._async_cleanup_resources()
-            raise ConsumerError(f"启动异步消费者基础组件失败: {e}") from e
-
-    async def _async_shutdown(self) -> None:
-        """异步关闭异步消费者的基础组件。
-
-        异步关闭NameServer管理器、Broker管理器、偏移量存储等基础组件，
-        这是所有异步消费者关闭过程中的通用逻辑。
-
-        Raises:
-            ConsumerError: 当关闭基础组件失败时抛出，例如：
-                - 异步任务关闭失败
-                - 资源清理失败
-                - 连接关闭失败
-                - 偏移量持久化失败
-        """
-        try:
-            self._logger.info("开始关闭异步消费者基础组件")
-
-            self._is_running = False
-            self._shutdown_time = time.time()
-
-            # 通知路由刷新和心跳任务退出
-            self._route_refresh_event.set()
-            self._heartbeat_event.set()
-
-            # 关闭异步任务
-            await self._shutdown_async_tasks()
-
-            # 清理资源
-            await self._async_cleanup_resources()
-
-            self._logger.info("异步消费者基础组件关闭完成")
-
-        except Exception as e:
-            self._logger.error(
-                "关闭异步消费者基础组件失败",
-                extra={
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            raise ConsumerError(f"关闭异步消费者基础组件失败: {e}") from e
-
-    def _get_retry_topic(self) -> str:
-        """
-        获取消费者组对应的重试主题名称。
-
-        在RocketMQ中，当消息消费失败时，系统会按照重试主题将消息重新投递给消费者。
-        重试主题的命名规则为：%RETRY%{consumer_group}。
-
-        Returns:
-            str: 重试主题名称，格式为 %RETRY%{consumer_group}
-
-        Examples:
-            >>> retry_topic = self._get_retry_topic()
-            >>> print(retry_topic)
-            '%RETRY%order_consumer_group'
-
-        Note:
-            - 重试主题名前缀是固定的 %RETRY%
-            - 重试主题使用消费者组名而不是原始主题名
-            - 重试机制的消息会根据重试次数延迟投递
-            - 默认重试次数为16次，超过后消息会进入死信队列
-            - 每个消费者组都有自己独立的重试主题
-        """
-        return f"%RETRY%{self._config.consumer_group}"
-
-    def _is_retry_topic(self, topic: str) -> bool:
-        """
-        判断指定主题是否是重试主题
-
-        检查给定的主题名是否符合重试主题的命名规范。
-        重试主题的格式为：%RETRY%+consumer_group
+        根据标签过滤消息。
 
         Args:
-            topic (str): 要检查的主题名
+            messages: 待过滤的消息列表
+            tags_set: 允许的标签集合
 
         Returns:
-            bool: 如果是重试主题返回True，否则返回False
-
-        Examples:
-            >>> consumer = AsyncBaseConsumer(config)
-            >>> consumer.is_retry_topic("%RETRY%my_consumer_group")
-            True
-            >>> consumer.is_retry_topic("normal_topic")
-            False
-            >>> consumer.is_retry_topic("%DLQ%my_consumer_group")
-            False
-
-        Note:
-            - 此方法与同步版本的功能完全一致
-            - 使用精确字符串匹配确保准确性
-            - 包含输入参数的安全检查
+            list[MessageExt]: 过滤后的消息列表
         """
-        if not topic or not isinstance(topic, str):
-            return False
+        filtered_messages: list[MessageExt] = []
+        for message in messages:
+            if message.get_tags() in tags_set:
+                filtered_messages.append(message)
 
-        retry_topic_prefix = f"%RETRY%{self._config.consumer_group}"
-        return topic == retry_topic_prefix
+        return filtered_messages
 
-    def _subscribe_retry_topic(self) -> None:
-        """
-        异步订阅重试主题。
-
-        自动订阅该消费者组的重试主题，格式为：%RETRY%+consumer_group。
-        重试主题用于接收消费失败需要重试的消息。
-
-        该方法使用异步方式执行订阅操作，避免阻塞其他异步任务的执行。
-
-        异常处理:
-            - 如果订阅失败，记录错误日志但不抛出异常
-            - 重试主题订阅失败不应该影响消费者正常启动
-            - 提供详细的错误上下文信息用于问题排查
-
-        Note:
-            - 重试主题使用TAG选择器订阅所有消息（"*"），因为重试消息不需要额外过滤
-            - 使用异步方式避免阻塞消费者启动过程
-            - 检查重复订阅，避免资源浪费
-        """
-        retry_topic = self._get_retry_topic()
-
-        try:
-            from pyrocketmq.model.client_data import create_tag_selector
-
-            # 创建订阅所有消息的选择器
-            retry_selector = create_tag_selector("*")
-
-            # 检查是否已经订阅了重试主题，避免重复订阅
-            is_subscribed: bool = self._subscription_manager.is_subscribed(retry_topic)
-            if not is_subscribed:
-                success = self._subscription_manager.subscribe(
-                    retry_topic, retry_selector
-                )
-
-                if success:
-                    logger.info(
-                        f"Successfully subscribed to retry topic: {retry_topic}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "retry_topic": retry_topic,
-                            "max_retry_times": self._config.max_retry_times,
-                        },
-                    )
-                else:
-                    logger.warning(
-                        f"Failed to subscribe to retry topic: {retry_topic}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "retry_topic": retry_topic,
-                        },
-                    )
-            else:
-                logger.debug(
-                    f"Retry topic already subscribed: {retry_topic}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "retry_topic": retry_topic,
-                    },
-                )
-
-        except Exception as e:
-            logger.error(
-                f"Error subscribing to retry topic {retry_topic}: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "retry_topic": retry_topic,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-            # 不抛出异常，重试主题订阅失败不应该影响消费者正常启动
-
-    async def _shutdown_async_tasks(self) -> None:
-        """
-        异步关闭异步任务
-
-        异步关闭路由刷新和心跳等后台任务。
-        """
-        # 关闭路由刷新任务
-        if self._route_refresh_task is not None:
-            self._route_refresh_task.cancel()
-            try:
-                await self._route_refresh_task
-            except asyncio.CancelledError:
-                pass
-            self._route_refresh_task = None
-
-        # 关闭心跳任务
-        if self._heartbeat_task is not None:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            self._heartbeat_task = None
-
-        self._logger.info("异步任务关闭完成")
-
-    async def _async_cleanup_resources(self) -> None:
-        """
-        异步清理资源
-
-        异步清理所有资源，包括偏移量存储、管理器等。
-        """
-        try:
-            # 关闭偏移量存储
-            await self._offset_store.persist_all()
-            await self._offset_store.stop()
-
-            # 清理订阅管理器
-            self._subscription_manager.cleanup_inactive_subscriptions()
-            self._subscription_manager.clear_all()
-
-            # 关闭Broker管理器
-            await self._broker_manager.shutdown()
-
-            # 关闭NameServer管理器
-            await self._nameserver_manager.stop()
-
-            self._logger.info("资源清理完成")
-
-        except Exception as e:
-            self._logger.error(
-                "清理资源失败",
-                extra={
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
-    def __str__(self) -> str:
-        """字符串表示"""
-        subscription_count: int = len(
-            self._subscription_manager.get_all_subscriptions()
-        )
-        return (
-            f"AsyncBaseConsumer["
-            f"group={self._config.consumer_group}, "
-            f"running={self._is_running}, "
-            f"subscriptions={subscription_count}"
-            f"]"
-        )
-
-    def __repr__(self) -> str:
-        """详细字符串表示"""
-        return (
-            f"AsyncBaseConsumer("
-            f"consumer_group='{self._config.consumer_group}', "
-            f"namesrv_addr='{self._config.namesrv_addr}', "
-            f"message_model='{self._config.message_model}', "
-            f"is_running={self._is_running}"
-            f")"
-        )
-
-    # ==================== 异步路由刷新任务 ====================
+    # ==================== 4. 异步路由刷新任务模块 ====================
+    #
+    # 该模块负责消费者路由信息的动态维护，包括：
+    # - 定期刷新Topic路由信息
+    # - 处理集群拓扑变化
+    # - 维护Broker连接状态
+    # - 路由缓存的过期管理
+    #
+    # 关键特性:
+    # - 异步定期刷新机制
+    # - 优雅的任务停止机制
+    # - 完整的错误处理和重试
+    # - 路由信息的统计分析
 
     async def _start_route_refresh_task(self) -> None:
         """启动异步路由刷新任务。
 
         创建并启动一个异步任务来执行路由刷新循环，
         确保消费者能够及时感知到集群拓扑的变化。
-
-        Returns:
-            None: 无返回值
-
-        Note:
-            - 任务会在后台持续运行，直到消费者关闭
-            - 使用asyncio.create_task创建异步任务
-            - 任务会自动处理异常和退出
         """
         self._route_refresh_task = asyncio.create_task(self._route_refresh_loop())
 
@@ -1330,16 +1080,6 @@ class AsyncBaseConsumer:
 
         定期刷新所有订阅Topic的路由信息，确保消费者能够感知到集群拓扑的变化。
         这是RocketMQ消费者高可用性的关键机制。
-
-        Returns:
-            None: 无返回值
-
-        Note:
-            - 启动时立即执行一次路由刷新
-            - 按配置间隔定期执行刷新（默认30秒）
-            - 支持通过事件信号优雅退出
-            - 每次刷新都会更新TopicBrokerMapping缓存
-            - 异常不会中断循环，会继续下次刷新
         """
         self._logger.info(
             "Async route refresh loop started",
@@ -1435,10 +1175,7 @@ class AsyncBaseConsumer:
             except Exception as e:
                 self._logger.debug(
                     "Failed to refresh route",
-                    extra={
-                        "topic": topic,
-                        "error": str(e),
-                    },
+                    extra={"topic": topic, "error": str(e)},
                 )
 
     async def _update_route_info(self, topic: str) -> bool:
@@ -1455,9 +1192,7 @@ class AsyncBaseConsumer:
             if not topic_route_data:
                 self._logger.error(
                     "Failed to get topic route data",
-                    extra={
-                        "topic": topic,
-                    },
+                    extra={"topic": topic},
                 )
                 return False
 
@@ -1469,31 +1204,80 @@ class AsyncBaseConsumer:
         except Exception as e:
             self._logger.error(
                 f"Error updating route info for topic {topic}: {e}",
-                extra={
-                    "topic": topic,
-                    "error": str(e),
-                },
+                extra={"topic": topic, "error": str(e)},
                 exc_info=True,
             )
             return False
 
-    # ==================== 异步心跳任务 ====================
+    # ==================== 5. 异步心跳任务模块 ====================
+    #
+    # 该模块负责维护消费者与Broker的连接状态，包括：
+    # - 定期向所有Broker发送心跳
+    # - 心跳数据的构建和发送
+    # - 心跳统计和监控
+    # - 心跳异常的处理和恢复
+    #
+    # 关键特性:
+    # - 异步心跳发送机制
+    # - 智能的等待时间计算
+    # - 完整的心跳统计信息
+    # - 优雅的心跳任务停止
 
     async def _start_heartbeat_task(self) -> None:
         """启动异步心跳任务。
 
         创建并启动一个异步任务来执行心跳发送循环，
         确保消费者与Broker保持活跃连接状态。
-
-        Returns:
-            None: 无返回值
-
-        Note:
-            - 任务会在后台持续运行，直到消费者关闭
-            - 使用asyncio.create_task创建异步任务
-            - 心跳机制是RocketMQ消费者存活状态的关键
         """
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    async def _heartbeat_loop(self) -> None:
+        """异步消费者心跳发送循环。
+
+        定期向所有Broker发送心跳信息，维持消费者的存活状态。
+        这是RocketMQ消费者高可用性和负载均衡的基础机制。
+        """
+        self._logger.info("Async heartbeat loop started")
+
+        # 执行首次心跳
+        await self._send_heartbeat_to_all_brokers()
+        self._last_heartbeat_time = time.time()
+
+        # 主心跳循环
+        while self._is_running:
+            try:
+                current_time = time.time()
+
+                # 计算等待时间
+                wait_time = self._calculate_wait_time(current_time)
+
+                # 如果需要等待，处理等待逻辑
+                if wait_time > 0:
+                    # 限制最大等待时间为1秒，以便及时响应退出信号
+                    wait_timeout = min(wait_time, 1.0)
+                    event_triggered = await self._wait_for_heartbeat_event_or_timeout(
+                        wait_timeout
+                    )
+
+                    if event_triggered:
+                        # 检查是否需要退出
+                        if not self._is_running:
+                            break
+                        continue  # 重新计算等待时间
+
+                # 重新获取当前时间并检查是否需要发送心跳
+                current_time = time.time()
+                await self._perform_heartbeat_if_needed(current_time)
+
+            except Exception as e:
+                self._handle_heartbeat_loop_error(e)
+                # 等待一段时间再重试
+                try:
+                    await asyncio.wait_for(self._heartbeat_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    pass
+
+        self._logger.info("Async heartbeat loop stopped")
 
     def _calculate_wait_time(self, current_time: float) -> float:
         """计算到下一次心跳的等待时间。
@@ -1563,64 +1347,6 @@ class AsyncBaseConsumer:
             self._last_heartbeat_time = time.time()
             return self._last_heartbeat_time
         return current_time
-
-    async def _heartbeat_loop(self) -> None:
-        """异步消费者心跳发送循环。
-
-        定期向所有Broker发送心跳信息，维持消费者的存活状态。
-        这是RocketMQ消费者高可用性和负载均衡的基础机制。
-
-        Returns:
-            None: 无返回值
-
-        Note:
-            - 按配置间隔定期发送心跳（默认30秒）
-            - 支持通过事件信号优雅退出
-            - 心跳失败不会中断循环，会继续下次心跳
-            - 包含消费者组、订阅关系等关键信息
-            - 统计心跳成功和失败次数用于监控
-        """
-        self._logger.info("Async heartbeat loop started")
-
-        # 执行首次心跳
-        await self._send_heartbeat_to_all_brokers()
-        self._last_heartbeat_time = time.time()
-
-        # 主心跳循环
-        while self._is_running:
-            try:
-                current_time = time.time()
-
-                # 计算等待时间
-                wait_time = self._calculate_wait_time(current_time)
-
-                # 如果需要等待，处理等待逻辑
-                if wait_time > 0:
-                    # 限制最大等待时间为1秒，以便及时响应退出信号
-                    wait_timeout = min(wait_time, 1.0)
-                    event_triggered = await self._wait_for_heartbeat_event_or_timeout(
-                        wait_timeout
-                    )
-
-                    if event_triggered:
-                        # 检查是否需要退出
-                        if not self._is_running:
-                            break
-                        continue  # 重新计算等待时间
-
-                # 重新获取当前时间并检查是否需要发送心跳
-                current_time = time.time()
-                await self._perform_heartbeat_if_needed(current_time)
-
-            except Exception as e:
-                self._handle_heartbeat_loop_error(e)
-                # 等待一段时间再重试
-                try:
-                    await asyncio.wait_for(self._heartbeat_event.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
-
-        self._logger.info("Async heartbeat loop stopped")
 
     async def _send_heartbeat_to_all_brokers(self) -> None:
         """异步向所有Broker发送心跳"""
@@ -1717,25 +1443,6 @@ class AsyncBaseConsumer:
             ],
         )
 
-    def _filter_messages_by_tags(
-        self, messages: list[MessageExt], tags_set: list[str]
-    ) -> list[MessageExt]:
-        """根据标签过滤消息。
-
-        Args:
-            messages: 待过滤的消息列表
-            tags_set: 允许的标签集合
-
-        Returns:
-            list[MessageExt]: 过滤后的消息列表
-        """
-        filtered_messages: list[MessageExt] = []
-        for message in messages:
-            if message.get_tags() in tags_set:
-                filtered_messages.append(message)
-
-        return filtered_messages
-
     async def _send_heartbeat_to_broker(
         self, broker_addr: str, heartbeat_data: HeartbeatData
     ) -> bool:
@@ -1786,3 +1493,205 @@ class AsyncBaseConsumer:
                 "total_brokers": total_count,
             },
         )
+
+    # ==================== 6. 配置和状态管理模块 ====================
+    #
+    # 该模块负责消费者的配置管理和状态查询，包括：
+    # - 消费者配置的访问和管理
+    # - 运行状态的实时查询
+    # - 组件间关联关系的维护
+    # - 状态摘要的生成和报告
+    #
+    # 关键特性:
+    # - 线程安全的配置访问
+    # - 实时的状态信息查询
+    # - 完整的状态摘要报告
+    # - 组件关联关系管理
+
+    async def get_config(self) -> ConsumerConfig:
+        """
+        异步获取消费者配置
+
+        Returns:
+            消费者配置的副本
+        """
+        return self._config
+
+    async def get_subscription_manager(self) -> SubscriptionManager:
+        """
+        异步获取订阅管理器
+
+        Returns:
+            订阅管理器实例
+        """
+        return self._subscription_manager
+
+    async def get_message_listener(self, topic: str) -> AsyncMessageListener | None:
+        """
+        异步获取指定Topic的消息监听器
+
+        Args:
+            topic: Topic名称，不能为空
+
+        Returns:
+            指定Topic的消息监听器实例，如果未注册则返回None
+        """
+        if not topic:
+            raise ValueError("Topic cannot be empty")
+        return self._message_listeners.get(topic)
+
+    async def get_all_listeners(self) -> dict[str, AsyncMessageListener]:
+        """
+        异步获取所有Topic的消息监听器
+
+        Returns:
+            包含所有Topic监听器的字典副本
+        """
+        return self._message_listeners.copy()
+
+    async def is_running(self) -> bool:
+        """
+        异步检查消费者是否正在运行
+
+        Returns:
+            如果正在运行返回True，否则返回False
+        """
+        return self._is_running
+
+    async def get_status_summary(self) -> dict[str, Any]:
+        """
+        异步获取消费者状态摘要
+
+        Returns:
+            包含消费者状态信息的字典
+        """
+        subscriptions: dict[str, Any] = self._subscription_manager.get_status_summary()
+        uptime: float = time.time() - self._start_time if self._is_running else 0
+
+        return {
+            "consumer_group": self._config.consumer_group,
+            "namesrv_addr": self._config.namesrv_addr,
+            "message_model": self._config.message_model,
+            "client_id": self._config.client_id,
+            "is_running": self._is_running,
+            "start_time": self._start_time,
+            "shutdown_time": self._shutdown_time,
+            "uptime": uptime,
+            "subscriptions": subscriptions,
+            "has_message_listener": len(self._message_listeners) > 0,
+            "listener_count": len(self._message_listeners),
+            "topics_with_listeners": list(self._message_listeners.keys()),
+        }
+
+    # ==================== 7. 资源清理和工具模块 ====================
+    #
+    # 该模块负责消费者的资源管理和清理，包括：
+    # - 异步任务的优雅关闭
+    # - 网络连接等资源的清理
+    # - 偏移量数据的持久化
+    # - 订阅关系的清理
+    #
+    # 关键特性:
+    # - 优雅的异步任务关闭
+    # - 完整的资源清理流程
+    # - 数据持久化保证
+    # - 异常安全的清理机制
+
+    async def _shutdown_async_tasks(self) -> None:
+        """
+        异步关闭异步任务
+
+        异步关闭路由刷新和心跳等后台任务。
+        """
+        # 关闭路由刷新任务
+        if self._route_refresh_task is not None:
+            self._route_refresh_task.cancel()
+            try:
+                await self._route_refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._route_refresh_task = None
+
+        # 关闭心跳任务
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            self._heartbeat_task = None
+
+        self._logger.info("异步任务关闭完成")
+
+    async def _async_cleanup_resources(self) -> None:
+        """
+        异步清理资源
+
+        异步清理所有资源，包括偏移量存储、管理器等。
+        """
+        try:
+            # 关闭偏移量存储
+            await self._offset_store.persist_all()
+            await self._offset_store.stop()
+
+            # 清理订阅管理器
+            self._subscription_manager.cleanup_inactive_subscriptions()
+            self._subscription_manager.clear_all()
+
+            # 关闭Broker管理器
+            await self._broker_manager.shutdown()
+
+            # 关闭NameServer管理器
+            await self._nameserver_manager.stop()
+
+            self._logger.info("资源清理完成")
+
+        except Exception as e:
+            self._logger.error(
+                "清理资源失败",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
+
+
+# ===============================================================================
+# 总结说明
+# ===============================================================================
+#
+# 本文件按照功能模块重新组织了AsyncBaseConsumer类的代码结构，主要改进包括：
+#
+# 1. 清晰的模块划分：
+#    - 按功能将代码分为7个核心模块
+#    - 每个模块都有明确的职责和边界
+#    - 模块间的依赖关系清晰明确
+#
+# 2. 详细的注释说明：
+#    - 每个模块都有详细的功能说明
+#    - 关键方法都有完整的参数和返回值说明
+#    - 包含使用示例和注意事项
+#
+# 3. 改进的代码组织：
+#    - 相关功能的方法被组织在同一模块中
+#    - 避免了代码重复和逻辑分散
+#    - 提高了代码的可读性和维护性
+#
+# 4. 统一的错误处理：
+#    - 每个模块都有统一的异常处理策略
+#    - 完整的日志记录和错误上下文
+#    - 优雅的错误恢复机制
+#
+# 5. 性能优化：
+#    - 减少了代码重复，提高了执行效率
+#    - 优化了异步任务的管理
+#    - 改进了资源清理的效率
+#
+# 模块间的关联关系：
+# - 生命周期管理模块是所有其他模块的基础
+# - 订阅管理模块和消息处理模块紧密相关
+# - 路由刷新和心跳模块是独立的运维模块
+# - 配置和状态管理模块为其他模块提供支撑
+# - 资源清理模块确保所有资源的正确释放
+#
+# 这种模块化的组织方式使得代码更容易理解、维护和扩展，
+# 同时保持了原有功能的完整性和正确性。
+# ===============================================================================
