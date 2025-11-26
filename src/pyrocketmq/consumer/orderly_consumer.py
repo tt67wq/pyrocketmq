@@ -104,6 +104,8 @@ class OrderlyConsumer(BaseConsumer):
             },
         )
 
+    # ==================== 核心生命周期管理 ====================
+
     def start(self) -> None:
         """启动顺序消费者。
 
@@ -290,7 +292,7 @@ class OrderlyConsumer(BaseConsumer):
                     context={"consumer_group": self._config.consumer_group},
                 ) from e
 
-    # ==================== 内部方法：重平衡管理 ====================
+    # ==================== 重平衡管理模块 ====================
 
     def _pre_rebalance_check(self) -> bool:
         """执行重平衡前置检查。
@@ -649,6 +651,84 @@ class OrderlyConsumer(BaseConsumer):
             self._start_pull_tasks_for_queues(added_queues)
             self._start_consume_tasks_for_queues(added_queues)
 
+    def _trigger_rebalance(self) -> None:
+        """
+        触发重平衡
+        """
+        if self._is_running:
+            # 唤醒重平衡循环，使其立即执行重平衡
+            self._rebalance_event.set()
+
+    def _start_rebalance_task(self) -> None:
+        """
+        启动定期重平衡任务
+        """
+        self._rebalance_thread = threading.Thread(
+            target=self._rebalance_loop,
+            name=f"{self._config.consumer_group}-rebalance-thread",
+            daemon=True,
+        )
+        self._rebalance_thread.start()
+
+    def _rebalance_loop(self) -> None:
+        """
+        定期重平衡循环
+        """
+        while self._is_running:
+            try:
+                # 使用Event.wait()替代time.sleep()
+                if self._rebalance_event.wait(timeout=self._rebalance_interval):
+                    # Event被触发，检查是否需要退出
+                    if not self._is_running:
+                        break
+                    # 重置事件状态
+                    self._rebalance_event.clear()
+
+                if self._is_running:
+                    self._do_rebalance()
+
+            except Exception as e:
+                logger.error(
+                    f"Error in rebalance loop: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+    def _on_notify_consumer_ids_changed(
+        self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
+    ) -> None:
+        logger.info("Received notification of consumer IDs changed")
+        self._do_rebalance()
+
+    def _find_consumer_list(self, topic: str) -> list[str]:
+        """
+        查找消费者列表
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            消费者列表
+        """
+
+        addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
+        if not addresses:
+            logger.warning(
+                "No broker addresses found for topic", extra={"topic": topic}
+            )
+            return []
+
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
+        with pool.get_connection(usage="查找消费者列表") as conn:
+            return BrokerClient(conn).get_consumers_by_group(
+                self._config.consumer_group
+            )
+
+    # ==================== 队列锁管理模块 ====================
+
     def _get_queue_lock(self, message_queue: MessageQueue) -> threading.RLock:
         """
         获取指定消息队列的锁
@@ -861,15 +941,7 @@ class OrderlyConsumer(BaseConsumer):
             )
             return False
 
-    def _trigger_rebalance(self) -> None:
-        """
-        触发重平衡
-        """
-        if self._is_running:
-            # 唤醒重平衡循环，使其立即执行重平衡
-            self._rebalance_event.set()
-
-    # ==================== 内部方法：消息拉取 ====================
+    # ==================== 消息拉取模块 ====================
 
     def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """
@@ -919,30 +991,6 @@ class OrderlyConsumer(BaseConsumer):
                 future.cancel()
 
         self._pull_tasks.clear()
-
-        # 等待一段时间让线程自然退出
-        time.sleep(0.1)
-
-    def _stop_consume_tasks(self) -> None:
-        """
-        停止所有消息消费任务 - 使用停止事件优雅关闭
-        """
-        if not self._consume_tasks:
-            return
-
-        # 首先设置所有停止事件
-        with self._stop_events_lock:
-            for message_queue in self._consume_tasks.keys():
-                if message_queue in self._consume_stop_events:
-                    self._consume_stop_events[message_queue].set()
-
-        # 然后取消Future任务
-        for message_queue, futures in self._consume_tasks.items():
-            for future in futures:
-                if future and not future.done():
-                    future.cancel()
-
-        self._consume_tasks.clear()
 
         # 等待一段时间让线程自然退出
         time.sleep(0.1)
@@ -1160,50 +1208,6 @@ class OrderlyConsumer(BaseConsumer):
                     stop_event.wait(timeout=sleep_time)
                 else:
                     time.sleep(sleep_time)
-
-    def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
-        """获取或创建指定队列的ProcessQueue（消息缓存队列）"""
-        with self._cache_lock:
-            if queue not in self._msg_cache:
-                self._msg_cache[queue] = ProcessQueue(
-                    max_cache_count=self._config.max_cache_count_per_queue,
-                    max_cache_size_mb=self._config.max_cache_size_per_queue,
-                )
-            return self._msg_cache[queue]
-
-    def _add_messages_to_cache(
-        self, queue: MessageQueue, messages: list[MessageExt]
-    ) -> None:
-        """
-        将消息添加到ProcessQueue缓存中
-
-        此方法用于将从Broker拉取的消息添加到ProcessQueue中，为后续消费做准备。
-        ProcessQueue自动保持按queue_offset排序，并提供高效的插入、查询和统计功能。
-
-        Args:
-            queue (MessageQueue): 目标消息队列
-            messages (list[MessageExt]): 要添加的消息列表，消息应包含有效的queue_offset
-
-        Note:
-            - 使用ProcessQueue内置的线程安全机制
-            - 按queue_offset升序排列，方便后续按序消费
-            - 自动过滤空消息列表，避免不必要的操作
-            - 自动去重，避免重复缓存相同偏移量的消息
-            - 自动检查缓存限制（数量和大小）
-
-        Raises:
-            无异常抛出，确保消息添加流程的稳定性
-
-        See Also:
-            _remove_messages_from_cache: 从缓存中移除已处理的消息
-            _get_or_create_process_queue: 获取或创建ProcessQueue
-            _is_message_cached: 检查消息是否已在缓存中
-        """
-        if not messages:
-            return
-
-        process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
-        _ = process_queue.add_batch_messages(messages)
 
     def _get_or_initialize_offset(self, message_queue: MessageQueue) -> int:
         """获取或初始化消费偏移量。
@@ -1445,7 +1449,7 @@ class OrderlyConsumer(BaseConsumer):
 
         return flag
 
-    # ==================== 内部方法：消息处理 ====================
+    # ==================== 消息处理模块 ====================
 
     def _start_consume_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
         """
@@ -1474,6 +1478,30 @@ class OrderlyConsumer(BaseConsumer):
             if message_queue not in self._consume_tasks:
                 self._consume_tasks[message_queue] = []
             self._consume_tasks[message_queue].append(future)
+
+    def _stop_consume_tasks(self) -> None:
+        """
+        停止所有消息消费任务 - 使用停止事件优雅关闭
+        """
+        if not self._consume_tasks:
+            return
+
+        # 首先设置所有停止事件
+        with self._stop_events_lock:
+            for message_queue in self._consume_tasks.keys():
+                if message_queue in self._consume_stop_events:
+                    self._consume_stop_events[message_queue].set()
+
+        # 然后取消Future任务
+        for message_queue, futures in self._consume_tasks.items():
+            for future in futures:
+                if future and not future.done():
+                    future.cancel()
+
+        self._consume_tasks.clear()
+
+        # 等待一段时间让线程自然退出
+        time.sleep(0.1)
 
     def _acquire_consume_lock(
         self, message_queue: MessageQueue, stop_event: threading.Event
@@ -1817,6 +1845,54 @@ class OrderlyConsumer(BaseConsumer):
 
         return success, consume_result, duration
 
+    # ==================== 缓存管理模块 ====================
+
+    def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
+        """获取或创建指定队列的ProcessQueue（消息缓存队列）"""
+        with self._cache_lock:
+            if queue not in self._msg_cache:
+                self._msg_cache[queue] = ProcessQueue(
+                    max_cache_count=self._config.max_cache_count_per_queue,
+                    max_cache_size_mb=self._config.max_cache_size_per_queue,
+                )
+            return self._msg_cache[queue]
+
+    def _add_messages_to_cache(
+        self, queue: MessageQueue, messages: list[MessageExt]
+    ) -> None:
+        """
+        将消息添加到ProcessQueue缓存中
+
+        此方法用于将从Broker拉取的消息添加到ProcessQueue中，为后续消费做准备。
+        ProcessQueue自动保持按queue_offset排序，并提供高效的插入、查询和统计功能。
+
+        Args:
+            queue (MessageQueue): 目标消息队列
+            messages (list[MessageExt]): 要添加的消息列表，消息应包含有效的queue_offset
+
+        Note:
+            - 使用ProcessQueue内置的线程安全机制
+            - 按queue_offset升序排列，方便后续按序消费
+            - 自动过滤空消息列表，避免不必要的操作
+            - 自动去重，避免重复缓存相同偏移量的消息
+            - 自动检查缓存限制（数量和大小）
+
+        Raises:
+            无异常抛出，确保消息添加流程的稳定性
+
+        See Also:
+            _remove_messages_from_cache: 从缓存中移除已处理的消息
+            _get_or_create_process_queue: 获取或创建ProcessQueue
+            _is_message_cached: 检查消息是否已在缓存中
+        """
+        if not messages:
+            return
+
+        process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
+        _ = process_queue.add_batch_messages(messages)
+
+    # ==================== 偏移量管理模块 ====================
+
     def _update_offset_to_store(
         self, message_queue: MessageQueue, min_offset: int
     ) -> None:
@@ -1852,6 +1928,8 @@ class OrderlyConsumer(BaseConsumer):
                     "error": str(e),
                 },
             )
+
+    # ==================== 统计监控模块 ====================
 
     def _update_consume_stats(
         self, success: bool, duration: float, message_count: int
@@ -1910,77 +1988,119 @@ class OrderlyConsumer(BaseConsumer):
                 },
             )
 
-    # ==================== 内部方法：重平衡任务 ====================
-
-    def _start_rebalance_task(self) -> None:
+    def _get_final_stats(self) -> dict[str, Any]:
         """
-        启动定期重平衡任务
-        """
-        self._rebalance_thread = threading.Thread(
-            target=self._rebalance_loop,
-            name=f"{self._config.consumer_group}-rebalance-thread",
-            daemon=True,
-        )
-        self._rebalance_thread.start()
-
-    def _rebalance_loop(self) -> None:
-        """
-        定期重平衡循环
-        """
-        while self._is_running:
-            try:
-                # 使用Event.wait()替代time.sleep()
-                if self._rebalance_event.wait(timeout=self._rebalance_interval):
-                    # Event被触发，检查是否需要退出
-                    if not self._is_running:
-                        break
-                    # 重置事件状态
-                    self._rebalance_event.clear()
-
-                if self._is_running:
-                    self._do_rebalance()
-
-            except Exception as e:
-                logger.error(
-                    f"Error in rebalance loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
-
-    def _on_notify_consumer_ids_changed(
-        self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
-    ) -> None:
-        logger.info("Received notification of consumer IDs changed")
-        self._do_rebalance()
-
-    def _find_consumer_list(self, topic: str) -> list[str]:
-        """
-        查找消费者列表
-
-        Args:
-            topic: 主题名称
+        获取最终统计信息
 
         Returns:
-            消费者列表
+            dict: 统计信息字典
         """
+        uptime: float = time.time() - self._stats.get("start_time", time.time())
+        messages_consumed: int = self._stats["messages_consumed"]
+        pull_requests: int = self._stats["pull_requests"]
+        route_refresh_count: int = self._stats.get("route_refresh_count", 0)
 
-        addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
-        if not addresses:
-            logger.warning(
-                "No broker addresses found for topic", extra={"topic": topic}
-            )
-            return []
-
-        pool: ConnectionPool = self._broker_manager.must_connection_pool(addresses[0])
-        with pool.get_connection(usage="查找消费者列表") as conn:
-            return BrokerClient(conn).get_consumers_by_group(
-                self._config.consumer_group
+        # 计算路由刷新成功率
+        route_refresh_success_rate: float = 0.0
+        if route_refresh_count > 0:
+            route_refresh_success_rate = (
+                self._stats.get("route_refresh_success_count", 0) / route_refresh_count
             )
 
-    # ==================== 内部方法：资源清理 ====================
+        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
+            assigned_queues_count = len(self._assigned_queues)
+
+        # 远程锁缓存统计
+        with self._remote_lock_cache_lock:
+            remote_lock_cache_size = len(self._remote_lock_cache)
+            valid_remote_locks = sum(
+                1
+                for _, expiry_time in self._remote_lock_cache.items()
+                if time.time() < expiry_time
+            )
+
+        return {
+            **self._stats,
+            "uptime_seconds": uptime,
+            "assigned_queues": assigned_queues_count,
+            "avg_consume_duration": (
+                self._stats["consume_duration_total"] / max(messages_consumed, 1)
+            ),
+            "pull_success_rate": (
+                self._stats["pull_successes"] / max(pull_requests, 1)
+            ),
+            "consume_success_rate": (
+                (messages_consumed - self._stats["messages_failed"])
+                / max(messages_consumed, 1)
+            ),
+            # 远程锁相关统计
+            "remote_lock_cache_size": remote_lock_cache_size,
+            "valid_remote_locks": valid_remote_locks,
+            "remote_lock_expire_time": self._remote_lock_expire_time,
+            # 路由刷新相关统计
+            "route_refresh_success_rate": route_refresh_success_rate,
+            "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
+            if route_refresh_count > 0
+            else 0.0,
+            # 重平衡相关统计
+            "rebalance_success_rate": (
+                self._stats.get("rebalance_success_count", 0)
+                / max(self._stats.get("rebalance_count", 1), 1)
+            ),
+            "rebalance_avg_interval": (
+                uptime / max(self._stats.get("rebalance_count", 1), 1)
+            )
+            if self._stats.get("rebalance_count", 0) > 0
+            else 0.0,
+            "rebalance_skipped_rate": (
+                self._stats.get("rebalance_skipped_count", 0)
+                / max(
+                    self._stats.get("rebalance_count", 1)
+                    + self._stats.get("rebalance_skipped_count", 1),
+                    1,
+                )
+            ),
+        }
+
+    def get_stats(self) -> dict[str, Any]:
+        """获取消费者的实时统计信息。
+
+        返回包含消费者运行状态、性能指标和资源使用情况的详细统计数据。
+
+        Returns:
+            dict[str, Any]: 统计信息字典，包含以下字段：
+                - messages_consumed (int): 已消费的消息总数
+                - messages_failed (int): 消费失败的消息总数
+                - pull_requests (int): 拉取请求总数
+                - pull_successes (int): 拉取成功的次数
+                - pull_failures (int): 拉取失败的次数
+                - consume_duration_total (float): 总消费耗时（秒）
+                - start_time (float): 启动时间戳
+                - heartbeat_success_count (int): 心跳成功次数
+                - heartbeat_failure_count (int): 心跳失败次数
+                - uptime_seconds (float): 运行时长（秒）
+                - assigned_queues (int): 当前分配的队列数量
+                - avg_consume_duration (float): 平均消费耗时（秒）
+                - pull_success_rate (float): 拉取成功率（0-1之间）
+                - consume_success_rate (float): 消费成功率（0-1之间）
+
+        Raises:
+            None: 此方法不会抛出异常
+
+        Note:
+            - 统计数据在消费者生命周期内持续累积
+            - 平均值基于实际消费次数计算
+            - 成功率基于实际操作次数计算
+            - 可用于监控消费者健康状态和性能调优
+
+        Example:
+            >>> stats = consumer.get_stats()
+            >>> print(f"消费成功率: {stats['consume_success_rate']:.2%}")
+            >>> print(f"平均消费耗时: {stats['avg_consume_duration']:.3f}秒")
+        """
+        return self._get_final_stats()
+
+    # ==================== 资源清理模块 ====================
 
     def _cleanup_on_start_failure(self) -> None:
         """启动失败时的资源清理操作。
@@ -2126,121 +2246,8 @@ class OrderlyConsumer(BaseConsumer):
         with self._remote_lock_cache_lock:
             self._remote_lock_cache.clear()
 
-    # ==================== 统计和监控方法 ====================
+    # ==================== 远程通信处理模块 ====================
 
-    def _get_final_stats(self) -> dict[str, Any]:
-        """
-        获取最终统计信息
-
-        Returns:
-            dict: 统计信息字典
-        """
-        uptime: float = time.time() - self._stats.get("start_time", time.time())
-        messages_consumed: int = self._stats["messages_consumed"]
-        pull_requests: int = self._stats["pull_requests"]
-        route_refresh_count: int = self._stats.get("route_refresh_count", 0)
-
-        # 计算路由刷新成功率
-        route_refresh_success_rate: float = 0.0
-        if route_refresh_count > 0:
-            route_refresh_success_rate = (
-                self._stats.get("route_refresh_success_count", 0) / route_refresh_count
-            )
-
-        with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
-            assigned_queues_count = len(self._assigned_queues)
-
-        # 远程锁缓存统计
-        with self._remote_lock_cache_lock:
-            remote_lock_cache_size = len(self._remote_lock_cache)
-            valid_remote_locks = sum(
-                1
-                for _, expiry_time in self._remote_lock_cache.items()
-                if time.time() < expiry_time
-            )
-
-        return {
-            **self._stats,
-            "uptime_seconds": uptime,
-            "assigned_queues": assigned_queues_count,
-            "avg_consume_duration": (
-                self._stats["consume_duration_total"] / max(messages_consumed, 1)
-            ),
-            "pull_success_rate": (
-                self._stats["pull_successes"] / max(pull_requests, 1)
-            ),
-            "consume_success_rate": (
-                (messages_consumed - self._stats["messages_failed"])
-                / max(messages_consumed, 1)
-            ),
-            # 远程锁相关统计
-            "remote_lock_cache_size": remote_lock_cache_size,
-            "valid_remote_locks": valid_remote_locks,
-            "remote_lock_expire_time": self._remote_lock_expire_time,
-            # 路由刷新相关统计
-            "route_refresh_success_rate": route_refresh_success_rate,
-            "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
-            if route_refresh_count > 0
-            else 0.0,
-            # 重平衡相关统计
-            "rebalance_success_rate": (
-                self._stats.get("rebalance_success_count", 0)
-                / max(self._stats.get("rebalance_count", 1), 1)
-            ),
-            "rebalance_avg_interval": (
-                uptime / max(self._stats.get("rebalance_count", 1), 1)
-            )
-            if self._stats.get("rebalance_count", 0) > 0
-            else 0.0,
-            "rebalance_skipped_rate": (
-                self._stats.get("rebalance_skipped_count", 0)
-                / max(
-                    self._stats.get("rebalance_count", 1)
-                    + self._stats.get("rebalance_skipped_count", 1),
-                    1,
-                )
-            ),
-        }
-
-    def get_stats(self) -> dict[str, Any]:
-        """获取消费者的实时统计信息。
-
-        返回包含消费者运行状态、性能指标和资源使用情况的详细统计数据。
-
-        Returns:
-            dict[str, Any]: 统计信息字典，包含以下字段：
-                - messages_consumed (int): 已消费的消息总数
-                - messages_failed (int): 消费失败的消息总数
-                - pull_requests (int): 拉取请求总数
-                - pull_successes (int): 拉取成功的次数
-                - pull_failures (int): 拉取失败的次数
-                - consume_duration_total (float): 总消费耗时（秒）
-                - start_time (float): 启动时间戳
-                - heartbeat_success_count (int): 心跳成功次数
-                - heartbeat_failure_count (int): 心跳失败次数
-                - uptime_seconds (float): 运行时长（秒）
-                - assigned_queues (int): 当前分配的队列数量
-                - avg_consume_duration (float): 平均消费耗时（秒）
-                - pull_success_rate (float): 拉取成功率（0-1之间）
-                - consume_success_rate (float): 消费成功率（0-1之间）
-
-        Raises:
-            None: 此方法不会抛出异常
-
-        Note:
-            - 统计数据在消费者生命周期内持续累积
-            - 平均值基于实际消费次数计算
-            - 成功率基于实际操作次数计算
-            - 可用于监控消费者健康状态和性能调优
-
-        Example:
-            >>> stats = consumer.get_stats()
-            >>> print(f"消费成功率: {stats['consume_success_rate']:.2%}")
-            >>> print(f"平均消费耗时: {stats['avg_consume_duration']:.3f}秒")
-        """
-        return self._get_final_stats()
-
-    # ==================== 其他方法 ====================
     def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
         pool.register_request_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
