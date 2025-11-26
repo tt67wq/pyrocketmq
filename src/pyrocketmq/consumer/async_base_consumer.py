@@ -47,7 +47,12 @@ from .async_listener import AsyncMessageListener
 
 # 本地模块导入
 from .config import ConsumerConfig
-from .errors import ConsumerError, SubscribeError, UnsubscribeError
+from .errors import (
+    ConsumerError,
+    InvalidConsumeResultError,
+    SubscribeError,
+    UnsubscribeError,
+)
 from .subscription_manager import SubscriptionManager
 
 logger = get_logger(__name__)
@@ -413,6 +418,83 @@ class AsyncBaseConsumer:
         """
         return self._message_listeners.copy()
 
+    def _async_prepare_message_consumption(
+        self,
+        messages: list[MessageExt],
+        message_queue: MessageQueue,
+        consumption_type: str = "concurrent",
+    ) -> tuple[AsyncMessageListener | None, AsyncConsumeContext | None]:
+        """
+        为异步消息消费做准备的通用方法。
+
+        这个方法封装了异步消息验证、监听器选择和上下文创建的通用逻辑，
+        被异步并发消费和异步顺序消费共同使用，避免代码重复。
+
+        Args:
+            messages (list[MessageExt]): 要处理的消息列表
+            message_queue (MessageQueue): 消息来自的队列信息
+            consumption_type (str): 消费类型，用于日志记录，可选值为 "concurrent" 或 "orderly"
+
+        Returns:
+            tuple[AsyncMessageListener | None, AsyncConsumeContext | None]:
+                - AsyncMessageListener: 找到的异步监听器，如果没有找到则为None
+                - AsyncConsumeContext: 创建的异步消费上下文，如果没有找到则为None
+
+        Examples:
+            >>> listener, context = self._async_prepare_message_consumption(messages, queue)
+            >>> if listener:
+            >>>     result = await listener.consume_message(messages, context)
+            >>> else:
+            >>>     return False
+        """
+        # 消息验证
+        if not messages:
+            logger.warning(
+                f"Empty message list received for async {consumption_type} consumption",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                },
+            )
+            return None, None
+
+        # 获取消息的topic
+        topic = messages[0].topic if messages else message_queue.topic
+
+        # 根据topic获取对应的异步监听器
+        listener: AsyncMessageListener | None = self._message_listeners.get(topic)
+        if not listener and self._is_retry_topic(topic):
+            origin_topic: str | None = messages[0].get_property(
+                MessageProperty.RETRY_TOPIC
+            )
+            listener = (
+                self._message_listeners.get(origin_topic) if origin_topic else None
+            )
+
+        # 如果没有找到监听器，记录错误日志
+        if not listener:
+            logger.error(
+                f"No async message listener registered for topic: {topic} in async {consumption_type} consumption",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": message_queue.queue_id,
+                    "available_topics": list(self._message_listeners.keys()),
+                },
+            )
+
+        # 创建异步消费上下文
+        reconsume_times: int = messages[0].reconsume_times if messages else 0
+        context: AsyncConsumeContext = AsyncConsumeContext(
+            consumer_group=self._config.consumer_group,
+            message_queue=message_queue,
+            reconsume_times=reconsume_times,
+        )
+
+        return listener, context
+
     async def _concurrent_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
     ) -> bool:
@@ -550,6 +632,150 @@ class AsyncBaseConsumer:
                     )
 
             return False
+
+    async def _orderly_consume_message(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> tuple[bool, ConsumeResult]:
+        """
+        异步顺序消费消息的核心方法
+
+        此方法负责按消息的队列偏移量顺序进行异步消费处理，保证同一消息队列中的消息
+        按照严格的顺序被处理。这是RocketMQ异步顺序消费的核心实现，支持多种消费结果
+        和异常处理机制。
+
+        消费结果处理规则:
+        - ConsumeResult.SUCCESS: 消费成功，提交偏移量
+        - ConsumeResult.COMMIT: 消费成功，明确提交偏移量
+        - ConsumeResult.ROLLBACK: 消费失败，回滚消息重新处理
+        - ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT: 消费失败，暂停当前队列一段时间
+        - ConsumeResult.RECONSUME_LATER: 无效结果，抛出异常（顺序消费不支持）
+
+        Args:
+            messages (list[MessageExt]): 要消费的消息列表，保证按queue_offset排序
+            message_queue (MessageQueue): 消息所属的队列信息，包含topic、brokerName、queueId
+
+        Returns:
+            tuple[bool, ConsumeResult]:
+                - bool: 消费是否成功（True表示成功，False表示失败）
+                - ConsumeResult: 具体的消费结果，用于后续处理决策
+
+        Raises:
+            ValueError: 当监听器或上下文为None时
+            InvalidConsumeResultError: 当返回不支持的消费结果时
+
+        处理流程:
+        1. 通过_async_prepare_message_consumption准备异步消息消费上下文
+        2. 调用异步监听器的consume_message方法进行实际消费
+        3. 验证消费结果的有效性
+        4. 处理消费过程中的异常情况
+        5. 返回处理结果供上层调用者决策
+
+        注意事项:
+        - 顺序消费不支持RECONSUME_LATER结果，会抛出InvalidConsumeResultError
+        - 异常情况下会尝试调用异步监听器的on_exception回调方法
+        - 所有日志都包含结构化信息，便于问题诊断和监控
+        - 返回的bool值表示整体处理成功与否，ConsumeResult提供具体结果信息
+        - 所有IO操作都是异步的，使用await关键字
+
+        Example:
+            >>> success, result = await consumer._orderly_consume_message(
+            ...     messages, message_queue
+            ... )
+            >>> if success and result == ConsumeResult.SUCCESS:
+            ...     # 消费成功，提交偏移量
+            ...     pass
+            >>> elif result == ConsumeResult.ROLLBACK:
+            ...     # 需要回滚消息重新处理
+            ...     pass
+        """
+        # 使用异步通用方法进行消息验证和监听器选择
+        listener, context = self._async_prepare_message_consumption(
+            messages, message_queue, "orderly"
+        )
+
+        # 如果没有找到监听器或消息列表为空，抛出异常
+        if listener is None or context is None:
+            raise ValueError("Async listener or context is None")
+
+        # 获取topic用于日志记录
+        topic = messages[0].topic if messages else message_queue.topic
+
+        try:
+            logger.debug(
+                "Processing messages orderly",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": context.queue_id,
+                    "reconsume_times": context.reconsume_times,
+                },
+            )
+
+            result: ConsumeResult = await listener.consume_message(messages, context)
+
+            if result == ConsumeResult.RECONSUME_LATER:
+                logger.error(
+                    "Invalid result for async orderly consumer",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "queue_id": context.queue_id,
+                        "result": result.value,
+                    },
+                )
+                # 抛出无效消费结果异常
+                raise InvalidConsumeResultError(
+                    consumer_type="async orderly",
+                    invalid_result=result.value,
+                    valid_results=[
+                        ConsumeResult.SUCCESS.value,
+                        ConsumeResult.COMMIT.value,
+                        ConsumeResult.ROLLBACK.value,
+                        ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT.value,
+                    ],
+                    topic=topic,
+                    queue_id=context.queue_id,
+                )
+
+            success = result in [
+                ConsumeResult.SUCCESS,
+                ConsumeResult.COMMIT,
+            ]
+            return success, result
+
+        except InvalidConsumeResultError:
+            raise
+
+        except Exception as e:
+            logger.error(
+                f"Failed to process messages orderly: {e}",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": topic,
+                    "message_count": len(messages),
+                    "queue_id": context.queue_id,
+                    "error": str(e),
+                },
+                exc_info=True,
+            )
+
+            # 调用异步异常回调（如果监听器实现了）
+            if hasattr(listener, "on_exception"):
+                try:
+                    await listener.on_exception(messages, context, e)
+                except Exception as callback_error:
+                    logger.error(
+                        f"Exception callback failed: {callback_error}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": topic,
+                            "error": str(callback_error),
+                        },
+                        exc_info=True,
+                    )
+
+            return False, ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
 
     async def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
