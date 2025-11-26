@@ -41,7 +41,7 @@ pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ
 pip install pyrocketmq
 
 # 或从源码安装
-git clone https://github.com/your-username/pyrocketmq.git
+git clone https://github.com/tt67wq/pyrocketmq.git
 cd pyrocketmq
 pip install -e .
 ```
@@ -576,9 +576,9 @@ producer = create_producer_from_config(config)
 
 ## 📞 联系方式
 
-- 项目主页: [GitHub Repository](https://github.com/your-username/pyrocketmq)
-- 问题反馈: [GitHub Issues](https://github.com/your-username/pyrocketmq/issues)
-- 开发讨论: [GitHub Discussions](https://github.com/your-username/pyrocketmq/discussions)
+- 项目主页: [GitHub Repository](https://github.com/tt67wq/pyrocketmq)
+- 问题反馈: [GitHub Issues](https://github.com/tt67wq/pyrocketmq/issues)
+- 开发讨论: [GitHub Discussions](https://github.com/tt67wq/pyrocketmq/discussions)
 
 ---
 
