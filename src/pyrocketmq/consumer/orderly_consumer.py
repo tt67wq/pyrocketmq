@@ -104,7 +104,9 @@ class OrderlyConsumer(BaseConsumer):
             },
         )
 
-    # ==================== 核心生命周期管理 ====================
+    # ==================== 1. 核心生命周期管理 ====================
+    # 功能：管理消费者的启动、停止和状态转换
+    # 关联方法：启动相关、停止相关、清理相关
 
     def start(self) -> None:
         """启动顺序消费者。
@@ -292,7 +294,9 @@ class OrderlyConsumer(BaseConsumer):
                     context={"consumer_group": self._config.consumer_group},
                 ) from e
 
-    # ==================== 重平衡管理模块 ====================
+    # ==================== 2. 重平衡管理模块 ====================
+    # 功能：管理消费者队列分配、负载均衡和重平衡流程
+    # 关联方法：重平衡检查、队列分配、任务启动、消费者发现
 
     def _pre_rebalance_check(self) -> bool:
         """执行重平衡前置检查。
@@ -652,17 +656,13 @@ class OrderlyConsumer(BaseConsumer):
             self._start_consume_tasks_for_queues(added_queues)
 
     def _trigger_rebalance(self) -> None:
-        """
-        触发重平衡
-        """
+        """触发重平衡"""
         if self._is_running:
             # 唤醒重平衡循环，使其立即执行重平衡
             self._rebalance_event.set()
 
     def _start_rebalance_task(self) -> None:
-        """
-        启动定期重平衡任务
-        """
+        """启动定期重平衡任务"""
         self._rebalance_thread = threading.Thread(
             target=self._rebalance_loop,
             name=f"{self._config.consumer_group}-rebalance-thread",
@@ -671,9 +671,7 @@ class OrderlyConsumer(BaseConsumer):
         self._rebalance_thread.start()
 
     def _rebalance_loop(self) -> None:
-        """
-        定期重平衡循环
-        """
+        """定期重平衡循环"""
         while self._is_running:
             try:
                 # 使用Event.wait()替代time.sleep()
@@ -700,20 +698,19 @@ class OrderlyConsumer(BaseConsumer):
     def _on_notify_consumer_ids_changed(
         self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
     ) -> None:
+        """处理消费者ID变更通知"""
         logger.info("Received notification of consumer IDs changed")
         self._do_rebalance()
 
     def _find_consumer_list(self, topic: str) -> list[str]:
-        """
-        查找消费者列表
+        """查找指定Topic的消费者列表
 
         Args:
             topic: 主题名称
 
         Returns:
-            消费者列表
+            list[str]: 消费者ID列表
         """
-
         addresses: list[str] = self._name_server_manager.get_all_broker_addresses(topic)
         if not addresses:
             logger.warning(
@@ -727,19 +724,19 @@ class OrderlyConsumer(BaseConsumer):
                 self._config.consumer_group
             )
 
-    # ==================== 队列锁管理模块 ====================
+    # ==================== 3. 队列锁管理模块 ====================
+    # 功能：管理本地队列锁和远程队列锁，确保顺序消费的线程安全
+    # 关联方法：锁获取、锁状态检查、远程锁操作、锁缓存管理
 
     def _get_queue_lock(self, message_queue: MessageQueue) -> threading.RLock:
-        """
-        获取指定消息队列的锁
+        """获取指定消息队列的锁
 
         Args:
             message_queue: 消息队列
 
         Returns:
-            该队列的RLock锁对象
+            threading.RLock: 该队列的RLock锁对象
         """
-
         # 使用双重检查锁定模式来避免竞争条件
         # 首先进行无锁检查，提高性能
         if message_queue in self._queue_locks:
@@ -754,14 +751,13 @@ class OrderlyConsumer(BaseConsumer):
             return self._queue_locks[message_queue]
 
     def _is_locked(self, message_queue: MessageQueue) -> bool:
-        """
-        检查指定队列是否已锁定
+        """检查指定队列是否已锁定
 
         Args:
             message_queue: 消息队列
 
         Returns:
-            True如果队列已锁定，False如果队列未锁定
+            bool: True如果队列已锁定，False如果队列未锁定
         """
         # 使用锁保护对_queue_locks字典的访问，防止竞争条件
         with self._queue_lock_management_lock:
@@ -771,14 +767,13 @@ class OrderlyConsumer(BaseConsumer):
             return self._queue_locks[message_queue].locked()
 
     def _is_remote_lock_valid(self, message_queue: MessageQueue) -> bool:
-        """
-        检查指定队列的远程锁是否仍然有效
+        """检查指定队列的远程锁是否仍然有效
 
         Args:
             message_queue: 消息队列
 
         Returns:
-            True如果远程锁仍然有效，False如果已过期或不存在
+            bool: True如果远程锁仍然有效，False如果已过期或不存在
         """
         with self._remote_lock_cache_lock:
             expiry_time = self._remote_lock_cache.get(message_queue)
@@ -789,8 +784,7 @@ class OrderlyConsumer(BaseConsumer):
             return current_time < expiry_time
 
     def _set_remote_lock_expiry(self, message_queue: MessageQueue) -> None:
-        """
-        设置指定队列的远程锁过期时间
+        """设置指定队列的远程锁过期时间
 
         Args:
             message_queue: 消息队列
@@ -800,8 +794,7 @@ class OrderlyConsumer(BaseConsumer):
             self._remote_lock_cache[message_queue] = expiry_time
 
     def _invalidate_remote_lock(self, message_queue: MessageQueue) -> None:
-        """
-        使指定队列的远程锁失效
+        """使指定队列的远程锁失效
 
         Args:
             message_queue: 消息队列
@@ -810,14 +803,13 @@ class OrderlyConsumer(BaseConsumer):
             self._remote_lock_cache.pop(message_queue, None)
 
     def _lock_remote_queue(self, message_queue: MessageQueue) -> bool:
-        """
-        尝试远程锁定指定队列
+        """尝试远程锁定指定队列
 
         Args:
             message_queue: 消息队列
 
         Returns:
-            True如果锁定成功，False如果锁定失败
+            bool: True如果锁定成功，False如果锁定失败
         """
         try:
             # 获取队列对应的Broker连接
@@ -883,14 +875,13 @@ class OrderlyConsumer(BaseConsumer):
             return False
 
     def _unlock_remote_queue(self, message_queue: MessageQueue) -> bool:
-        """
-        尝试远程解锁指定队列
+        """尝试远程解锁指定队列
 
         Args:
             message_queue: 消息队列
 
         Returns:
-            True如果解锁成功，False如果解锁失败
+            bool: True如果解锁成功，False如果解锁失败
         """
         try:
             # 获取队列对应的Broker连接
@@ -941,11 +932,12 @@ class OrderlyConsumer(BaseConsumer):
             )
             return False
 
-    # ==================== 消息拉取模块 ====================
+    # ==================== 4. 消息拉取模块 ====================
+    # 功能：管理消息拉取任务、拉取循环、拉取策略和Broker通信
+    # 关联方法：拉取任务管理、拉取循环执行、单次拉取、消息处理
 
     def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
-        """
-        为指定队列启动拉取任务
+        """为指定队列启动拉取任务
 
         Args:
             queues: 要启动拉取任务的队列集合
@@ -969,9 +961,7 @@ class OrderlyConsumer(BaseConsumer):
                 self._pull_tasks[q] = future
 
     def _stop_pull_tasks(self) -> None:
-        """
-        停止所有消息拉取任务 - 使用停止事件优雅关闭
-        """
+        """停止所有消息拉取任务 - 使用停止事件优雅关闭"""
         if not self._pull_tasks:
             return
 
@@ -1315,30 +1305,6 @@ class OrderlyConsumer(BaseConsumer):
         Raises:
             MessageConsumeError: 当拉取过程中发生错误时抛出，包含详细的错误信息
             ValueError: 当无法找到指定broker的地址时抛出
-
-        Example:
-            ```python
-            # 拉取消息示例
-            messages, next_offset, suggested_broker = consumer._pull_messages(
-                message_queue=MessageQueue("test_topic", "broker-a", 0),
-                offset=100,
-                suggest_id=0
-            )
-
-            if messages:
-                for msg in messages:
-                    print(f"消息内容: {msg.body.decode()}")
-                print(f"下次拉取偏移量: {next_offset}")
-                if suggested_broker != 0:
-                    print(f"建议下次连接slave broker: {suggested_broker}")
-            ```
-
-        Note:
-            - 该方法会被_pull_messages_loop循环调用，实现持续的消息拉取
-            - suggest_id参数用于Broker选择的优化，通常来自上次拉取响应
-            - commit_offset只在连接master broker且存在已提交偏移量时使用
-            - 拉取失败时会记录详细的错误信息，便于问题诊断
-            - 返回的empty消息列表并不意味着队列中没有消息，可能是由于网络延迟
         """
         try:
             self._stats["pull_requests"] += 1
@@ -1418,7 +1384,7 @@ class OrderlyConsumer(BaseConsumer):
                 cause=e,
             ) from e
 
-    def _build_sys_flag(self, commit_offset: bool):
+    def _build_sys_flag(self, commit_offset: bool) -> int:
         """构建系统标志位
 
         根据Go语言实现：
@@ -1449,11 +1415,12 @@ class OrderlyConsumer(BaseConsumer):
 
         return flag
 
-    # ==================== 消息处理模块 ====================
+    # ==================== 5. 消息处理模块 ====================
+    # 功能：管理消息消费任务、消息处理循环、消费锁获取和结果处理
+    # 关联方法：消费任务管理、消费循环、锁获取、消息处理、结果处理
 
     def _start_consume_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
-        """
-        为指定的队列集合启动消费任务
+        """为指定的队列集合启动消费任务
 
         Args:
             queues: 需要启动消费任务的队列集合
@@ -1480,9 +1447,7 @@ class OrderlyConsumer(BaseConsumer):
             self._consume_tasks[message_queue].append(future)
 
     def _stop_consume_tasks(self) -> None:
-        """
-        停止所有消息消费任务 - 使用停止事件优雅关闭
-        """
+        """停止所有消息消费任务 - 使用停止事件优雅关闭"""
         if not self._consume_tasks:
             return
 
