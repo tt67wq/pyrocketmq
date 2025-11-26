@@ -18,6 +18,10 @@ from typing import Any
 # pyrocketmq导入
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.broker.async_client import AsyncBrokerClient
+from pyrocketmq.consumer.allocate_queue_strategy import (
+    AllocateQueueStrategyBase,
+    AllocateQueueStrategyFactory,
+)
 from pyrocketmq.consumer.async_listener import AsyncConsumeContext
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
@@ -151,6 +155,13 @@ class AsyncBaseConsumer:
                 consume_group=self._config.consumer_group,
                 namesrv_manager=self._nameserver_manager,
                 broker_manager=self._broker_manager,
+            )
+        )
+
+        # 创建队列分配策略
+        self._allocate_strategy: AllocateQueueStrategyBase = (
+            AllocateQueueStrategyFactory.create_strategy(
+                self._config.allocate_queue_strategy
             )
         )
 

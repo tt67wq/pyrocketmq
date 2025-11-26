@@ -21,10 +21,7 @@ from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.broker import AsyncBrokerClient, MessagePullError
-from pyrocketmq.consumer.allocate_queue_strategy import (
-    AllocateContext,
-    AllocateQueueStrategyFactory,
-)
+from pyrocketmq.consumer.allocate_queue_strategy import AllocateContext
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.async_listener import (
     ConsumeResult,
@@ -141,11 +138,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 "consume_duration_total": 0,
                 "messages_failed": 0,
             }
-        )
-
-        # 创建队列分配策略
-        self._allocate_strategy = AllocateQueueStrategyFactory.create_strategy(
-            self._config.allocate_queue_strategy
         )
 
         # 重平衡事件
