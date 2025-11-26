@@ -37,13 +37,13 @@ pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ
 ### 安装
 
 ```bash
-# 使用pip安装
-pip install pyrocketmq
-
-# 或从源码安装
+# 当前版本请从源码安装（等待1.0版本发布后将推送至pip仓库）
 git clone https://github.com/tt67wq/pyrocketmq.git
 cd pyrocketmq
 pip install -e .
+
+# 1.0版本发布后支持pip安装
+# pip install pyrocketmq
 ```
 
 ### 消息生产者使用
