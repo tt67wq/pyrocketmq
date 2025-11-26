@@ -24,13 +24,21 @@ import asyncio
 import time
 from typing import Any
 
-from pyrocketmq.broker import AsyncBrokerClient
+from pyrocketmq.broker import AsyncBrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import AllocateContext
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.config import ConsumerConfig
+from pyrocketmq.consumer.errors import MessageConsumeError
+from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
-from pyrocketmq.model import MessageExt, MessageModel, MessageQueue
+from pyrocketmq.model import (
+    MessageExt,
+    MessageModel,
+    MessageQueue,
+    SubscriptionData,
+    SubscriptionEntry,
+)
 from pyrocketmq.remote import AsyncConnectionPool
 
 
@@ -331,84 +339,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         return True
 
-    async def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
-        """为指定队列启动拉取任务
-
-        Args:
-            queues: 要启动拉取任务的队列集合
-        """
-        for queue in queues:
-            if queue not in self._pull_tasks:
-                # 为每个队列创建停止事件
-                async with self._stop_events_lock:
-                    pull_stop_event = asyncio.Event()
-                    consume_stop_event = asyncio.Event()
-                    self._pull_stop_events[str(queue)] = pull_stop_event
-                    self._consume_stop_events[str(queue)] = consume_stop_event
-
-                # 启动拉取任务，传入停止事件
-                task = asyncio.create_task(
-                    self._pull_messages_loop(queue, pull_stop_event)
-                )
-                self._pull_tasks[str(queue)] = task
-
-                self.logger.debug(
-                    f"Started pull task for queue: {queue}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": queue.topic,
-                        "queue_id": queue.queue_id,
-                    },
-                )
-
-    async def _stop_pull_tasks(self) -> None:
-        """停止所有消息拉取任务 - 使用停止事件优雅关闭"""
-        if not self._pull_tasks:
-            return
-
-        # 设置所有停止事件
-        async with self._stop_events_lock:
-            for queue_key in self._pull_tasks.keys():
-                # 设置拉取停止事件
-                if queue_key in self._pull_stop_events:
-                    self._pull_stop_events[queue_key].set()
-                # 设置消费停止事件
-                if queue_key in self._consume_stop_events:
-                    self._consume_stop_events[queue_key].set()
-
-        # 取消所有异步任务
-        for queue_key, task in self._pull_tasks.items():
-            if task and not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    self.logger.debug(
-                        f"Pull task cancelled for queue: {queue_key}",
-                        extra={"consumer_group": self._config.consumer_group},
-                    )
-
-        self._pull_tasks.clear()
-
-        # 清理停止事件
-        async with self._stop_events_lock:
-            self._pull_stop_events.clear()
-            self._consume_stop_events.clear()
-
-        self.logger.debug(
-            "All pull tasks stopped",
-            extra={"consumer_group": self._config.consumer_group},
-        )
-
-        # 检查是否有订阅的Topic
-        topics: set[str] = self._subscription_manager.get_topics()
-        if not topics:
-            self.logger.debug("No topics subscribed, skipping rebalance")
-            self._rebalance_lock.release()
-            return
-
-        return
-
     async def _collect_and_allocate_queues(self) -> list[MessageQueue]:
         """收集所有Topic的可用队列并执行分配。
 
@@ -497,6 +427,35 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             )
         else:
             return all_queues.copy()
+
+    async def _finalize_rebalance(self, total_topics: int, total_queues: int) -> None:
+        """完成重平衡后处理。
+
+        更新重平衡时间戳、统计信息，并记录完成日志。
+
+        Args:
+            total_topics: 重平衡处理的Topic总数
+            total_queues: 分配到的队列总数
+
+        Raises:
+            None: 此方法不会抛出异常
+        """
+        self._last_rebalance_time = time.time()
+
+        # 更新成功统计
+        self._stats["rebalance_success_count"] = (
+            self._stats.get("rebalance_success_count", 0) + 1
+        )
+
+        self.logger.info(
+            "Rebalance completed",
+            extra={
+                "consumer_group": self._config.consumer_group,
+                "total_topics": total_topics,
+                "assigned_queues": total_queues,
+                "success_count": self._stats["rebalance_success_count"],
+            },
+        )
 
     async def _find_consumer_list(self, topic: str) -> list[str]:
         """
@@ -740,6 +699,277 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             )
             return False
 
+    async def _start_pull_tasks_for_queues(self, queues: set[MessageQueue]) -> None:
+        """为指定队列启动拉取任务
+
+        Args:
+            queues: 要启动拉取任务的队列集合
+        """
+        for queue in queues:
+            if queue not in self._pull_tasks:
+                # 为每个队列创建停止事件
+                async with self._stop_events_lock:
+                    pull_stop_event = asyncio.Event()
+                    consume_stop_event = asyncio.Event()
+                    self._pull_stop_events[str(queue)] = pull_stop_event
+                    self._consume_stop_events[str(queue)] = consume_stop_event
+
+                # 启动拉取任务，传入停止事件
+                task = asyncio.create_task(
+                    self._pull_messages_loop(queue, pull_stop_event)
+                )
+                self._pull_tasks[str(queue)] = task
+
+                self.logger.debug(
+                    f"Started pull task for queue: {queue}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": queue.topic,
+                        "queue_id": queue.queue_id,
+                    },
+                )
+
+    async def _stop_pull_tasks(self) -> None:
+        """停止所有消息拉取任务 - 使用停止事件优雅关闭"""
+        if not self._pull_tasks:
+            return
+
+        # 设置所有停止事件
+        async with self._stop_events_lock:
+            for queue_key in self._pull_tasks.keys():
+                # 设置拉取停止事件
+                if queue_key in self._pull_stop_events:
+                    self._pull_stop_events[queue_key].set()
+                # 设置消费停止事件
+                if queue_key in self._consume_stop_events:
+                    self._consume_stop_events[queue_key].set()
+
+        # 取消所有异步任务
+        for queue_key, task in self._pull_tasks.items():
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    self.logger.debug(
+                        f"Pull task cancelled for queue: {queue_key}",
+                        extra={"consumer_group": self._config.consumer_group},
+                    )
+
+        self._pull_tasks.clear()
+
+        # 清理停止事件
+        async with self._stop_events_lock:
+            self._pull_stop_events.clear()
+            self._consume_stop_events.clear()
+
+        self.logger.debug(
+            "All pull tasks stopped",
+            extra={"consumer_group": self._config.consumer_group},
+        )
+
+    async def _perform_single_pull(
+        self, message_queue: MessageQueue, suggest_broker_id: int
+    ) -> tuple[list[MessageExt], int, int] | None:
+        """执行单次消息拉取操作。
+
+        Args:
+            message_queue: 要拉取消息的队列
+            suggest_broker_id: 建议的Broker ID
+
+        Returns:
+            tuple[list[MessageExt], int, int] | None:
+                - messages: 拉取到的消息列表
+                - next_begin_offset: 下次拉取的起始偏移量
+                - next_suggest_id: 下次建议的Broker ID
+            None: 如果没有订阅信息
+
+        Raises:
+            MessagePullError: 当拉取请求非法时抛出
+        """
+        # 获取当前偏移量
+        current_offset: int = await self._get_or_initialize_offset(message_queue)
+
+        # 拉取消息
+        messages, next_begin_offset, next_suggest_id = await self._pull_messages(
+            message_queue,
+            current_offset,
+            suggest_broker_id,
+        )
+
+        # 检查订阅信息
+        sub: SubscriptionEntry | None = self._subscription_manager.get_subscription(
+            message_queue.topic
+        )
+        if sub is None:
+            # 如果没有订阅信息，则停止消费
+            return None
+
+        sub_data: SubscriptionData = sub.subscription_data
+
+        # 根据订阅信息过滤消息
+        if sub_data.tags_set:
+            messages = self._filter_messages_by_tags(messages, sub_data.tags_set)
+
+        return messages, next_begin_offset, next_suggest_id
+
+    async def _pull_messages(
+        self, message_queue: MessageQueue, offset: int, suggest_id: int
+    ) -> tuple[list[MessageExt], int, int]:
+        """从指定队列拉取消息，支持偏移量管理和Broker选择。
+
+        该方法是顺序消费者的核心拉取逻辑，负责从RocketMQ Broker拉取消息，
+        并处理相关的系统标志位和偏移量管理。支持主备Broker的智能选择
+        和故障转移机制。
+
+        核心功能:
+        - 通过NameServerManager获取最优Broker地址
+        - 构建拉取请求的系统标志位
+        - 处理commit offset的提交逻辑
+        - 支持批量消息拉取以提高效率
+        - 完善的错误处理和重试机制
+
+        拉取策略:
+        1. 获取目标Broker地址，优先连接master
+        2. 读取当前commit offset（如果有）
+        3. 构建包含commit标志的系统标志位
+        4. 发送PULL_MESSAGE请求到Broker
+        5. 解析响应并返回消息列表和下次拉取位置
+
+        返回值说明:
+        - list[MessageExt]: 拉取到的消息列表，可能为空
+        - int: 下一次拉取的起始偏移量
+        - int: 建议下次连接的Broker ID（0=master, 其他=slave）
+
+        Args:
+            message_queue (MessageQueue): 目标消息队列，包含topic、broker名称、队列ID等信息
+            offset (int): 本次拉取的起始偏移量，从该位置开始拉取消息
+            suggest_id (int): 建议的Broker ID，用于连接选择优化，
+                            通常为上次拉取时返回的建议ID
+
+        Returns:
+            tuple[list[MessageExt], int, int]: 三元组包含：
+                                            - 消息列表（可能为空）
+                                            - 下次拉取的起始偏移量
+                                            - 建议的下次Broker ID
+
+        Raises:
+            MessageConsumeError: 当拉取过程中发生错误时抛出，包含详细的错误信息
+            ValueError: 当无法找到指定broker的地址时抛出
+        """
+        try:
+            self._stats["pull_requests"] = self._stats.get("pull_requests", 0) + 1
+
+            broker_info: (
+                tuple[str, bool] | None
+            ) = await self._nameserver_manager.get_broker_address_in_subscription(
+                message_queue.broker_name, suggest_id
+            )
+            if not broker_info:
+                raise ValueError(
+                    f"Broker address not found for {message_queue.broker_name}"
+                )
+
+            commit_offset: int = await self._offset_store.read_offset(
+                message_queue, ReadOffsetType.READ_FROM_MEMORY
+            )
+
+            broker_address, is_master = broker_info
+
+            pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+                broker_address
+            )
+
+            # 使用异步连接池拉取消息
+            async with pool.get_connection() as conn:
+                result = await conn.async_pull_message(
+                    consumer_group=self._config.consumer_group,
+                    topic=message_queue.topic,
+                    queue_id=message_queue.queue_id,
+                    offset=offset,
+                    max_nums=self._config.pull_batch_size,
+                    sys_flag=await self._build_sys_flag(
+                        commit_offset=commit_offset > 0 and is_master
+                    ),
+                    commit_offset=commit_offset,
+                    timeout=30,
+                )
+
+                if result.messages:
+                    self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
+                    return (
+                        result.messages,
+                        result.next_begin_offset,
+                        result.suggest_which_broker_id or 0,
+                    )
+
+                self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
+                return [], offset, 0
+
+        except MessagePullError as e:
+            self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+            self.logger.warning(
+                "The pull request is illegal",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": offset,
+                    "error": str(e),
+                },
+            )
+            raise e
+
+        except Exception as e:
+            self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+            self.logger.warning(
+                "Failed to pull messages",
+                extra={
+                    "consumer_group": self._config.consumer_group,
+                    "topic": message_queue.topic,
+                    "queue_id": message_queue.queue_id,
+                    "offset": offset,
+                    "error": str(e),
+                },
+            )
+            raise MessageConsumeError(
+                message_queue.topic,
+                "Failed to pull messages",
+                offset,
+                cause=e,
+            ) from e
+
+    async def _build_sys_flag(self, commit_offset: bool) -> int:
+        """构建系统标志位
+
+        根据Go语言实现：
+        - bit 0 (0x1): commitOffset 标志
+        - bit 1 (0x2): suspend 标志
+        - bit 2 (0x4): subscription 标志
+        - bit 3 (0x8): classFilter 标志
+
+        Args:
+            commit_offset (bool): 是否提交偏移量
+
+        Returns:
+            int: 系统标志位
+        """
+        flag = 0
+
+        if commit_offset:
+            flag |= 0x1 << 0  # bit 0: 0x1
+
+        # suspend: always true
+        flag |= 0x1 << 1  # bit 1: 0x2
+
+        # subscription: always true
+        flag |= 0x1 << 2  # bit 2: 0x4
+
+        # class_filter: always false
+        # flag |= 0x1 << 3  # bit 3: 0x8
+
+        return flag
+
     async def _pull_messages_loop(
         self,
         message_queue: MessageQueue,
@@ -757,24 +987,53 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         suggest_broker_id = 0
         while self._is_running and not pull_stop_event.is_set():
             try:
-                # TODO: 实现实际的异步拉取逻辑
-                # 这里需要实现类似OrderlyConsumer中的_perform_single_pull的异步版本
-                # 暂时使用等待来模拟拉取过程
+                # 执行单次拉取操作
+                pull_result = await self._perform_single_pull(
+                    message_queue, suggest_broker_id
+                )
 
-                # 控制拉取频率 - 可中断的等待
-                try:
-                    await asyncio.wait_for(pull_stop_event.wait(), timeout=1.0)
-                    break  # 如果收到停止信号，退出循环
-                except asyncio.TimeoutError:
-                    pass  # 超时是正常的，继续拉取
+                if pull_result is None:
+                    # 没有订阅信息，停止拉取
+                    self.logger.warning(
+                        f"No subscription found for topic: {message_queue.topic}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                        },
+                    )
+                    break
 
-                self.logger.debug(
-                    f"Pulling messages from queue: {message_queue}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "topic": message_queue.topic,
-                        "queue_id": message_queue.queue_id,
-                    },
+                messages, next_begin_offset, next_suggest_id = pull_result
+
+                if messages:
+                    # 将消息添加到缓存队列
+                    await self._add_messages_to_cache(message_queue, messages)
+
+                    self.logger.debug(
+                        f"Pulled {len(messages)} messages from queue: {message_queue}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "message_count": len(messages),
+                        },
+                    )
+                else:
+                    self.logger.debug(
+                        f"No messages pulled from queue: {message_queue}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                        },
+                    )
+
+                # 更新下次拉取的建议Broker ID
+                suggest_broker_id = next_suggest_id
+
+                # 应用智能拉取间隔控制
+                await self._apply_pull_interval(
+                    has_messages=bool(messages), pull_stop_event=pull_stop_event
                 )
 
             except asyncio.CancelledError:
