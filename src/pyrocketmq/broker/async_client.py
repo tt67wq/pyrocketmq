@@ -2242,7 +2242,7 @@ class AsyncBrokerClient:
         client_id: str,
         mqs: list[MessageQueue],
         timeout: float | None = None,
-    ) -> list[Any]:
+    ) -> list[MessageQueue]:
         """异步批量锁定消息队列
 
         Args:

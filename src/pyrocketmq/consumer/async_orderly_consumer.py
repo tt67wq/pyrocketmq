@@ -98,6 +98,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         self._queue_locks: dict[
             MessageQueue, asyncio.Semaphore
         ] = {}  # 队列级锁信号量，确保顺序消费
+        self._queue_locks_lock = asyncio.Lock()  # 🔐保护_queue_locks字典的并发访问
         self._consume_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列消费任务
         self._pull_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列拉取任务
 
@@ -575,13 +576,15 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     task.cancel()
 
             # 清理队列锁
-            if q in self._queue_locks:
-                del self._queue_locks[q]
+        async with self._queue_locks_lock:
+            for q in removed_queues:
+                if q in self._queue_locks:
+                    del self._queue_locks[q]
 
         # 为新分配的队列创建资源
         for q in added_queues:
-            # 为新队列创建锁
-            self._queue_locks[q] = asyncio.Semaphore(1)
+            # 为新队列创建锁（这里使用_get_queue_lock来确保线程安全）
+            await self._get_queue_lock(q)
 
         # 如果消费者正在运行，启动新队列的拉取任务和消费任务
         if self._is_running and added_queues:
@@ -684,7 +687,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         """定期重平衡循环"""
         while self._is_running:
             try:
-                # 使用Event.wait()替代asyncio.sleep()
                 try:
                     await asyncio.wait_for(
                         self._rebalance_event.wait(), timeout=self._rebalance_interval
@@ -770,10 +772,10 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
     # - _set_remote_lock_expiry: 设置远程锁过期时间
     # - _invalidate_remote_lock: 使远程锁失效
 
-    def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
+    async def _get_queue_lock(self, message_queue: MessageQueue) -> asyncio.Semaphore:
         """获取指定消息队列的锁信号量
 
-        使用双重检查锁定模式来避免竞争条件
+        使用锁保护来避免并发访问导致的竞争条件
 
         Args:
             message_queue: 消息队列
@@ -781,16 +783,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Returns:
             asyncio.Semaphore: 该队列的异步锁信号量对象（值为1的信号量）
         """
-        # 首先进行无锁检查，提高性能
-        if message_queue in self._queue_locks:
-            return self._queue_locks[message_queue]
+        async with self._queue_locks_lock:
+            # 检查是否已经存在锁
+            if message_queue in self._queue_locks:
+                return self._queue_locks[message_queue]
 
-        # 由于字典操作本身是原子的，且我们在单线程事件循环中运行，
-        # 不需要额外的锁保护
-        if message_queue not in self._queue_locks:
+            # 不存在则创建新的锁
             self._queue_locks[message_queue] = asyncio.Semaphore(1)
-
-        return self._queue_locks[message_queue]
+            return self._queue_locks[message_queue]
 
     async def _is_locked(self, message_queue: MessageQueue) -> bool:
         """检查指定队列是否已锁定
@@ -801,11 +801,12 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Returns:
             bool: True如果队列已锁定，False如果队列未锁定
         """
-        if message_queue not in self._queue_locks:
-            return False
+        async with self._queue_locks_lock:
+            if message_queue not in self._queue_locks:
+                return False
 
-        # asyncio.Semaphore有locked()方法，可以直接检查状态
-        return self._queue_locks[message_queue].locked()
+            # asyncio.Semaphore有locked()方法，可以直接检查状态
+            return self._queue_locks[message_queue].locked()
 
     async def _is_remote_lock_valid(self, message_queue: MessageQueue) -> bool:
         """检查指定队列的远程锁是否仍然有效
@@ -1423,7 +1424,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Returns:
             tuple[asyncio.Semaphore, bool]: (队列锁, 是否成功获取锁)
         """
-        queue_semaphore: asyncio.Semaphore = self._get_queue_lock(message_queue)
+        queue_semaphore: asyncio.Semaphore = await self._get_queue_lock(message_queue)
         lock_acquired: bool = False
 
         # 尝试非阻塞获取锁，如果失败则等待10ms后重试
@@ -2393,7 +2394,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     )
 
             # 清理队列锁
-            self._queue_locks.clear()
+            async with self._queue_locks_lock:
+                self._queue_locks.clear()
 
             # 清理远程锁缓存
             async with self._remote_lock_cache_lock:
