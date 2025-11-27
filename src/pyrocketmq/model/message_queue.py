@@ -113,3 +113,18 @@ class MessageQueue:
             broker_name="fake_broker",
             queue_id=0,
         )
+
+    def equal(self, q: "MessageQueue") -> bool:
+        """比较两个消息队列是否相等
+
+        Args:
+            q: 消息队列
+
+        Returns:
+            是否相等
+        """
+        return (
+            self.topic == q.topic
+            and self.broker_name == q.broker_name
+            and self.queue_id == q.queue_id
+        )

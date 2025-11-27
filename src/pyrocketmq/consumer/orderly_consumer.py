@@ -827,15 +827,18 @@ class OrderlyConsumer(BaseConsumer):
                 broker_client = BrokerClient(conn)
 
                 # 尝试锁定队列
-                locked_queues = broker_client.lock_batch_mq(
+                locked_queues: list[MessageQueue] = broker_client.lock_batch_mq(
                     consumer_group=self._config.consumer_group,
                     client_id=self._config.client_id,
                     mqs=[message_queue],
                 )
 
-                # 检查锁定是否成功
-                if locked_queues and len(locked_queues) > 0:
-                    # 成功获取远程锁，设置过期时间
+                locked: bool = False
+                for q in locked_queues:
+                    if q.equal(message_queue):
+                        locked = True
+                        break
+                if locked:
                     self._set_remote_lock_expiry(message_queue)
                     logger.debug(
                         f"Successfully locked remote queue: {message_queue}",
