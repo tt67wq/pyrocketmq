@@ -880,9 +880,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     client_id=self._config.client_id,
                     mqs=[message_queue],
                 )
+                locked: bool = False
+                for q in locked_queues:
+                    if q.equal(message_queue):
+                        locked = True
+                        break
 
                 # 检查锁定是否成功
-                if locked_queues and len(locked_queues) > 0:
+                if locked:
                     # 成功获取远程锁，设置过期时间
                     await self._set_remote_lock_expiry(message_queue)
                     self.logger.debug(
