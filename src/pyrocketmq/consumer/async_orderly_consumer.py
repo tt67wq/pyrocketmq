@@ -98,8 +98,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         self._queue_locks: dict[
             MessageQueue, asyncio.Semaphore
         ] = {}  # 队列级锁信号量，确保顺序消费
-        self._consume_tasks: dict[str, asyncio.Task[None]] = {}  # 队列消费任务
-        self._pull_tasks: dict[str, asyncio.Task[None]] = {}  # 队列拉取任务
+        self._consume_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列消费任务
+        self._pull_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列拉取任务
 
         self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
         self._cache_lock = asyncio.Lock()  # 用于保护_msg_cache字典
@@ -377,9 +377,10 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Raises:
             None: 此方法不会抛出异常
         """
+
         # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
         # 使用可重入锁保护重平衡操作
-        if not self._rebalance_lock.acquire():
+        if not self._rebalance_lock.locked():
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
             self._stats["rebalance_skipped_count"] += 1
             self.logger.debug(
@@ -569,10 +570,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
             # 停止并移除该队列的消费任务
             if q in self._consume_tasks:
-                consume_tasks = self._consume_tasks.pop(q)
-                for task in consume_tasks:
-                    if task and not task.done():
-                        task.cancel()
+                task = self._consume_tasks.pop(q)
+                if task and not task.done():
+                    task.cancel()
 
             # 清理队列锁
             if q in self._queue_locks:
@@ -582,9 +582,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         for q in added_queues:
             # 为新队列创建锁
             self._queue_locks[q] = asyncio.Semaphore(1)
-
-            # 为新队列初始化消费任务列表
-            self._consume_tasks[q] = []
 
         # 如果消费者正在运行，启动新队列的拉取任务和消费任务
         if self._is_running and added_queues:
@@ -1047,7 +1044,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 task = asyncio.create_task(
                     self._pull_messages_loop(queue, pull_stop_event)
                 )
-                self._pull_tasks[str(queue)] = task
+                self._pull_tasks[queue] = task
 
                 self.logger.debug(
                     f"Started pull task for queue: {queue}",
@@ -1065,7 +1062,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         # 设置所有停止事件
         async with self._stop_events_lock:
-            for queue_key in self._pull_tasks.keys():
+            for queue in self._pull_tasks.keys():
+                queue_key = str(queue)
                 # 设置拉取停止事件
                 if queue_key in self._pull_stop_events:
                     self._pull_stop_events[queue_key].set()
@@ -1074,14 +1072,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     self._consume_stop_events[queue_key].set()
 
         # 取消所有异步任务
-        for queue_key, task in self._pull_tasks.items():
+        for queue, task in self._pull_tasks.items():
             if task and not task.done():
                 task.cancel()
                 try:
                     await task
                 except asyncio.CancelledError:
                     self.logger.debug(
-                        f"Pull task cancelled for queue: {queue_key}",
+                        f"Pull task cancelled for queue: {queue}",
                         extra={"consumer_group": self._config.consumer_group},
                     )
 
@@ -1355,13 +1353,13 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
             # 启动消费任务
             if (
-                queue_key not in self._consume_tasks
-                or self._consume_tasks[queue_key].done()
+                message_queue not in self._consume_tasks
+                or self._consume_tasks[message_queue].done()
             ):
                 task = asyncio.create_task(
                     self._consume_messages_loop(message_queue, consume_stop_event)
                 )
-                self._consume_tasks[queue_key] = task
+                self._consume_tasks[message_queue] = task
 
                 self.logger.debug(
                     f"Started consume task for queue: {message_queue}",
@@ -1384,7 +1382,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         # 等待所有任务完成
         tasks_to_cancel: list[asyncio.Task[None]] = []
-        for queue_key, task in self._consume_tasks.items():
+        for queue, task in self._consume_tasks.items():
             if not task.done():
                 # 给任务一些时间来优雅退出
                 try:

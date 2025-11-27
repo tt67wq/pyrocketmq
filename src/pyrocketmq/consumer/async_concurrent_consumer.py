@@ -1004,7 +1004,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         # 首先检查是否有订阅的Topic，避免不必要的锁获取
         topics: set[str] = set(self._subscription_manager.get_topics())
         if not topics:
-            print("没有任何topic！！！！！")
             logger.debug("No topics subscribed, skipping rebalance")
             return False
 
