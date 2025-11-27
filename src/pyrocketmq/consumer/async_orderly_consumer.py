@@ -93,60 +93,69 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # 调用父类初始化
         super().__init__(config)
 
+        # ==================== 基础组件 ====================
         self.logger = get_logger(__name__)
-        # 顺序消费特有字段
-        self._queue_locks: dict[
-            MessageQueue, asyncio.Semaphore
-        ] = {}  # 队列级锁信号量，确保顺序消费
+
+        # ==================== 顺序消费核心组件 ====================
+        # 队列锁管理 - 确保单个队列的顺序消费
+        self._queue_locks: dict[MessageQueue, asyncio.Semaphore] = {}  # 队列级锁信号量
         self._queue_locks_lock = asyncio.Lock()  # 🔐保护_queue_locks字典的并发访问
+
+        # 任务管理 - 管理拉取和消费的异步任务
         self._consume_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列消费任务
+        self._consume_tasks_lock = asyncio.Lock()  # 🔐保护_consume_tasks字典的并发访问
         self._pull_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列拉取任务
 
-        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
-        self._cache_lock = asyncio.Lock()  # 用于保护_msg_cache字典
+        # ==================== 消息缓存管理 ====================
+        # ProcessQueue缓存 - 消息拉取和消费之间的缓冲区
+        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}  # 消息缓存队列
+        self._cache_lock = asyncio.Lock()  # 🔐保护_msg_cache字典的并发访问
 
-        # 状态管理
+        # ==================== 状态和队列管理 ====================
+        # 分配队列状态 - 当前消费者负责的队列及其偏移量
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
         self._assigned_queues_lock = (
             asyncio.Lock()
         )  # 🔐保护_assigned_queues字典的并发访问
-        self._last_rebalance_time: float = 0.0
+        self._last_rebalance_time: float = 0.0  # 上次重平衡时间戳
 
-        # 重平衡任务管理
-        self._rebalance_task: asyncio.Task[None] | None = None
+        # ==================== 重平衡管理 ====================
+        # 重平衡任务 - 定期执行队列重新分配
+        self._rebalance_task: asyncio.Task[None] | None = None  # 重平衡异步任务
         self._rebalance_interval: float = 20.0  # 重平衡间隔(秒)
+        self._rebalance_lock = asyncio.Lock()  # 🔐重平衡重入保护锁
 
-        # 线程同步事件
-        self._rebalance_event: asyncio.Event = asyncio.Event()  # 用于重平衡循环的事件
+        # ==================== 同步和事件管理 ====================
+        # 重平衡事件 - 控制重平衡循环
+        self._rebalance_event: asyncio.Event = asyncio.Event()  # 重平衡循环控制事件
 
-        # 线程停止事件 - 用于优雅关闭拉取和消费循环
-        self._pull_stop_events: dict[str, asyncio.Event] = {}
-        self._consume_stop_events: dict[str, asyncio.Event] = {}
-        self._stop_events_lock = asyncio.Lock()  # 保护停止事件字典
+        # 停止事件 - 用于优雅关闭拉取和消费任务
+        self._pull_stop_events: dict[str, asyncio.Event] = {}  # 拉取任务停止事件
+        self._consume_stop_events: dict[str, asyncio.Event] = {}  # 消费任务停止事件
+        self._stop_events_lock = asyncio.Lock()  # 🔐保护停止事件字典的并发访问
 
-        # 重平衡重入保护
-        self._rebalance_lock = asyncio.Lock()  # 重平衡锁，防止重入
-
-        # 远程锁缓存和有效期管理
-        # 避免每次消费循环都需要获取远程锁，提升性能
+        # ==================== 远程锁优化 ====================
+        # 远程锁缓存 - 减少网络请求，提升性能
         self._remote_lock_cache: dict[
             MessageQueue, float
         ] = {}  # queue -> lock_expiry_time
-        self._remote_lock_cache_lock = asyncio.Lock()  # 保护远程锁缓存
-        self._remote_lock_expire_time: float = 30.0  # 远程锁有效期30秒
+        self._remote_lock_cache_lock = asyncio.Lock()  # 🔐保护远程锁缓存的并发访问
+        self._remote_lock_expire_time: float = 30.0  # 远程锁有效期(秒)
 
-        # 统计信息扩展
+        # ==================== 统计和监控 ====================
+        # 顺序消费特有统计信息
         self._stats.update(
             {
-                "queue_lock_wait_count": 0,
-                "queue_lock_wait_total_time": 0.0,
-                "orderly_consume_success_count": 0,
-                "orderly_consume_fail_count": 0,
-                "orderly_consume_rt_total": 0.0,
-                "orderly_consume_rt_count": 0,
+                "queue_lock_wait_count": 0,  # 队列锁等待次数
+                "queue_lock_wait_total_time": 0.0,  # 队列锁等待总时间(毫秒)
+                "orderly_consume_success_count": 0,  # 顺序消费成功次数
+                "orderly_consume_fail_count": 0,  # 顺序消费失败次数
+                "orderly_consume_rt_total": 0.0,  # 顺序消费响应时间总和(毫秒)
+                "orderly_consume_rt_count": 0,  # 顺序消费响应时间计数
             }
         )
 
+        # ==================== 初始化完成日志 ====================
         self.logger.info(
             "AsyncOrderlyConsumer initialized",
             extra={
@@ -154,6 +163,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "message_model": self._config.message_model,
                 "consume_thread_max": self._config.consume_thread_max,
                 "pull_batch_size": self._config.pull_batch_size,
+                "rebalance_interval": self._rebalance_interval,
                 "remote_lock_expire_time": self._remote_lock_expire_time,
             },
         )
@@ -570,10 +580,12 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     task.cancel()
 
             # 停止并移除该队列的消费任务
-            if q in self._consume_tasks:
-                task = self._consume_tasks.pop(q)
-                if task and not task.done():
-                    task.cancel()
+        async with self._consume_tasks_lock:
+            for q in removed_queues:
+                if q in self._consume_tasks:
+                    task = self._consume_tasks.pop(q)
+                    if task and not task.done():
+                        task.cancel()
 
             # 清理队列锁
         async with self._queue_locks_lock:
@@ -842,7 +854,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             message_queue: 消息队列
         """
         async with self._remote_lock_cache_lock:
-            self._remote_lock_cache.pop(message_queue, None)
+            _ = self._remote_lock_cache.pop(message_queue, None)
 
     async def _lock_remote_queue(self, message_queue: MessageQueue) -> bool:
         """尝试远程锁定指定队列
@@ -1358,14 +1370,16 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 consume_stop_event = self._consume_stop_events[queue_key]
 
             # 启动消费任务
-            if (
-                message_queue not in self._consume_tasks
-                or self._consume_tasks[message_queue].done()
-            ):
-                task = asyncio.create_task(
-                    self._consume_messages_loop(message_queue, consume_stop_event)
-                )
-                self._consume_tasks[message_queue] = task
+            async with self._consume_tasks_lock:
+                # 检查是否需要创建新任务
+                if (
+                    message_queue not in self._consume_tasks
+                    or self._consume_tasks[message_queue].done()
+                ):
+                    task = asyncio.create_task(
+                        self._consume_messages_loop(message_queue, consume_stop_event)
+                    )
+                    self._consume_tasks[message_queue] = task
 
                 self.logger.debug(
                     f"Started consume task for queue: {message_queue}",
@@ -1378,17 +1392,21 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     async def _stop_consume_tasks(self) -> None:
         """停止所有消息消费任务 - 使用停止事件优雅关闭"""
-        if not self._consume_tasks:
-            return
-
         # 设置所有停止事件
         async with self._stop_events_lock:
             for queue_key in self._consume_stop_events:
                 self._consume_stop_events[queue_key].set()
 
+        # 获取所有任务的副本并清空字典
+        async with self._consume_tasks_lock:
+            if not self._consume_tasks:
+                return
+            tasks = list(self._consume_tasks.items())
+            self._consume_tasks.clear()
+
         # 等待所有任务完成
         tasks_to_cancel: list[asyncio.Task[None]] = []
-        for queue, task in self._consume_tasks.items():
+        for queue, task in tasks:
             if not task.done():
                 # 给任务一些时间来优雅退出
                 try:
@@ -1404,8 +1422,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # 等待取消完成
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-        self._consume_tasks.clear()
 
         # 清理停止事件
         async with self._stop_events_lock:
@@ -2340,10 +2356,11 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             self._pull_tasks.clear()
 
             # 取消所有消费任务
-            for task in self._consume_tasks.values():
-                if task and not task.done():
-                    task.cancel()
-            self._consume_tasks.clear()
+            async with self._consume_tasks_lock:
+                for task in self._consume_tasks.values():
+                    if task and not task.done():
+                        task.cancel()
+                self._consume_tasks.clear()
 
             self.logger.info(
                 "Async tasks shutdown completed",
@@ -2375,7 +2392,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
             # 清理状态
             self._pull_tasks.clear()
-            self._consume_tasks.clear()
+            async with self._consume_tasks_lock:
+                self._consume_tasks.clear()
 
             # 远程解锁所有已分配的队列
             async with self._assigned_queues_lock:
