@@ -1665,7 +1665,7 @@ class OrderlyConsumer(BaseConsumer):
             messages: 消息列表
             stop_event: 停止事件
         """
-        while True:
+        while self._is_running and not stop_event.is_set():
             success, result, duration = self._process_messages_with_timing(
                 messages, message_queue
             )

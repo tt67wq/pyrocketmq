@@ -1406,7 +1406,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         # 等待所有任务完成
         tasks_to_cancel: list[asyncio.Task[None]] = []
-        for queue, task in tasks:
+        for _queue, task in tasks:
             if not task.done():
                 # 给任务一些时间来优雅退出
                 try:
@@ -1448,17 +1448,21 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         queue_semaphore: asyncio.Semaphore = await self._get_queue_lock(message_queue)
         lock_acquired: bool = False
 
-        # 尝试非阻塞获取锁，如果失败则等待10ms后重试
+        # 尝试非阻塞获取锁，如果失败则等待1000ms后重试
         while not lock_acquired and self._is_running and not stop_event.is_set():
-            lock_acquired = await queue_semaphore.acquire()
+            try:
+                # 使用带超时的非阻塞获取
+                lock_acquired = await asyncio.wait_for(
+                    queue_semaphore.acquire(), timeout=1
+                )
+            except asyncio.TimeoutError:
+                # 获取锁超时，继续下一轮尝试
+                lock_acquired = False
+                continue
 
-            if not lock_acquired:
-                # 等待10ms
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=0.01)
-                    break  # 如果收到停止信号，退出循环
-                except asyncio.TimeoutError:
-                    pass  # 超时是正常的，继续尝试获取锁
+            # 如果收到停止信号，退出循环
+            if stop_event.is_set():
+                break
 
         # 如果获取锁失败或消费者停止，则返回
         if not lock_acquired or not self._is_running:
@@ -1561,6 +1565,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         )
 
         while self._is_running and not stop_event.is_set():
+            queue_semaphore: asyncio.Semaphore | None = None
             try:
                 # 获取消费锁
                 queue_semaphore, lock_acquired = await self._acquire_consume_lock(
@@ -1570,27 +1575,17 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 if not lock_acquired:
                     continue
 
-                try:
-                    # 从队列获取消息
-                    pq, messages = await self._fetch_messages_from_queue(
-                        message_queue, stop_event
-                    )
+                # 从处理队列获取消息
+                pq, messages = await self._fetch_messages_from_queue(
+                    message_queue, stop_event
+                )
+                if not messages:
+                    continue
 
-                    if messages:
-                        # 处理消息
-                        await self._process_messages_with_timing(
-                            message_queue, pq, messages
-                        )
-                    else:
-                        # 没有消息，短暂休眠
-                        try:
-                            await asyncio.wait_for(stop_event.wait(), timeout=0.1)
-                        except asyncio.TimeoutError:
-                            pass
-
-                finally:
-                    # 释放锁
-                    queue_semaphore.release()
+                # 处理消息并处理重试逻辑
+                await self._process_messages_with_retry(
+                    message_queue, pq, messages, stop_event
+                )
 
             except asyncio.CancelledError:
                 break
@@ -1612,6 +1607,11 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 except asyncio.TimeoutError:
                     continue
 
+            finally:
+                # 释放信号量
+                if queue_semaphore is not None:
+                    queue_semaphore.release()
+
         self.logger.debug(
             f"Consume messages loop ended for queue: {message_queue}",
             extra={
@@ -1621,55 +1621,13 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             },
         )
 
-    async def _process_messages_with_timing(
-        self, message_queue: MessageQueue, pq: ProcessQueue, messages: list[MessageExt]
-    ) -> None:
-        """处理消息并记录时间
-
-        Args:
-            message_queue: 消息队列
-            pq: 处理队列
-            messages: 要处理的消息列表
-        """
-        start_time = time.time()
-
-        try:
-            # 调用消息处理逻辑
-            await self._process_messages_with_retry(message_queue, pq, messages)
-
-            # 更新统计
-            process_time = (time.time() - start_time) * 1000  # 转换为毫秒
-            self._stats["orderly_consume_rt_total"] = (
-                self._stats.get("orderly_consume_rt_total", 0.0) + process_time
-            )
-            self._stats["orderly_consume_rt_count"] = (
-                self._stats.get("orderly_consume_rt_count", 0) + 1
-            )
-            self._stats["orderly_consume_success_count"] = self._stats.get(
-                "orderly_consume_success_count", 0
-            ) + len(messages)
-
-            # 调用统一的统计更新方法
-            self._update_consume_stats(True, process_time, len(messages))
-
-        except Exception as _:
-            # 更新失败统计
-            process_time = (time.time() - start_time) * 1000  # 转换为毫秒
-            self._stats["orderly_consume_fail_count"] = self._stats.get(
-                "orderly_consume_fail_count", 0
-            ) + len(messages)
-
-            # 调用统一的统计更新方法
-            self._update_consume_stats(False, process_time, len(messages))
-            raise
-
     async def _handle_auto_commit_result(
         self,
         pq: ProcessQueue,
         message_queue: MessageQueue,
         messages: list[MessageExt],
         success: bool,
-        result: ConsumeResult,
+        _result: ConsumeResult,
     ) -> tuple[bool, bool]:
         """
         处理自动提交模式下的消费结果。
@@ -1764,8 +1722,33 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # 所有消息都还可以重试
         return True
 
+    async def _process_messages_with_timing(
+        self, messages: list[MessageExt], message_queue: MessageQueue
+    ) -> tuple[bool, ConsumeResult, float]:
+        """
+        处理消息并计时
+
+        Args:
+            messages: 要处理的消息列表
+            message_queue: 消息队列
+
+        Returns:
+            消费结果，包含成功状态和耗时
+        """
+        start_time: float = time.time()
+        success, consume_result = await self._orderly_consume_message(
+            messages, message_queue
+        )
+        duration: float = time.time() - start_time
+
+        return success, consume_result, duration
+
     async def _process_messages_with_retry(
-        self, message_queue: MessageQueue, pq: ProcessQueue, messages: list[MessageExt]
+        self,
+        message_queue: MessageQueue,
+        pq: ProcessQueue,
+        messages: list[MessageExt],
+        stop_event: asyncio.Event,
     ) -> None:
         """带重试机制的消息处理
 
@@ -1773,21 +1756,35 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             message_queue: 消息队列
             pq: 处理队列
             messages: 要处理的消息列表
+            stop_event: 停止事件
         """
-        # 这里应该调用具体的消息处理逻辑
-        # 暂时使用简单的日志记录
-        self.logger.debug(
-            f"Processing {len(messages)} messages from queue: {message_queue}",
-            extra={
-                "consumer_group": self._config.consumer_group,
-                "topic": message_queue.topic,
-                "queue_id": message_queue.queue_id,
-                "message_count": len(messages),
-            },
-        )
+        while self._is_running and not stop_event.is_set():
+            success, result, duration = await self._process_messages_with_timing(
+                messages, message_queue
+            )
 
-        # TODO: 实现具体的消息处理逻辑
-        # 这里需要调用用户的MessageListener来处理消息
+            # 更新消费统计信息
+            self._update_consume_stats(success, duration, len(messages))
+
+            # 根据提交模式处理结果
+            if self._config.enable_auto_commit:
+                should_continue, should_wait = await self._handle_auto_commit_result(
+                    pq, message_queue, messages, success, result
+                )
+            else:
+                should_continue, should_wait = await self._handle_manual_commit_result(
+                    pq, message_queue, messages, success, result
+                )
+
+            if should_continue:
+                if should_wait:
+                    try:
+                        await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        pass
+                continue
+            else:
+                break
 
     # ==================== 6. 消息缓存管理模块 ====================
     #
