@@ -64,6 +64,19 @@ from .allocate_queue_strategy import (
     create_hash_strategy,
 )
 from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
+
+# ==================== Consumer便利工厂函数 ====================
+from .async_factory import (
+    create_and_start_async_orderly_consumer,
+    create_async_orderly_consumer,
+    create_async_orderly_consumer_fast,
+    create_async_orderly_consumer_light,
+    create_async_orderly_consumer_simple,
+    create_environment_based_async_orderly_consumer,
+    create_high_performance_async_orderly_consumer,
+    create_memory_optimized_async_orderly_consumer,
+    quick_start_async_orderly_consumer,
+)
 from .async_listener import (
     AsyncConsumeContext,
     SimpleAsyncMessageListener,
@@ -87,8 +100,6 @@ from .config import (
 
 # ==================== 消费起始位置管理 ====================
 from .consume_from_where_manager import ConsumeFromWhereManager
-
-# ==================== Consumer便利工厂函数 ====================
 from .consumer_factory import (
     create_async_concurrent_consumer,
     create_async_consumer,  # 向后兼容
@@ -191,6 +202,16 @@ __all__ = [
     "create_async_concurrent_consumer",
     "create_async_consumer",  # 向后兼容
     "create_orderly_consumer",
+    # 异步顺序消费者工厂函数
+    "create_async_orderly_consumer",
+    "create_async_orderly_consumer_simple",
+    "create_async_orderly_consumer_fast",
+    "create_async_orderly_consumer_light",
+    "create_high_performance_async_orderly_consumer",
+    "create_memory_optimized_async_orderly_consumer",
+    "create_and_start_async_orderly_consumer",
+    "create_environment_based_async_orderly_consumer",
+    "quick_start_async_orderly_consumer",
     # 偏移量存储
     "OffsetStore",
     "ReadOffsetType",
