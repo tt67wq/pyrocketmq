@@ -1954,7 +1954,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
                 # 控制拉取频率 - 传入是否有消息的标志，使用可中断等待
                 await self._apply_pull_interval(
-                    has_messages=bool(messages), stop_event=pull_stop_event
+                    has_messages=(len(messages) > 0), stop_event=pull_stop_event
                 )
 
             except MessagePullError as e:
@@ -2041,19 +2041,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                             else 0,
                         )
                     )
-                    # 更新本地缓存的偏移量
-                    self._assigned_queues[message_queue] = current_offset
-
-                    self.logger.info(
-                        f"初始化消费偏移量: {current_offset}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "topic": message_queue.topic,
-                            "queue_id": message_queue.queue_id,
-                            "strategy": self._config.consume_from_where,
-                            "offset": current_offset,
-                        },
-                    )
 
                 except Exception as e:
                     self.logger.error(
@@ -2069,6 +2056,20 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     )
                     # 使用默认偏移量0
                     current_offset = 0
+                else:
+                    # 更新本地缓存的偏移量
+                    self._assigned_queues[message_queue] = current_offset
+
+                    self.logger.info(
+                        f"初始化消费偏移量: {current_offset}",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": message_queue.topic,
+                            "queue_id": message_queue.queue_id,
+                            "strategy": self._config.consume_from_where,
+                            "offset": current_offset,
+                        },
+                    )
 
         return current_offset
 
@@ -2506,7 +2507,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             command.ext_fields
         )
         if header.client_id == self._config.client_id:
-            return self._on_notify_consume_message_directly_internal(header, command)
+            return await self._on_notify_consume_message_directly_internal(
+                header, command
+            )
         else:
             return (
                 RemotingCommandBuilder(ResponseCode.ERROR)
@@ -2514,7 +2517,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 .build()
             )
 
-    def _on_notify_consume_message_directly_internal(
+    async def _on_notify_consume_message_directly_internal(
         self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
     ) -> RemotingCommand:
         """内部处理直接消费消息
@@ -2554,50 +2557,25 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         for msg in msgs:
             self._reset_retry(msg)
 
-        # 对于异步顺序消费者，我们需要异步处理这个消息
-        # 但由于这是直接消费通知，我们需要同步返回结果
-        # 这里创建一个简化的同步处理逻辑
-        try:
-            # 模拟消费消息
-            self.logger.debug(
-                f"Processing message directly: {msg.msg_id}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": msg.topic,
-                    "message_id": msg.msg_id,
-                },
-            )
-
-            # 这里应该调用用户的MessageListener，但由于是直接消费，我们简化处理
-            # 在实际的异步版本中，这可能需要更复杂的处理逻辑
-
+        success, _ = await self._orderly_consume_message(msgs, q)
+        if success:
             res: ConsumeMessageDirectlyResult = ConsumeMessageDirectlyResult(
                 order=False,
                 auto_commit=True,
                 consume_result=ConsumeResult.SUCCESS,
-                remark="Message consumed directly",
+                remark="Message consumed",
                 spent_time_mills=int((datetime.now() - now).total_seconds() * 1000),
             )
             return (
                 RemotingCommandBuilder(ResponseCode.SUCCESS)
-                .with_remark("Message consumed directly")
+                .with_remark("Message consumed")
                 .with_body(res.encode())
                 .build()
             )
-        except Exception as e:
-            self.logger.error(
-                f"Failed to consume message directly: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": msg.topic,
-                    "message_id": msg.msg_id,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
+        else:
             return (
                 RemotingCommandBuilder(ResponseCode.ERROR)
-                .with_remark(f"Failed to consume message directly: {e}")
+                .with_remark("Failed to consume message")
                 .build()
             )
 
