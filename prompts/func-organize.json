@@ -1,0 +1,99 @@
+{
+  "task_type": "code_organization",
+  "title": "Python函数按功能模块分类整理",
+  "description": "将Python函数按功能模块进行分类整理，优化代码结构和可读性",
+
+  "instructions": {
+    "primary_task": "按功能模块分类整理Python函数",
+    "organization_principle": "把实现相同或相似功能的函数集中到同一模块中",
+    "scope": "在同一文件内进行，无需拆分到多个文件"
+  },
+
+  "requirements": {
+    "documentation": {
+      "requirement": "做好详细备注",
+      "details": [
+        "说明各模块的功能",
+        "说明函数间的关联关系"
+      ]
+    },
+    "code_quality": {
+      "objectives": [
+        "确保代码逻辑清晰",
+        "保证结构合理",
+        "便于阅读和理解"
+      ]
+    }
+  },
+
+  "implementation_steps": [
+    {
+      "step": 1,
+      "action": "功能分析",
+      "description": "分析所有Python函数的功能特性"
+    },
+    {
+      "step": 2,
+      "action": "模块划分",
+      "description": "根据功能相似性进行模块分类"
+    },
+    {
+      "step": 3,
+      "action": "函数重组",
+      "description": "将函数按模块重新组织排列"
+    },
+    {
+      "step": 4,
+      "action": "注释完善",
+      "description": "添加模块说明和函数关系注释"
+    },
+    {
+      "step": 5,
+      "action": "结构优化",
+      "description": "确保代码整体结构清晰合理"
+    }
+  ],
+
+  "module_classification": {
+    "criteria": [
+      "功能相似性",
+      "数据流关系",
+      "依赖关系",
+      "抽象层次"
+    ],
+    "common_modules": [
+      "数据处理模块",
+      "网络通信模块",
+      "文件操作模块",
+      "工具函数模块",
+      "配置管理模块",
+      "错误处理模块",
+      "业务逻辑模块"
+    ]
+  },
+
+  "documentation_standards": {
+    "module_level": {
+      "purpose": "说明模块整体功能和职责",
+      "components": "列出模块包含的主要函数",
+      "relationships": "描述模块间的依赖关系"
+    },
+    "function_level": {
+      "purpose": "说明函数的具体功能",
+      "parameters": "描述参数类型和用途",
+      "returns": "说明返回值类型和含义",
+      "dependencies": "标注依赖的其他函数或模块"
+    }
+  },
+
+  "quality_assurance": {
+    "checklist": [
+      "所有函数都已归类到合适的模块",
+      "模块功能划分清晰，职责单一",
+      "函数间的依赖关系合理",
+      "注释详细且准确",
+      "代码结构层次分明",
+      "便于后续维护和扩展"
+    ]
+  }
+}

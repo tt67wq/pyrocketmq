@@ -1,0 +1,144 @@
+{
+  "task_type": "import_optimization",
+  "title": "Python import语句优化和规范",
+  "description": "按照PEP 8规范优化Python文件中的import语句，提升代码质量和可读性",
+
+  "operations": [
+    {
+      "id": 1,
+      "name": "PEP 8规范排序分组",
+      "description": "严格按照PEP 8规范进行import语句的排序和分组",
+      "rules": {
+        "group_1": {
+          "name": "标准库模块",
+          "examples": ["os", "sys", "json", "datetime", "typing"],
+          "priority": 1
+        },
+        "group_2": {
+          "name": "第三方库",
+          "examples": ["numpy", "pandas", "requests", "fastapi", "pydantic"],
+          "priority": 2
+        },
+        "group_3": {
+          "name": "本地/项目内部模块",
+          "examples": ["myproject.utils", "from . import config", "from ..models import User"],
+          "priority": 3
+        },
+        "formatting": "每组之间用空行分隔"
+      }
+    },
+    {
+      "id": 2,
+      "name": "未使用导入清理",
+      "description": "静态分析并移除代码中未实际使用的导入项",
+      "method": {
+        "analysis_type": "AST遍历或工具辅助判断",
+        "criteria": [
+          "被调用的函数",
+          "被实例化的类",
+          "被引用的变量或常量"
+        ],
+        "principle": "确保不遗漏必需依赖，仅保留实际使用的导入"
+      }
+    },
+    {
+      "id": 3,
+      "name": "相对导入转绝对导入",
+      "description": "将相对导入转换为基于项目根目录的绝对导入",
+      "transformation_rules": {
+        "from_relative": "..utils import helper",
+        "to_absolute": "myproject.utils import helper",
+        "conditions": [
+          "项目结构支持",
+          "__init__.py配置允许"
+        ],
+        "exception_handling": "存在包外引用风险时跳过并标注警告"
+      }
+    },
+    {
+      "id": 4,
+      "name": "多行导入格式化",
+      "description": "对超过单行长度限制的import使用圆括号格式化",
+      "format_template": "from module_name import (\n    function_a,\n    function_b,\n    class_c\n)",
+      "rules": {
+        "trigger_condition": "导入项超过单行长度限制",
+        "format_style": "悬挂括号格式",
+        "indentation": "保持一致缩进",
+        "line_breaks": "每个子项独占一行"
+      }
+    },
+    {
+      "id": 5,
+      "name": "重复导入合并",
+      "description": "检查并合并同一模块的重复导入",
+      "merge_strategy": {
+        "principle": "优先保留更具体的导入方式",
+        "examples": [
+          {
+            "before": ["import os", "from os import path"],
+            "after": "from os import path",
+            "reason": "保留更具体的导入"
+          }
+        ],
+        "action": "删除冗余语句，合并为单一形式"
+      }
+    }
+  ],
+
+  "output_requirements": {
+    "content_scope": "仅包含优化后的完整import代码块",
+    "exclusions": "不含原文件其他部分",
+    "quality_standards": [
+      "语法正确",
+      "可直接替换原内容",
+      "符合PEP 8规范"
+    ]
+  },
+
+  "implementation_steps": [
+    {
+      "step": 1,
+      "action": "解析现有import语句",
+      "description": "提取文件中所有的import语句"
+    },
+    {
+      "step": 2,
+      "action": "使用情况分析",
+      "description": "通过AST分析判断每个导入项的使用情况"
+    },
+    {
+      "step": 3,
+      "action": "分类排序",
+      "description": "按标准库、第三方库、本地模块三组进行排序"
+    },
+    {
+      "step": 4,
+      "action": "格式化处理",
+      "description": "处理多行导入、相对导入转换等格式问题"
+    },
+    {
+      "step": 5,
+      "action": "去重合并",
+      "description": "合并重复导入，移除未使用导入"
+    },
+    {
+      "step": 6,
+      "action": "生成结果",
+      "description": "输出最终的优化后import代码块"
+    }
+  ],
+
+  "quality_checks": {
+    "syntax_validation": "确保生成的import语句语法正确",
+    "dependency_integrity": "验证所有必需依赖都已保留",
+    "format_compliance": "检查是否符合PEP 8规范",
+    "functionality_preservation": "确保代码功能不受影响"
+  },
+
+  "edge_cases": {
+    "circular_imports": "注意处理可能的循环导入问题",
+    "conditional_imports": "保留条件导入语句的原有逻辑",
+    "dynamic_imports": "谨慎处理动态导入(__import__)的情况",
+    "type_hints": "保留仅用于类型注解的导入项"
+  }
+}

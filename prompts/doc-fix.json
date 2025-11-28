@@ -1,0 +1,183 @@
+{
+  "task_type": "documentation_standardization",
+  "title": "Python函数文档字符串编写和修订",
+  "description": "按照Google Python风格指南为函数编写或修订详细的文档字符串",
+
+  "documentation_standard": {
+    "name": "Google Python Style Guide",
+    "structure": {
+      "required_sections": [
+        {
+          "name": "概述行（Summary）",
+          "format": "一句话描述函数的核心功能，首字母大写，末尾加句号"
+        },
+        {
+          "name": "Args",
+          "format": "param_name (Type): 描述",
+          "requirements": [
+            "说明参数用途",
+            "描述取值范围",
+            "标注是否可选（如适用）"
+          ]
+        },
+        {
+          "name": "Returns",
+          "condition": "仅当函数有返回值时包含",
+          "format": "(Type): 描述"
+        },
+        {
+          "name": "Raises",
+          "condition": "仅当函数可能引发异常时包含",
+          "format": "ExceptionType: 描述",
+          "requirements": [
+            "列出异常类型",
+            "描述触发条件"
+          ]
+        }
+      ],
+      "formatting": "每个部分以空行分隔"
+    }
+  },
+
+  "operations": {
+    "new_documentation": {
+      "name": "编写新文档字符串",
+      "target": "缺少文档字符串的函数",
+      "action": "按照Google风格指南创建完整的文档字符串"
+    },
+
+    "existing_documentation": {
+      "name": "修订现有文档字符串",
+      "target": "已有文档字符串的函数",
+      "process": {
+        "step_1": "逐行比对函数实际代码逻辑与文档内容",
+        "step_2": "识别文档不一致问题",
+        "issues_to_fix": [
+          "参数缺失",
+          "类型错误",
+          "描述不符",
+          "遗漏返回值",
+          "遗漏异常"
+        ],
+        "action": "必须修正文档以与代码一致"
+      }
+    }
+  },
+
+  "type_annotation_requirements": {
+    "standard": "使用标准Python类型",
+    "examples": [
+      "int", "str", "List[str]", "Optional[float]", "Dict[str, int]",
+      "bool", "Tuple[int, str]", "Set[str]", "Union[int, str]"
+    ],
+    "prohibited_terms": [
+      "数字", "字符串", "列表", "字典", "任何类型"
+    ],
+    "principle": "不得使用模糊表述，必须使用精确的类型标注"
+  },
+
+  "language_requirements": {
+    "primary_language": "中文",
+    "terminology_style": "中英文对照",
+    "examples": [
+      "列表（List）",
+      "字典（Dict）",
+      "集合（Set）",
+      "元组（Tuple）",
+      "可选类型（Optional）"
+    ]
+  },
+
+  "constraints": {
+    "code_modification": {
+      "allowed": false,
+      "description": "不修改函数代码本身"
+    },
+    "documentation_only": {
+      "allowed": true,
+      "description": "仅更新或补充文档字符串"
+    }
+  },
+
+  "implementation_steps": [
+    {
+      "step": 1,
+      "action": "函数扫描",
+      "description": "识别目标代码段中的所有函数"
+    },
+    {
+      "step": 2,
+      "action": "文档状态分析",
+      "description": "判断函数是否已有文档字符串"
+    },
+    {
+      "step": 3,
+      "action": "代码逻辑分析",
+      "description": "解析函数签名、参数类型、返回值和异常"
+    },
+    {
+      "step": 4,
+      "action": "文档生成或修订",
+      "description": "根据分析结果创建或更新文档字符串"
+    },
+    {
+      "step": 5,
+      "action": "格式验证",
+      "description": "确保文档字符串符合Google风格指南"
+    },
+    {
+      "step": 6,
+      "action": "一致性检查",
+      "description": "验证文档与代码实现的一致性"
+    }
+  ],
+
+  "documention_template": {
+    "basic_function": {
+      "template": "\"\"\"函数功能概述。\n\nArgs:\n    param1 (Type): 参数1描述。\n    param2 (Optional[Type]): 参数2描述，可选参数。\n\nReturns:\n    ReturnType: 返回值描述。\n\nRaises:\n    ExceptionType: 异常触发条件描述。\n\"\"\"",
+      "notes": "根据实际情况调整Returns和Raises部分"
+    },
+
+    "no_return_function": {
+      "template": "\"\"\"函数功能概述。\n\nArgs:\n    param1 (Type): 参数1描述。\n    param2 (Type): 参数2描述。\n\nRaises:\n    ExceptionType: 异常触发条件描述。\n\"\"\"",
+      "notes": "无返回值时省略Returns部分"
+    },
+
+    "simple_function": {
+      "template": "\"\"\"函数功能概述。\n\nArgs:\n    param1 (Type): 参数1描述。\n    \nReturns:\n    ReturnType: 返回值描述。\n\"\"\"",
+      "notes": "无异常时省略Raises部分"
+    }
+  },
+
+  "quality_checks": {
+    "completeness": "确保所有必需部分都已包含",
+    "accuracy": "验证文档与代码实现的准确性",
+    "formatting": "检查Google风格指南的格式符合性",
+    "language": "确认使用中文描述和中英文对照术语",
+    "type_precision": "验证类型标注的准确性和标准化"
+  },
+
+  "examples": {
+    "before_revision": {
+      "code": "def process_data(items, count=None):",
+      "docstring": "\"\"\"处理数据。\"\"\"",
+      "issues": [
+        "文档过于简单",
+        "缺少参数描述",
+        "缺少返回值说明",
+        "缺少异常处理说明"
+      ]
+    },
+
+    "after_revision": {
+      "code": "def process_data(items, count=None):",
+      "docstring": "\"\"\"处理数据列表（List）并返回处理结果。\n\nArgs:\n    items (List[Dict]): 待处理的数据项目列表。\n    count (Optional[int]): 处理项目数量限制，默认为None表示处理所有项目。\n\nReturns:\n    Dict[str, int]: 处理结果统计字典，包含成功和失败计数。\n\nRaises:\n    ValueError: 当items为空或count为负数时抛出。\n    TypeError: 当items不是列表类型时抛出。\n\"\"\"",
+      "improvements": [
+        "详细的功能描述",
+        "完整的参数类型和用途说明",
+        "明确的返回值类型和含义",
+        "详细的异常处理说明"
+      ]
+    }
+  }
+}

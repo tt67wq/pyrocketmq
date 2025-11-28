@@ -1,0 +1,194 @@
+{
+  "task_type": "type_annotation_optimization",
+  "title": "Python类型标注现代化和完整化",
+  "description": "对Python代码进行类型标注的现代化转换和完整化添加，符合Python 3.10+标准和PEP 484规范",
+  "version": "combined",
+
+  "operations": {
+    "type_modernization": {
+      "name": "类型标注现代化",
+      "description": "将旧式类型标注转换为Python 3.10+的新语法",
+      "rules": [
+        {
+          "pattern": "Optional[x]",
+          "replacement": "x | None",
+          "description": "可选类型转换为联合类型语法"
+        },
+        {
+          "pattern": "List[x, y]",
+          "replacement": "list[x, y]",
+          "description": "大写泛型类型转换为小写内置类型"
+        },
+        {
+          "pattern": "Dict[x, y]",
+          "replacement": "dict[x, y]",
+          "description": "字典类型现代化"
+        },
+        {
+          "pattern": "Set[x]",
+          "replacement": "set[x]",
+          "description": "集合类型现代化"
+        },
+        {
+          "pattern": "Tuple[x, y]",
+          "replacement": "tuple[x, y]",
+          "description": "元组类型现代化"
+        },
+        {
+          "pattern": "Union[x, y]",
+          "replacement": "x | y",
+          "description": "联合类型使用管道符语法"
+        },
+        {
+          "pattern": "any",
+          "replacement": "Any",
+          "description": "统一Any类型，确保从typing导入",
+          "additional_action": "确保从typing模块导入Any"
+        }
+      ]
+    },
+
+    "type_completeness": {
+      "name": "类型标注完整化",
+      "description": "为缺少类型标注的代码元素添加完整类型标注",
+      "scope": {
+        "class_constructors": {
+          "target": "__init__方法",
+          "requirements": [
+            "为所有参数添加类型标注",
+            "为所有类成员变量添加类型标注"
+          ],
+          "example": {
+            "before": "def __init__(self, a, b): self.a = a; self.b = b",
+            "after": "def __init__(self, a: str, b: int) -> None: self.a: str = a; self.b: int = b"
+          }
+        },
+
+        "functions": {
+          "target": "所有函数定义",
+          "requirements": [
+            "为每个参数明确标注类型",
+            "使用->语法明确返回值类型"
+          ],
+          "example": {
+            "before": "def some_func(a, b): pass",
+            "after": "def some_func(a: int, b: str | None) -> dict[str, str]: pass"
+          }
+        },
+
+        "variables": {
+          "target": "临时变量和局部变量",
+          "requirements": [
+            "为变量声明添加类型标注",
+            "使用现代泛型语法"
+          ],
+          "example": {
+            "before": "x = 10; y = 'hello'; z = [1, 2, 3]",
+            "after": "x: int = 10; y: str = 'hello'; z: list[int] = [1, 2, 3]"
+          }
+        }
+      }
+    }
+  },
+
+  "requirements": {
+    "technical_standards": {
+      "python_version": "Python 3.10+",
+      "compliance": "PEP 484标准",
+      "syntax": "确保语法正确、无歧义"
+    },
+
+    "scope_control": {
+      "modification_range": "限定在当前模块的所有类型标注中",
+      "file_processing": "对每个文件逐一检查，避免遗漏任何类型标注"
+    },
+
+    "quality_assurance": {
+      "validation": "运行模块的单元测试以验证类型标注修改未引入错误",
+      "completeness_check": "确保所有类型标注都已现代化和完整化"
+    }
+  },
+
+  "implementation_steps": [
+    {
+      "step": 1,
+      "action": "代码扫描",
+      "description": "扫描目标模块，识别所有需要处理的类型标注"
+    },
+    {
+      "step": 2,
+      "action": "现代化转换",
+      "description": "应用类型现代化规则，转换旧式类型标注"
+    },
+    {
+      "step": 3,
+      "action": "缺失标注补充",
+      "description": "为缺少类型标注的类、函数、变量添加完整标注"
+    },
+    {
+      "step": 4,
+      "action": "导入语句整理",
+      "description": "确保所需的typing模块正确导入，移除不再需要的导入"
+    },
+    {
+      "step": 5,
+      "action": "语法验证",
+      "description": "检查转换后的代码语法正确性"
+    },
+    {
+      "step": 6,
+      "action": "测试验证",
+      "description": "运行单元测试确保功能不受影响"
+    }
+  ],
+
+  "examples": {
+    "before_modernization": {
+      "imports": "from typing import List, Dict, Optional, Union, any",
+      "code": [
+        "class DataProcessor:",
+        "    def __init__(self, items, config=None):",
+        "        self.items = items",
+        "        self.config = config",
+        "",
+        "def process_data(data, options):",
+        "    if options is None:",
+        "        options = {}",
+        "    result = []",
+        "    return result"
+      ]
+    },
+
+    "after_modernization": {
+      "imports": "from typing import Any",
+      "code": [
+        "class DataProcessor:",
+        "    def __init__(self, items: list[dict[str, Any]], config: dict[str, Any] | None = None) -> None:",
+        "        self.items: list[dict[str, Any]] = items",
+        "        self.config: dict[str, Any] | None = config",
+        "",
+        "def process_data(data: list[dict[str, Any]], options: dict[str, str] | None = None) -> list[str]:",
+        "    if options is None:",
+        "        options: dict[str, str] = {}",
+        "    result: list[str] = []",
+        "    return result"
+      ]
+    }
+  },
+
+  "quality_checks": {
+    "syntax_validation": "确保所有类型标注语法正确",
+    "type_consistency": "检查类型标注的逻辑一致性",
+    "import_optimization": "优化导入语句，移除未使用的typing导入",
+    "backward_compatibility": "确保在Python 3.10+环境下正常运行",
+    "test_coverage": "验证所有测试用例仍然通过"
+  },
+
+  "edge_cases": {
+    "complex_generic_types": "处理复杂的泛型类型嵌套",
+    "circular_type_references": "处理循环类型引用问题",
+    "forward_references": "处理前向引用字符串类型",
+    "conditional_types": "处理条件类型标注",
+    "dynamic_typing": "谨慎处理动态类型场景"
+  }
+}
