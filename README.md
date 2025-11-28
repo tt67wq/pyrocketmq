@@ -1,5 +1,9 @@
 # pyrocketmq
 
+<div align="center">
+  <img src="logo.png" alt="pyrocketmq logo" width="200"/>
+</div>
+
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Development Status](https://img.shields.io/badge/Development-Production%20Ready-brightgreen.svg)](#)
