@@ -103,6 +103,7 @@ from .consume_from_where_manager import ConsumeFromWhereManager
 from .consumer_factory import (
     create_async_concurrent_consumer,
     create_async_consumer,  # 向后兼容
+    create_async_orderly_consumer,
     create_concurrent_consumer,
     create_consumer,
     create_orderly_consumer,
@@ -201,9 +202,9 @@ __all__ = [
     "create_concurrent_consumer",
     "create_async_concurrent_consumer",
     "create_async_consumer",  # 向后兼容
+    "create_async_orderly_consumer",
     "create_orderly_consumer",
     # 异步顺序消费者工厂函数
-    "create_async_orderly_consumer",
     "create_async_orderly_consumer_simple",
     "create_async_orderly_consumer_fast",
     "create_async_orderly_consumer_light",

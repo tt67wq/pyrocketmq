@@ -393,12 +393,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # 使用可重入锁保护重平衡操作
         if not self._rebalance_lock.locked():
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
-            self._stats["rebalance_skipped_count"] += 1
+            self._stats["rebalance_skipped_count"] = (
+                self._stats.get("rebalance_skipped_count", 0) + 1
+            )
             self.logger.debug(
                 "Rebalance already in progress, skipping",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "skipped_count": self._stats["rebalance_skipped_count"],
+                    "skipped_count": self._stats.get("rebalance_skipped_count", 0),
                 },
             )
             return False
@@ -526,7 +528,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "consumer_group": self._config.consumer_group,
                 "total_topics": total_topics,
                 "assigned_queues": total_queues,
-                "success_count": self._stats["rebalance_success_count"],
+                "success_count": self._stats.get("rebalance_success_count", 0),
             },
         )
 
@@ -645,7 +647,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             )
 
             # 更新统计信息
-            self._stats["rebalance_count"] += 1
+            self._stats["rebalance_count"] = self._stats.get("rebalance_count", 0) + 1
 
             # 收集所有可用队列并执行分配
             allocated_queues = await self._collect_and_allocate_queues()
@@ -669,7 +671,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 exc_info=True,
             )
             # 更新失败统计
-            self._stats["rebalance_failure_count"] += 1
+            self._stats["rebalance_failure_count"] = (
+                self._stats.get("rebalance_failure_count", 0) + 1
+            )
 
         finally:
             # 释放重平衡锁
@@ -678,7 +682,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "Rebalance lock released",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "rebalance_count": self._stats["rebalance_count"],
+                    "rebalance_count": self._stats.get("rebalance_count", 0),
                 },
             )
 
