@@ -391,7 +391,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         # 多个地方都会触发重平衡，加入一个放置重入机制，如果正在执行rebalance，再次触发无效
         # 使用可重入锁保护重平衡操作
-        if not self._rebalance_lock.locked():
+        if self._rebalance_lock.locked():
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
             self._stats["rebalance_skipped_count"] = (
                 self._stats.get("rebalance_skipped_count", 0) + 1
@@ -404,6 +404,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 },
             )
             return False
+
+        await self._rebalance_lock.acquire()
 
         # 检查是否有订阅的Topic
         topics: set[str] = self._subscription_manager.get_topics()
@@ -1231,12 +1233,12 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
             # 使用异步连接池拉取消息
             async with pool.get_connection() as conn:
-                result = await conn.async_pull_message(
+                result = await AsyncBrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
                     topic=message_queue.topic,
                     queue_id=message_queue.queue_id,
-                    offset=offset,
-                    max_nums=self._config.pull_batch_size,
+                    queue_offset=offset,
+                    max_msg_nums=self._config.pull_batch_size,
                     sys_flag=await self._build_sys_flag(
                         commit_offset=commit_offset > 0 and is_master
                     ),

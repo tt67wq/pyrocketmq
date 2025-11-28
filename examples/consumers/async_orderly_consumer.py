@@ -35,12 +35,12 @@ async def message_listener(messages: list[MessageExt]) -> ConsumeResult:
     # 模拟异步处理延迟
     await asyncio.sleep(0.01)
 
-    # 概率返回RECONSUME_LATER，模拟消费失败需要重试的场景
+    # 概率返回SUSPEND_CURRENT_QUEUE_A_MOMENT，模拟消费失败需要重试的场景
     if random.randint(1, 6) == 1:
         print(
-            f"{Colors.RED}{Colors.BOLD}⚠️  模拟消费失败，返回RECONSUME_LATER进行重试，消息数量: {len(messages)}{Colors.END}"
+            f"{Colors.RED}{Colors.BOLD}⚠️  模拟消费失败，返回SUSPEND_CURRENT_QUEUE_A_MOMENT进行重试，消息数量: {len(messages)}{Colors.END}"
         )
-        return ConsumeResult.RECONSUME_LATER
+        return ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
 
     for message in messages:
         print(
