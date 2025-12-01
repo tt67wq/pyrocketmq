@@ -142,19 +142,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         self._remote_lock_cache_lock = asyncio.Lock()  # 🔐保护远程锁缓存的并发访问
         self._remote_lock_expire_time: float = 30.0  # 远程锁有效期(秒)
 
-        # ==================== 统计和监控 ====================
-        # 顺序消费特有统计信息
-        self._stats.update(
-            {
-                "queue_lock_wait_count": 0,  # 队列锁等待次数
-                "queue_lock_wait_total_time": 0.0,  # 队列锁等待总时间(毫秒)
-                "orderly_consume_success_count": 0,  # 顺序消费成功次数
-                "orderly_consume_fail_count": 0,  # 顺序消费失败次数
-                "orderly_consume_rt_total": 0.0,  # 顺序消费响应时间总和(毫秒)
-                "orderly_consume_rt_count": 0,  # 顺序消费响应时间计数
-            }
-        )
-
         # ==================== 初始化完成日志 ====================
         self.logger.info(
             "AsyncOrderlyConsumer initialized",
@@ -214,7 +201,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 # 启动重平衡任务
                 await self._start_rebalance_task()
 
-                self._stats["start_time"] = time.time()
+                self._consumer_stats.start_time = time.time()
 
                 async with self._assigned_queues_lock:
                     assigned_queues_count = len(self._assigned_queues)
@@ -393,14 +380,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         # 使用可重入锁保护重平衡操作
         if self._rebalance_lock.locked():
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
-            self._stats["rebalance_skipped_count"] = (
-                self._stats.get("rebalance_skipped_count", 0) + 1
+            self._consumer_stats.rebalance_skipped_count = (
+                self._consumer_stats.rebalance_skipped_count + 1
             )
             self.logger.debug(
                 "Rebalance already in progress, skipping",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "skipped_count": self._stats.get("rebalance_skipped_count", 0),
+                    "skipped_count": self._consumer_stats.rebalance_skipped_count,
                 },
             )
             return False
@@ -520,8 +507,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         self._last_rebalance_time = time.time()
 
         # 更新成功统计
-        self._stats["rebalance_success_count"] = (
-            self._stats.get("rebalance_success_count", 0) + 1
+        self._consumer_stats.rebalance_success_count = (
+            self._consumer_stats.rebalance_success_count + 1
         )
 
         self.logger.info(
@@ -530,7 +517,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "consumer_group": self._config.consumer_group,
                 "total_topics": total_topics,
                 "assigned_queues": total_queues,
-                "success_count": self._stats.get("rebalance_success_count", 0),
+                "success_count": self._consumer_stats.rebalance_success_count,
             },
         )
 
@@ -649,7 +636,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             )
 
             # 更新统计信息
-            self._stats["rebalance_count"] = self._stats.get("rebalance_count", 0) + 1
+            self._consumer_stats.rebalance_count = (
+                self._consumer_stats.rebalance_count + 1
+            )
 
             # 收集所有可用队列并执行分配
             allocated_queues = await self._collect_and_allocate_queues()
@@ -673,8 +662,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 exc_info=True,
             )
             # 更新失败统计
-            self._stats["rebalance_failure_count"] = (
-                self._stats.get("rebalance_failure_count", 0) + 1
+            self._consumer_stats.rebalance_failure_count = (
+                self._consumer_stats.rebalance_failure_count + 1
             )
 
         finally:
@@ -684,7 +673,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 "Rebalance lock released",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "rebalance_count": self._stats.get("rebalance_count", 0),
+                    "rebalance_count": self._consumer_stats.rebalance_count,
                 },
             )
 
@@ -1209,7 +1198,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             ValueError: 当无法找到指定broker的地址时抛出
         """
         try:
-            self._stats["pull_requests"] = self._stats.get("pull_requests", 0) + 1
+            self._consumer_stats.pull_requests = self._consumer_stats.pull_requests + 1
 
             broker_info: (
                 tuple[str, bool] | None
@@ -1247,18 +1236,22 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 )
 
                 if result.messages:
-                    self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
+                    self._consumer_stats.pull_successes = (
+                        self._consumer_stats.pull_successes + 1
+                    )
                     return (
                         result.messages,
                         result.next_begin_offset,
                         result.suggest_which_broker_id or 0,
                     )
 
-                self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
+                self._consumer_stats.pull_successes = (
+                    self._consumer_stats.pull_successes + 1
+                )
                 return [], offset, 0
 
         except MessagePullError as e:
-            self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+            self._consumer_stats.pull_failures = self._consumer_stats.pull_failures + 1
             self.logger.warning(
                 "The pull request is illegal",
                 extra={
@@ -1272,7 +1265,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             raise e
 
         except Exception as e:
-            self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+            self._consumer_stats.pull_failures = self._consumer_stats.pull_failures + 1
             self.logger.warning(
                 "Failed to pull messages",
                 extra={
@@ -1870,20 +1863,20 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             message_count: 消息数量
         """
         # 更新总消费时长
-        self._stats["consume_duration_total"] = (
-            self._stats.get("consume_duration_total", 0.0) + duration
+        self._consumer_stats.consume_duration_total = (
+            self._consumer_stats.consume_duration_total + duration
         )
 
         # 更新失败消息数
         if not success:
-            self._stats["messages_failed"] = (
-                self._stats.get("messages_failed", 0) + message_count
+            self._consumer_stats.messages_failed = (
+                self._consumer_stats.messages_failed + message_count
             )
 
         # 更新成功消息数
         if success:
-            self._stats["messages_success"] = (
-                self._stats.get("messages_success", 0) + message_count
+            self._consumer_stats.messages_consumed = (
+                self._consumer_stats.messages_consumed + message_count
             )
 
     async def _pull_messages_loop(
@@ -1954,8 +1947,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     )
                 else:
                     # 没有拉取到消息，只更新请求统计
-                    self._stats["pull_requests"] = (
-                        self._stats.get("pull_requests", 0) + 1
+                    self._consumer_stats.pull_requests = (
+                        self._consumer_stats.pull_requests + 1
                     )
 
                 # 控制拉取频率 - 传入是否有消息的标志，使用可中断等待
@@ -1988,7 +1981,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                     exc_info=True,
                 )
 
-                self._stats["pull_fail"] = self._stats.get("pull_fail", 0) + 1
+                self._consumer_stats.pull_failures = (
+                    self._consumer_stats.pull_failures + 1
+                )
 
                 # 拉取失败时等待一段时间再重试，使用可中断等待
                 try:
@@ -2103,11 +2098,11 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
         # 更新统计信息
         message_count = len(messages)
-        self._stats["pull_success"] = self._stats.get("pull_success", 0) + 1
-        self._stats["messages_consumed"] = (
-            self._stats.get("messages_consumed", 0) + message_count
+        self._consumer_stats.pull_successes = self._consumer_stats.pull_successes + 1
+        self._consumer_stats.messages_consumed = (
+            self._consumer_stats.messages_consumed + message_count
         )
-        self._stats["pull_requests"] = self._stats.get("pull_requests", 0) + 1
+        self._consumer_stats.pull_requests = self._consumer_stats.pull_requests + 1
 
         self.logger.debug(
             f"Pulled {len(messages)} messages from queue: {message_queue}",
@@ -2606,13 +2601,11 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     async def _get_final_stats(self) -> dict[str, Any]:
         """异步获取最终统计信息"""
-        stats = {
-            "consumer_group": self._config.consumer_group,
-            "shutdown_time": time.time(),
-        }
+        # 使用统一的消费者统计信息
+        stats = self._consumer_stats.to_dict()
 
-        # 合并顺序消费统计信息
-        stats.update(self._stats)
+        # 添加关闭时间
+        stats["shutdown_time"] = time.time()
 
         # 添加队列相关信息
         async with self._assigned_queues_lock:

@@ -16,7 +16,6 @@ AsyncConcurrentConsumer是pyrocketmq的异步并发消费者实现，支持高�
 
 import asyncio
 import time
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -59,44 +58,6 @@ ProcessQueueItem = tuple[list[MessageExt], MessageQueue]
 PullTaskDict = dict[MessageQueue, asyncio.Task[None]]
 MessageQueueDict = dict[MessageQueue, int]
 ProcessQueueDict = dict[MessageQueue, ProcessQueue]
-
-
-@dataclass
-class ConsumerStats:
-    """消费者统计信息数据类"""
-
-    # 拉取相关统计
-    pull_count: int = field(default=0)
-    pull_failures: int = field(default=0)
-    pull_successes: int = field(default=0)
-    pull_requests: int = field(default=0)
-
-    # 重平衡相关统计
-    rebalance_failure_count: int = field(default=0)
-    rebalance_count: int = field(default=0)
-    rebalance_success_count: int = field(default=0)
-    rebalance_skipped_count: int = field(default=0)
-
-    # 消费相关统计
-    messages_consumed: int = field(default=0)
-    consume_duration_total: float = field(default=0.0)
-    messages_failed: int = field(default=0)
-
-    def to_dict(self) -> dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            "pull_count": self.pull_count,
-            "pull_failures": self.pull_failures,
-            "pull_successes": self.pull_successes,
-            "pull_requests": self.pull_requests,
-            "rebalance_failure_count": self.rebalance_failure_count,
-            "rebalance_count": self.rebalance_count,
-            "rebalance_success_count": self.rebalance_success_count,
-            "rebalance_skipped_count": self.rebalance_skipped_count,
-            "messages_consumed": self.messages_consumed,
-            "consume_duration_total": self.consume_duration_total,
-            "messages_failed": self.messages_failed,
-        }
 
 
 class AsyncConcurrentConsumer(AsyncBaseConsumer):
@@ -170,9 +131,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         self._stats_lock = asyncio.Lock()
         self._rebalance_lock = asyncio.Lock()
 
-        # ==================== 统计信息 ====================
-        self._consumer_stats = ConsumerStats()
-
         # ==================== 事件同步 ====================
         self._rebalance_event = asyncio.Event()
 
@@ -240,7 +198,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 启动消息处理任务
                 await self._start_consume_tasks()
 
-                self._stats["start_time"] = time.time()
+                self._consumer_stats.start_time = time.time()
 
                 # 获取分配队列数量用于日志统计
                 async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
@@ -951,7 +909,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         async with self._stats_lock:
             self._consumer_stats.rebalance_count += 1
             self._consumer_stats.rebalance_success_count += 1
-            self._stats["last_rebalance_time"] = time.time()  # 保留原有的统计项
+            self._consumer_stats.last_rebalance_time = time.time()  # 保留原有的统计项
 
         logger.info(
             "Rebalance completed",
@@ -1539,9 +1497,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     async def _get_final_stats(self) -> dict[str, Any]:
         """获取最终统计信息"""
         async with self._stats_lock:
-            stats = self._stats.copy()
-            # 合并新的消费者统计信息
-            stats.update(self._consumer_stats.to_dict())
+            stats = self._consumer_stats.to_dict()
 
         if stats["start_time"] > 0:
             stats["running_time"] = time.time() - stats["start_time"]
@@ -1552,11 +1508,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     async def get_stats(self) -> dict[str, Any]:
         """获取消费者统计信息"""
-        # 获取基础统计信息
+        # 获取消费者统计信息
         async with self._stats_lock:
-            stats = self._stats.copy()
-            # 合并新的消费者统计信息
-            stats.update(self._consumer_stats.to_dict())
+            stats = self._consumer_stats.to_dict()
 
         if stats["start_time"] > 0:
             stats["running_time"] = time.time() - stats["start_time"]

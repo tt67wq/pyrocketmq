@@ -12,6 +12,7 @@ AsyncBaseConsumer是pyrocketmq消费者模块的异步抽象基类，定义了�
 
 import asyncio
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 # pyrocketmq导入
@@ -232,6 +233,79 @@ class AsyncBaseConsumer:
         self._route_refresh_event: asyncio.Event = asyncio.Event()
         self._heartbeat_event: asyncio.Event = asyncio.Event()
 
+    # ==================== 3. 路由映射和统计信息初始化模块 ====================
+    #
+    # 该模块负责初始化路由映射和统计信息收集系统，包括：
+    # - 消费者统计信息数据类的定义
+    # - 主题与Broker的映射关系管理
+    # - 消费者运行时统计信息的初始化
+    # - 性能指标的跟踪和收集
+
+    @dataclass
+    class ConsumerStats:
+        """消费者统计信息数据类"""
+
+        # 拉取相关统计
+        pull_count: int = field(default=0)
+        pull_failures: int = field(default=0)
+        pull_successes: int = field(default=0)
+        pull_requests: int = field(default=0)
+
+        # 重平衡相关统计
+        rebalance_failure_count: int = field(default=0)
+        rebalance_count: int = field(default=0)
+        rebalance_success_count: int = field(default=0)
+        rebalance_skipped_count: int = field(default=0)
+
+        # 消费相关统计
+        messages_consumed: int = field(default=0)
+        consume_duration_total: float = field(default=0.0)
+        messages_failed: int = field(default=0)
+
+        # 路由刷新相关统计
+        route_refresh_count: int = field(default=0)
+        route_refresh_success_count: int = field(default=0)
+        route_refresh_failure_count: int = field(default=0)
+        last_route_refresh_time: float = field(default=0.0)
+
+        # 心跳相关统计
+        heartbeat_count: int = field(default=0)
+        heartbeat_success_count: int = field(default=0)
+        heartbeat_failure_count: int = field(default=0)
+        last_heartbeat_time: float = field(default=0.0)
+
+        # 时间统计
+        start_time: float = field(default=0.0)
+        shutdown_time: float = field(default=0.0)
+        last_rebalance_time: float = field(default=0.0)
+
+        def to_dict(self) -> dict[str, Any]:
+            """转换为字典格式"""
+            return {
+                "pull_count": self.pull_count,
+                "pull_failures": self.pull_failures,
+                "pull_successes": self.pull_successes,
+                "pull_requests": self.pull_requests,
+                "rebalance_failure_count": self.rebalance_failure_count,
+                "rebalance_count": self.rebalance_count,
+                "rebalance_success_count": self.rebalance_success_count,
+                "rebalance_skipped_count": self.rebalance_skipped_count,
+                "messages_consumed": self.messages_consumed,
+                "consume_duration_total": self.consume_duration_total,
+                "messages_failed": self.messages_failed,
+                "route_refresh_count": self.route_refresh_count,
+                "route_refresh_success_count": self.route_refresh_success_count,
+                "route_refresh_failure_count": self.route_refresh_failure_count,
+                "last_route_refresh_time": self.last_route_refresh_time,
+                "heartbeat_count": self.heartbeat_count,
+                "heartbeat_success_count": self.heartbeat_success_count,
+                "heartbeat_failure_count": self.heartbeat_failure_count,
+                "last_heartbeat_time": self.last_heartbeat_time,
+                "start_time": self.start_time,
+                "shutdown_time": self.shutdown_time,
+                "last_rebalance_time": self.last_rebalance_time,
+            }
+
     def _initialize_routing_and_stats(self) -> None:
         """初始化路由映射和统计信息"""
         # 路由映射
@@ -239,22 +313,8 @@ class AsyncBaseConsumer:
             ConsumerTopicBrokerMapping()
         )
 
-        # 统计信息
-        self._stats: dict[str, Any] = {
-            "start_time": 0,
-            "route_refresh_count": 0,
-            "route_refresh_success_count": 0,
-            "route_refresh_failure_count": 0,
-            "heartbeat_count": 0,
-            "heartbeat_success_count": 0,
-            "heartbeat_failure_count": 0,
-            "last_route_refresh_time": 0,
-            "last_heartbeat_time": 0,
-        }
-
-        # 消费者状态
-        self._start_time: float = 0
-        self._shutdown_time: float = 0
+        # 统一维护消费者统计信息
+        self._consumer_stats = self.ConsumerStats()
 
     async def start(self) -> None:
         """
@@ -302,7 +362,7 @@ class AsyncBaseConsumer:
             await self._start_heartbeat_task()
 
             # 更新状态
-            self._start_time = time.time()
+            self._consumer_stats.start_time = time.time()
             self._is_running = True
 
             self._logger.info("异步消费者基础组件启动完成")
@@ -334,7 +394,7 @@ class AsyncBaseConsumer:
 
             # 更新状态
             self._is_running = False
-            self._shutdown_time = time.time()
+            self._consumer_stats.shutdown_time = time.time()
 
             # 通知后台任务退出
             self._route_refresh_event.set()
@@ -1114,15 +1174,15 @@ class AsyncBaseConsumer:
                 self._topic_broker_mapping.clear_expired_routes()
 
                 # 更新统计信息
-                self._stats["route_refresh_count"] += 1
-                self._stats["route_refresh_success_count"] += 1
-                self._stats["last_route_refresh_time"] = time.time()
+                self._consumer_stats.route_refresh_count += 1
+                self._consumer_stats.route_refresh_success_count += 1
+                self._consumer_stats.last_route_refresh_time = time.time()
 
                 self._logger.debug(
                     "Async route refresh completed",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "refresh_count": self._stats["route_refresh_count"],
+                        "refresh_count": self._consumer_stats.route_refresh_count,
                         "topics_count": (
                             len(self._topic_broker_mapping.get_all_topics())
                         ),
@@ -1130,14 +1190,14 @@ class AsyncBaseConsumer:
                 )
 
             except Exception as e:
-                self._stats["route_refresh_failure_count"] += 1
+                self._consumer_stats.route_refresh_failure_count += 1
                 self._logger.warning(
                     f"Error in async route refresh loop: {e}",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "error": str(e),
-                        "refresh_count": self._stats["route_refresh_count"],
-                        "failure_count": self._stats["route_refresh_failure_count"],
+                        "refresh_count": self._consumer_stats.route_refresh_count,
+                        "failure_count": self._consumer_stats.route_refresh_failure_count,
                     },
                     exc_info=True,
                 )
@@ -1154,9 +1214,9 @@ class AsyncBaseConsumer:
             "Async route refresh loop stopped",
             extra={
                 "consumer_group": self._config.consumer_group,
-                "total_refreshes": self._stats["route_refresh_count"],
-                "success_count": self._stats["route_refresh_success_count"],
-                "failure_count": self._stats["route_refresh_failure_count"],
+                "total_refreshes": self._consumer_stats.route_refresh_count,
+                "success_count": self._consumer_stats.route_refresh_success_count,
+                "failure_count": self._consumer_stats.route_refresh_failure_count,
             },
         )
 
@@ -1478,16 +1538,16 @@ class AsyncBaseConsumer:
         self, success_count: int, failure_count: int, total_count: int
     ) -> None:
         """更新心跳统计信息"""
-        self._stats["heartbeat_count"] += 1
-        self._stats["heartbeat_success_count"] += success_count
-        self._stats["heartbeat_failure_count"] += failure_count
-        self._stats["last_heartbeat_time"] = time.time()
+        self._consumer_stats.heartbeat_count += 1
+        self._consumer_stats.heartbeat_success_count += success_count
+        self._consumer_stats.heartbeat_failure_count += failure_count
+        self._consumer_stats.last_heartbeat_time = time.time()
 
         self._logger.debug(
             "Heartbeat statistics updated",
             extra={
                 "consumer_group": self._config.consumer_group,
-                "total_heartbeats": self._stats["heartbeat_count"],
+                "total_heartbeats": self._consumer_stats.heartbeat_count,
                 "success_count": success_count,
                 "failure_count": failure_count,
                 "total_brokers": total_count,
@@ -1566,7 +1626,9 @@ class AsyncBaseConsumer:
             包含消费者状态信息的字典
         """
         subscriptions: dict[str, Any] = self._subscription_manager.get_status_summary()
-        uptime: float = time.time() - self._start_time if self._is_running else 0
+        uptime: float = (
+            time.time() - self._consumer_stats.start_time if self._is_running else 0
+        )
 
         return {
             "consumer_group": self._config.consumer_group,
@@ -1574,14 +1636,23 @@ class AsyncBaseConsumer:
             "message_model": self._config.message_model,
             "client_id": self._config.client_id,
             "is_running": self._is_running,
-            "start_time": self._start_time,
-            "shutdown_time": self._shutdown_time,
+            "start_time": self._consumer_stats.start_time,
+            "shutdown_time": self._consumer_stats.shutdown_time,
             "uptime": uptime,
             "subscriptions": subscriptions,
             "has_message_listener": len(self._message_listeners) > 0,
             "listener_count": len(self._message_listeners),
             "topics_with_listeners": list(self._message_listeners.keys()),
         }
+
+    async def get_consumer_stats(self) -> ConsumerStats:
+        """
+        异步获取消费者统计信息
+
+        Returns:
+            ConsumerStats实例的副本
+        """
+        return self._consumer_stats
 
     # ==================== 7. 资源清理和工具模块 ====================
     #
