@@ -16,6 +16,7 @@ BaseConsumer是pyrocketmq消费者模块的核心抽象基类，定义了所有�
 # 标准库导入
 import threading
 import time
+from collections import deque
 from typing import Any
 
 # pyrocketmq导入
@@ -197,6 +198,14 @@ class BaseConsumer:
             "rebalance_failure_count": 0,  # 重平衡失败次数
             "rebalance_skipped_count": 0,  # 跳过重平衡次数统计
         }
+
+        # 滑动窗口统计 - 用于计算实时PullTPS
+        self._pull_time_window: deque[float] = deque(
+            maxlen=10000
+        )  # 保存最近10000次拉取的时间戳
+        self._pull_success_window: deque[float] = deque(
+            maxlen=10000
+        )  # 保存最近10000次成功拉取的时间戳
 
         logger.info(
             "Initializing BaseConsumer",
@@ -1863,8 +1872,113 @@ class BaseConsumer:
     # ==============================================================================
     # 9. 状态查询和监控模块
     # 功能：提供消费者状态查询和监控功能
-    # 包含函数：get_status_summary
+    # 包含函数：get_status_summary, record_pull_operation, record_pull_success,
+    #           record_pull_failure, calculate_realtime_pull_tps
     # ==============================================================================
+
+    def record_pull_operation(self) -> None:
+        """
+        记录拉取操作
+
+        在滑动窗口中记录一次拉取操作的时间戳，用于计算实时的PullTPS。
+        这个方法应该在实际执行拉取操作之前调用。
+        """
+        current_time = time.time()
+        self._pull_time_window.append(current_time)
+        self._stats["pull_requests"] += 1
+
+    def record_pull_success(self) -> None:
+        """
+        记录拉取成功
+
+        记录一次成功的拉取操作，更新相关统计信息。
+        这个方法应该在拉取操作成功完成之后调用。
+        """
+        current_time = time.time()
+        self._pull_success_window.append(current_time)
+        self._stats["pull_successes"] += 1
+
+    def record_pull_failure(self) -> None:
+        """
+        记录拉取失败
+
+        记录一次失败的拉取操作，更新相关统计信息。
+        这个方法应该在拉取操作失败之后调用。
+        """
+        self._stats["pull_failures"] += 1
+
+    def calculate_realtime_pull_tps(self, window_seconds: int = 10) -> float:
+        """
+        计算基于滑动窗口的实时PullTPS
+
+        使用滑动窗口算法计算指定时间窗口内的拉取吞吐量(每秒事务数)。
+        这种方法比基于平均值的计算更准确，能够反映近期的性能状况。
+
+        Args:
+            window_seconds: 时间窗口大小（秒），默认为10秒
+
+        Returns:
+            float: 指定时间窗口内的PullTPS。如果没有拉取操作，返回0.0
+
+        Example:
+            >>> tps = consumer.calculate_realtime_pull_tps(5)  # 计算5秒内的TPS
+            >>> print(f"当前PullTPS: {tps:.2f}")
+        """
+        if not self._pull_success_window:
+            return 0.0
+
+        current_time = time.time()
+        window_start = current_time - window_seconds
+
+        # 统计窗口内的成功拉取次数
+        successful_pulls = sum(
+            1 for timestamp in self._pull_success_window if timestamp >= window_start
+        )
+
+        # 计算TPS
+        pull_tps = successful_pulls / window_seconds
+
+        return pull_tps
+
+    def get_pull_statistics(self) -> dict[str, Any]:
+        """
+        获取拉取相关统计信息
+
+        Returns:
+            dict: 包含拉取统计信息的字典，包括：
+                - total_pull_requests: 总拉取请求数
+                - successful_pulls: 成功拉取次数
+                - failed_pulls: 失败拉取次数
+                - success_rate: 拉取成功率
+                - realtime_pull_tps_10s: 10秒窗口的实时PullTPS
+                - realtime_pull_tps_60s: 60秒窗口的实时PullTPS
+                - average_pull_tps: 平均PullTPS（基于启动时间）
+        """
+        total_requests = self._stats.get("pull_requests", 0)
+        successful_pulls = self._stats.get("pull_successes", 0)
+        failed_pulls = self._stats.get("pull_failures", 0)
+
+        # 计算成功率
+        success_rate = (
+            (successful_pulls / total_requests * 100) if total_requests > 0 else 0.0
+        )
+
+        # 计算平均TPS（基于启动时间）
+        start_time = self._stats.get("start_time", time.time())
+        runtime_seconds = time.time() - start_time
+        average_pull_tps = (
+            successful_pulls / runtime_seconds if runtime_seconds > 0 else 0.0
+        )
+
+        return {
+            "total_pull_requests": total_requests,
+            "successful_pulls": successful_pulls,
+            "failed_pulls": failed_pulls,
+            "success_rate": round(success_rate, 2),
+            "realtime_pull_tps_10s": round(self.calculate_realtime_pull_tps(10), 2),
+            "realtime_pull_tps_60s": round(self.calculate_realtime_pull_tps(60), 2),
+            "average_pull_tps": round(average_pull_tps, 2),
+        }
 
     def get_status_summary(self) -> dict[str, Any]:
         """
@@ -1884,6 +1998,7 @@ class BaseConsumer:
                 - has_default_listener: 是否有默认监听器
                 - default_listener_type: 默认监听器类型
                 - subscription_status: 订阅状态信息
+                - pull_statistics: 拉取统计信息
         """
         subscription_status: dict[str, Any] = (
             self._subscription_manager.get_status_summary()
@@ -1910,6 +2025,7 @@ class BaseConsumer:
             if getattr(self, "_message_listener", None)
             else None,
             "subscription_status": subscription_status,
+            "pull_statistics": self.get_pull_statistics(),
         }
 
     # ==============================================================================

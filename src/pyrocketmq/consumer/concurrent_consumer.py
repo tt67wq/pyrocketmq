@@ -446,7 +446,7 @@ class ConcurrentConsumer(BaseConsumer):
 
         return allocated_queues
 
-    def _finalize_rebalance(self, total_topics: int, total_queues: int) -> None:
+    def _finalize_rebalance(self, total_topics: int, _total_queues: int) -> None:
         """完成重平衡后处理。
 
         更新重平衡时间戳、统计信息，并记录完成日志。
@@ -734,7 +734,7 @@ class ConcurrentConsumer(BaseConsumer):
                 )
 
     def _on_notify_consumer_ids_changed(
-        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+        self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
     ) -> None:
         logger.info("Received notification of consumer IDs changed")
         self._do_rebalance()
