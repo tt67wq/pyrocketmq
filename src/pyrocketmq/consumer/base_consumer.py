@@ -197,6 +197,12 @@ class BaseConsumer:
             "rebalance_success_count": 0,  # 重平衡成功次数
             "rebalance_failure_count": 0,  # 重平衡失败次数
             "rebalance_skipped_count": 0,  # 跳过重平衡次数统计
+            # 消费性能统计字段
+            "consume_operations": 0,  # 消费操作总数
+            "consume_success_count": 0,  # 消费成功次数
+            "consume_failure_count": 0,  # 消费失败次数
+            "consume_rt_total": 0.0,  # 消费响应时间总计
+            "consume_failed_msgs": 0,  # 消费失败消息总数
         }
 
         # 滑动窗口统计 - 用于计算实时PullTPS
@@ -206,6 +212,17 @@ class BaseConsumer:
         self._pull_success_window: deque[float] = deque(
             maxlen=10000
         )  # 保存最近10000次成功拉取的时间戳
+
+        # 消费滑动窗口统计 - 用于计算实时ConsumeTPS
+        self._consume_time_window: deque[float] = deque(
+            maxlen=10000
+        )  # 保存最近10000次消费操作的时间戳
+        self._consume_success_window: deque[float] = deque(
+            maxlen=10000
+        )  # 保存最近10000次成功消费的时间戳
+        self._consume_failure_window: deque[float] = deque(
+            maxlen=10000
+        )  # 保存最近10000次失败消费的时间戳
 
         logger.info(
             "Initializing BaseConsumer",
@@ -631,6 +648,9 @@ class BaseConsumer:
         topic = messages[0].topic if messages else message_queue.topic
 
         try:
+            # 记录消费操作开始
+            self.record_consume_operation(len(messages))
+
             logger.debug(
                 "Processing messages",
                 extra={
@@ -669,6 +689,14 @@ class BaseConsumer:
                     queue_id=context.queue_id,
                 )
 
+            consume_duration = context.get_consume_duration()
+
+            # 记录消费统计
+            if result == ConsumeResult.SUCCESS:
+                self.record_consume_success(len(messages), consume_duration)
+            else:
+                self.record_consume_failure(len(messages), consume_duration)
+
             logger.info(
                 "Message processing completed",
                 extra={
@@ -677,7 +705,7 @@ class BaseConsumer:
                     "message_count": len(messages),
                     "queue_id": context.queue_id,
                     "result": result.value,
-                    "duration": context.get_consume_duration(),
+                    "duration": consume_duration,
                 },
             )
 
@@ -687,6 +715,10 @@ class BaseConsumer:
             raise
 
         except Exception as e:
+            # 记录消费失败统计
+            consume_duration = context.get_consume_duration() if context else 0.0
+            self.record_consume_failure(len(messages), consume_duration)
+
             logger.error(
                 f"Failed to process messages: {e}",
                 extra={
@@ -783,6 +815,9 @@ class BaseConsumer:
         topic = messages[0].topic if messages else message_queue.topic
 
         try:
+            # 记录消费操作开始
+            self.record_consume_operation(len(messages))
+
             logger.debug(
                 "Processing messages orderly",
                 extra={
@@ -824,12 +859,24 @@ class BaseConsumer:
                 ConsumeResult.SUCCESS,
                 ConsumeResult.COMMIT,
             ]
+
+            # 记录消费统计
+            consume_duration = context.get_consume_duration() if context else 0.0
+            if success:
+                self.record_consume_success(len(messages), consume_duration)
+            else:
+                self.record_consume_failure(len(messages), consume_duration)
+
             return success, result
 
         except InvalidConsumeResultError:
             raise
 
         except Exception as e:
+            # 记录消费失败统计
+            consume_duration = context.get_consume_duration() if context else 0.0
+            self.record_consume_failure(len(messages), consume_duration)
+
             logger.error(
                 f"Failed to process messages orderly: {e}",
                 extra={
@@ -1907,6 +1954,61 @@ class BaseConsumer:
         """
         self._stats["pull_failures"] += 1
 
+    def record_consume_operation(self, message_count: int = 1) -> None:
+        """
+        记录消费操作
+
+        在滑动窗口中记录一次消费操作的时间戳，用于计算实时的ConsumeTPS。
+        这个方法应该在实际执行消费处理之前调用。
+
+        Args:
+            message_count: 消费的消息数量，默认为1
+        """
+        current_time = time.time()
+        self._consume_time_window.extend([current_time] * message_count)
+        self._stats["consume_operations"] += message_count
+
+    def record_consume_success(
+        self, message_count: int = 1, consume_time_ms: float = 0.0
+    ) -> None:
+        """
+        记录消费成功
+
+        记录一次成功的消费操作，更新相关统计信息。
+        这个方法应该在消费处理成功完成之后调用。
+
+        Args:
+            message_count: 成功消费的消息数量，默认为1
+            consume_time_ms: 消费耗时（毫秒），默认为0.0
+        """
+        current_time = time.time()
+        self._consume_success_window.extend([current_time] * message_count)
+        self._stats["consume_success_count"] += message_count
+        self._stats["messages_consumed"] += message_count
+        self._stats["consume_rt_total"] += consume_time_ms
+        self._stats["consume_duration_total"] += consume_time_ms
+
+    def record_consume_failure(
+        self, message_count: int = 1, consume_time_ms: float = 0.0
+    ) -> None:
+        """
+        记录消费失败
+
+        记录一次失败的消费操作，更新相关统计信息。
+        这个方法应该在消费处理失败之后调用。
+
+        Args:
+            message_count: 失败消费的消息数量，默认为1
+            consume_time_ms: 消费耗时（毫秒），默认为0.0
+        """
+        current_time = time.time()
+        self._consume_failure_window.extend([current_time] * message_count)
+        self._stats["consume_failure_count"] += message_count
+        self._stats["messages_failed"] += message_count
+        self._stats["consume_failed_msgs"] += message_count
+        self._stats["consume_rt_total"] += consume_time_ms
+        self._stats["consume_duration_total"] += consume_time_ms
+
     def calculate_realtime_pull_tps(self, window_seconds: int = 10) -> float:
         """
         计算基于滑动窗口的实时PullTPS
@@ -1940,27 +2042,87 @@ class BaseConsumer:
 
         return pull_tps
 
-    def get_pull_statistics(self) -> dict[str, Any]:
+    def calculate_realtime_consume_tps(
+        self, window_seconds: int = 10
+    ) -> dict[str, float]:
         """
-        获取拉取相关统计信息
+        计算基于滑动窗口的实时消费TPS
+
+        使用滑动窗口算法计算指定时间窗口内的消费吞吐量(每秒事务数)。
+        返回成功和失败的消费TPS。
+
+        Args:
+            window_seconds: 时间窗口大小（秒），默认为10秒
 
         Returns:
-            dict: 包含拉取统计信息的字典，包括：
-                - total_pull_requests: 总拉取请求数
-                - successful_pulls: 成功拉取次数
-                - failed_pulls: 失败拉取次数
-                - success_rate: 拉取成功率
-                - realtime_pull_tps_10s: 10秒窗口的实时PullTPS
-                - realtime_pull_tps_60s: 60秒窗口的实时PullTPS
-                - average_pull_tps: 平均PullTPS（基于启动时间）
+            dict: 包含消费TPS信息的字典，包括：
+                - consume_ok_tps: 消费成功TPS
+                - consume_failed_tps: 消费失败TPS
+                - total_consume_tps: 总消费TPS
         """
-        total_requests = self._stats.get("pull_requests", 0)
+        current_time = time.time()
+        window_start = current_time - window_seconds
+
+        # 统计窗口内的成功和失败消费次数
+        successful_consumes = sum(
+            1 for timestamp in self._consume_success_window if timestamp >= window_start
+        )
+        failed_consumes = sum(
+            1 for timestamp in self._consume_failure_window if timestamp >= window_start
+        )
+
+        # 计算TPS
+        consume_ok_tps = successful_consumes / window_seconds
+        consume_failed_tps = failed_consumes / window_seconds
+        total_consume_tps = consume_ok_tps + consume_failed_tps
+
+        return {
+            "consume_ok_tps": consume_ok_tps,
+            "consume_failed_tps": consume_failed_tps,
+            "total_consume_tps": total_consume_tps,
+        }
+
+    def get_consumer_statistics(self) -> dict[str, Any]:
+        """
+        获取消费者相关统计信息
+
+        Returns:
+            dict: 包含消费者统计信息的字典，包括：
+                - 拉取相关统计: total_pull_requests, successful_pulls, failed_pulls等
+                - 消费相关统计: consume_operations, consume_success_count等
+                - 性能指标: 各种TPS和响应时间
+        """
+        # 拉取相关统计
+        total_pull_requests = self._stats.get("pull_requests", 0)
         successful_pulls = self._stats.get("pull_successes", 0)
         failed_pulls = self._stats.get("pull_failures", 0)
 
-        # 计算成功率
-        success_rate = (
-            (successful_pulls / total_requests * 100) if total_requests > 0 else 0.0
+        # 计算拉取成功率
+        pull_success_rate = (
+            (successful_pulls / total_pull_requests * 100)
+            if total_pull_requests > 0
+            else 0.0
+        )
+
+        # 消费相关统计
+        consume_operations = self._stats.get("consume_operations", 0)
+        consume_success_count = self._stats.get("consume_success_count", 0)
+        consume_failure_count = self._stats.get("consume_failure_count", 0)
+        consume_failed_msgs = self._stats.get("consume_failed_msgs", 0)
+
+        # 计算消费成功率
+        consume_success_rate = (
+            (consume_success_count / consume_operations * 100)
+            if consume_operations > 0
+            else 0.0
+        )
+
+        # 计算平均消费响应时间
+        total_consume_operations = consume_success_count + consume_failure_count
+        avg_consume_rt = (
+            self._stats.get("consume_rt_total", 0.0) / total_consume_operations
+            if total_consume_operations > 0
+            else 0.0
         )
 
         # 计算平均TPS（基于启动时间）
@@ -1969,15 +2131,61 @@ class BaseConsumer:
         average_pull_tps = (
             successful_pulls / runtime_seconds if runtime_seconds > 0 else 0.0
         )
+        average_consume_tps = (
+            consume_success_count / runtime_seconds if runtime_seconds > 0 else 0.0
+        )
+
+        # 获取实时TPS
+        pull_tps_10s = round(self.calculate_realtime_pull_tps(10), 2)
+        pull_tps_60s = round(self.calculate_realtime_pull_tps(60), 2)
+        consume_tps_10s = self.calculate_realtime_consume_tps(10)
+        consume_tps_60s = self.calculate_realtime_consume_tps(60)
 
         return {
-            "total_pull_requests": total_requests,
-            "successful_pulls": successful_pulls,
-            "failed_pulls": failed_pulls,
-            "success_rate": round(success_rate, 2),
-            "realtime_pull_tps_10s": round(self.calculate_realtime_pull_tps(10), 2),
-            "realtime_pull_tps_60s": round(self.calculate_realtime_pull_tps(60), 2),
-            "average_pull_tps": round(average_pull_tps, 2),
+            # 拉取统计
+            "pull_statistics": {
+                "total_pull_requests": total_pull_requests,
+                "successful_pulls": successful_pulls,
+                "failed_pulls": failed_pulls,
+                "success_rate": round(pull_success_rate, 2),
+                "realtime_pull_tps_10s": pull_tps_10s,
+                "realtime_pull_tps_60s": pull_tps_60s,
+                "average_pull_tps": round(average_pull_tps, 2),
+            },
+            # 消费统计
+            "consume_statistics": {
+                "total_consume_operations": consume_operations,
+                "consume_success_count": consume_success_count,
+                "consume_failure_count": consume_failure_count,
+                "consume_failed_msgs": consume_failed_msgs,
+                "success_rate": round(consume_success_rate, 2),
+                "average_consume_rt": round(avg_consume_rt, 2),
+                "realtime_consume_ok_tps_10s": round(
+                    consume_tps_10s["consume_ok_tps"], 2
+                ),
+                "realtime_consume_failed_tps_10s": round(
+                    consume_tps_10s["consume_failed_tps"], 2
+                ),
+                "realtime_total_consume_tps_10s": round(
+                    consume_tps_10s["total_consume_tps"], 2
+                ),
+                "realtime_consume_ok_tps_60s": round(
+                    consume_tps_60s["consume_ok_tps"], 2
+                ),
+                "realtime_consume_failed_tps_60s": round(
+                    consume_tps_60s["consume_failed_tps"], 2
+                ),
+                "realtime_total_consume_tps_60s": round(
+                    consume_tps_60s["total_consume_tps"], 2
+                ),
+                "average_consume_tps": round(average_consume_tps, 2),
+            },
+            # 综合性能指标
+            "performance_metrics": {
+                "runtime_seconds": round(runtime_seconds, 2),
+                "messages_processed_total": self._stats.get("messages_consumed", 0),
+                "messages_failed_total": self._stats.get("messages_failed", 0),
+            },
         }
 
     def get_status_summary(self) -> dict[str, Any]:
@@ -1998,7 +2206,7 @@ class BaseConsumer:
                 - has_default_listener: 是否有默认监听器
                 - default_listener_type: 默认监听器类型
                 - subscription_status: 订阅状态信息
-                - pull_statistics: 拉取统计信息
+                - consumer_statistics: 消费者统计信息（包含拉取和消费统计）
         """
         subscription_status: dict[str, Any] = (
             self._subscription_manager.get_status_summary()
@@ -2025,7 +2233,7 @@ class BaseConsumer:
             if getattr(self, "_message_listener", None)
             else None,
             "subscription_status": subscription_status,
-            "pull_statistics": self.get_pull_statistics(),
+            "consumer_statistics": self.get_consumer_statistics(),
         }
 
     # ==============================================================================
