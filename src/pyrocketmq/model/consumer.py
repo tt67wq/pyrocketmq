@@ -235,3 +235,165 @@ class ConsumeMessageDirectlyResult:
             remark=remark,
             spent_time_mills=spent_time_mills,
         )
+
+
+@dataclass
+class ConsumeStatus:
+    """消费状态统计
+
+    用于统计Consumer在一段时间内的消费性能指标，包括拉取性能、消费性能、
+    成功失败统计等关键指标。这些数据可用于监控消费健康状况和性能调优。
+
+    Args:
+        pull_rt: 拉取响应时间(毫秒)
+        pull_tps: 拉取吞吐量(每秒事务数)
+        consume_rt: 消费响应时间(毫秒)
+        consume_ok_tps: 消费成功吞吐量(每秒事务数)
+        consume_failed_tps: 消费失败吞吐量(每秒事务数)
+        consume_failed_msgs: 消费失败消息数
+    """
+
+    pull_rt: float = 0.0
+    pull_tps: float = 0.0
+    consume_rt: float = 0.0
+    consume_ok_tps: float = 0.0
+    consume_failed_tps: float = 0.0
+    consume_failed_msgs: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """转换为字典格式
+
+        将数据类转换为字典，使用指定的JSON字段名称。
+
+        Returns:
+            dict: 字典格式的消费状态数据
+        """
+        return {
+            "pullRT": self.pull_rt,
+            "pullTPS": self.pull_tps,
+            "consumeRT": self.consume_rt,
+            "consumeOKTPS": self.consume_ok_tps,
+            "consumeFailedTPS": self.consume_failed_tps,
+            "consumeFailedMsgs": self.consume_failed_msgs,
+        }
+
+    def encode(self) -> bytes:
+        """编码为JSON格式的字节数据
+
+        将消费状态数据序列化为JSON字符串，然后编码为UTF-8字节序列。
+
+        Returns:
+            bytes: JSON格式的字节数据
+
+        Example:
+            >>> status = ConsumeStatus()
+            >>> data = status.encode()
+            >>> isinstance(data, bytes)
+            True
+        """
+        try:
+            data_dict = self.to_dict()
+            return json.dumps(data_dict, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError) as _:
+            # 如果序列化失败，返回最小化的错误响应
+            error_dict = {
+                "pullRT": 0.0,
+                "pullTPS": 0.0,
+                "consumeRT": 0.0,
+                "consumeOKTPS": 0.0,
+                "consumeFailedTPS": 0.0,
+                "consumeFailedMsgs": 0,
+            }
+            return json.dumps(error_dict, ensure_ascii=False).encode("utf-8")
+
+    @classmethod
+    def decode(cls, data: bytes) -> "ConsumeStatus":
+        """从字节数据解码
+
+        将UTF-8编码的JSON字节数据反序列化为ConsumeStatus实例。
+
+        Args:
+            data: JSON格式的字节数据
+
+        Returns:
+            ConsumeStatus: 解码后的实例
+
+        Raises:
+            json.JSONDecodeError: JSON格式错误时抛出
+            ValueError: 数据格式不正确时抛出
+
+        Example:
+            >>> status = ConsumeStatus()
+            >>> encoded = status.encode()
+            >>> decoded = ConsumeStatus.decode(encoded)
+            >>> decoded.pull_rt == status.pull_rt
+            True
+        """
+        try:
+            json_str = data.decode("utf-8")
+            data_dict = json.loads(json_str)
+            return cls.from_dict(data_dict)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as _:
+            # 如果解码失败，返回默认状态
+            return cls()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ConsumeStatus":
+        """从字典创建实例
+
+        Args:
+            data: 字典数据
+
+        Returns:
+            ConsumeStatus: 实例对象
+        """
+        return cls(
+            pull_rt=float(data.get("pullRT", 0.0)),
+            pull_tps=float(data.get("pullTPS", 0.0)),
+            consume_rt=float(data.get("consumeRT", 0.0)),
+            consume_ok_tps=float(data.get("consumeOKTPS", 0.0)),
+            consume_failed_tps=float(data.get("consumeFailedTPS", 0.0)),
+            consume_failed_msgs=int(data.get("consumeFailedMsgs", 0)),
+        )
+
+    @classmethod
+    def create_empty(cls) -> "ConsumeStatus":
+        """创建空的消费状态
+
+        创建一个所有字段都为默认值的空状态对象。
+
+        Returns:
+            ConsumeStatus: 空状态实例
+        """
+        return cls()
+
+    def update_pull_metrics(self, response_time_ms: float, message_count: int):
+        """更新拉取性能指标
+
+        Args:
+            response_time_ms: 拉取响应时间(毫秒)
+            message_count: 拉取的消息数量
+        """
+        self.pull_rt = response_time_ms
+        # 简化计算，实际应用中需要根据时间窗口计算TPS
+        if message_count > 0 and response_time_ms > 0:
+            self.pull_tps = (message_count * 1000.0) / response_time_ms
+
+    def update_consume_metrics(
+        self, response_time_ms: float, success_count: int, failed_count: int
+    ):
+        """更新消费性能指标
+
+        Args:
+            response_time_ms: 消费响应时间(毫秒)
+            success_count: 成功消费的消息数量
+            failed_count: 失败消费的消息数量
+        """
+        self.consume_rt = response_time_ms
+        self.consume_failed_msgs += failed_count
+
+        total_messages = success_count + failed_count
+        if total_messages > 0 and response_time_ms > 0:
+            tps = (total_messages * 1000.0) / response_time_ms
+            self.consume_ok_tps = tps * (success_count / total_messages)
+            self.consume_failed_tps = tps * (failed_count / total_messages)
