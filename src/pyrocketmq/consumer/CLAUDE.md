@@ -668,25 +668,98 @@ def select(self, topic: str, available_queues: List[MessageQueue], message: Opti
 - **RandomSelector**: 随机选择器
 - **MessageHashSelector**: 消息哈希选择器（基于SHARDING_KEY或KEYS）
 
-### 16. 统计信息系统 (新增功能)
+### 16. Stats Manager 统计管理系统
 
-**消费者统计信息**: 完整的消费统计系统，实时监控消费性能。
+**Stats Manager**: 新一代统计管理系统，提供多维度、多时间窗口的性能监控。
 
-**主要指标**:
-- 消息消费速率 (messages/second)
-- 消息消费成功率
-- 平均消费延迟
-- 重平衡次数
-- 错误统计
+#### 16.1 核心组件架构
 
-**使用方式**:
+**数据结构类**:
+- **StatsSnapshot**: 统计快照，包含 `sum`（累计值）、`tps`（每秒处理量）、`avgpt`（平均处理时间）
+- **CallSnapshot**: 调用快照，包含 `timestamp`（时间戳）、`times`（调用次数）、`value`（累计值）
+- **ConsumeStatus**: 消费状态，包含拉取和消费的各种性能指标
+
+**核心管理类**:
+- **StatsItem**: 单个统计项管理，线程安全的数据访问和TPS计算
+- **StatsItemSet**: 统计项集合管理，自动采样和多时间窗口数据维护
+- **StatsManager**: 主管理器，统一管理五种类型的统计项集合
+
+#### 16.2 统计维度和指标
+
+**五种统计类型**:
+1. **CONSUME_OK_TPS**: 消费成功TPS统计
+2. **CONSUME_RT**: 消费响应时间统计  
+3. **CONSUME_FAILED_TPS**: 消费失败TPS统计
+4. **PULL_TPS**: 拉取TPS统计
+5. **PULL_RT**: 拉取响应时间统计
+
+**多时间窗口支持**:
+- **分钟级数据**: 保留7个数据点，提供短期性能分析
+- **小时级数据**: 保留7个数据点，提供中期趋势分析
+- **天级数据**: 保留25个数据点，提供长期性能监控
+
+#### 16.3 自动采样机制
+
+StatsItemSet启动三个后台线程进行自动采样：
+- **秒级采样线程**: 每10秒执行一次，实时性能监控
+- **分钟级采样线程**: 每10分钟执行一次，中期趋势分析
+- **小时级采样线程**: 每小时执行一次，长期性能跟踪
+
+#### 16.4 Stats Manager API
+
+**统计数据收集API**:
 ```python
-# 获取统计信息
-stats = consumer.get_stats()
-print(f"消费速率: {stats.consume_tps} msg/s")
-print(f"成功率: {stats.success_rate}%")
-print(f"平均延迟: {stats.avg_latency} ms")
+# 拉取统计
+stats_manager.increase_pull_rt(group, topic, rt)      # 增加拉取响应时间
+stats_manager.increase_pull_tps(group, topic, msgs)   # 增加拉取TPS
+
+# 消费统计  
+stats_manager.increase_consume_rt(group, topic, rt)       # 增加消费响应时间
+stats_manager.increase_consume_ok_tps(group, topic, msgs)  # 增加消费成功TPS
+stats_manager.increase_consume_failed_tps(group, topic, msgs) # 增加消费失败TPS
 ```
+
+**统计数据查询API**:
+```python
+# 获取消费状态（综合各项统计）
+consume_status = stats_manager.get_consume_status(group, topic)
+
+# 获取不同时间窗口的统计
+minute_stats = stats_manager.get_minute_stats(key)  # 分钟级统计
+hour_stats = stats_manager.get_hour_stats(key)     # 小时级统计  
+day_stats = stats_manager.get_day_stats(key)       # 天级统计
+
+# 访问统计快照
+print(f"TPS: {consume_status.consume_tps}")
+print(f"平均拉取RT: {consume_status.pull_rt}")
+print(f"平均消费RT: {consume_status.consume_rt}")
+```
+
+#### 16.5 消费者集成
+
+**在消费者类中使用**:
+```python
+# 获取Stats Manager实例
+stats_manager = consumer.get_stats_manager()
+
+# 获取消费状态
+consume_status = consumer.get_consume_status("topic_name")
+
+# 检查性能指标
+if consume_status.consume_tps > 1000:
+    print(f"高TPS消费: {consume_status.consume_tps} msg/s")
+
+if consume_status.consume_rt > 100:
+    print(f"消费延迟较高: {consume_status.consume_rt} ms")
+```
+
+#### 16.6 性能特性
+
+**线程安全设计**: 所有数据结构都使用 `threading.RLock` 确保高并发环境下的数据一致性。
+
+**高效数据管理**: 使用 `deque` 高效管理时间窗口数据，自动清理过期数据。
+
+**实时监控**: 支持实时查询和后台自动采样，提供即时性能反馈。
 
 ## 使用示例
 
@@ -1364,7 +1437,7 @@ class AsyncRobustMessageListener:
         print(f"异步处理消息: {message.body.decode()}")
 ```
 
-### 9. 统计信息监控 (新增功能)
+### 9. Stats Manager 性能监控
 
 ```python
 import asyncio
@@ -1393,7 +1466,7 @@ class StatsMonitoringListener:
         await asyncio.sleep(0.01)  # 模拟处理延迟
 
 async def stats_monitoring_example():
-    """统计信息监控示例"""
+    """Stats Manager监控示例"""
     config = create_consumer_config(
         consumer_group="stats_consumer",
         namesrv_addr="localhost:9876",
@@ -1406,27 +1479,41 @@ async def stats_monitoring_example():
     await consumer.start()
     await consumer.subscribe("stats_topic", "*")
     
-    # 启动统计信息监控任务
+    # 启动Stats Manager监控任务
     async def monitor_stats():
         while True:
             await asyncio.sleep(10)  # 每10秒打印一次统计信息
             
-            if hasattr(consumer, 'get_stats'):
-                stats = consumer.get_stats()
-                print(f"\n=== 消费统计信息 ===")
-                print(f"TPS: {stats.consume_tps:.2f} msg/s")
-                print(f"成功率: {stats.success_rate:.2f}%")
-                print(f"平均延迟: {stats.avg_latency:.2f} ms")
-                print(f"已处理消息: {stats.processed_messages}")
-                print(f"失败消息: {stats.failed_messages}")
-                print(f"重平衡次数: {stats.rebalance_count}")
-                print(f"当前队列数: {stats.assigned_queues}")
+            # 使用Stats Manager获取消费状态
+            consume_status = consumer.get_consume_status("stats_topic")
+            if consume_status:
+                print(f"\n=== Stats Manager 消费统计 ===")
+                print(f"消费成功TPS: {consume_status.consume_ok_tps:.2f} msg/s")
+                print(f"消费失败TPS: {consume_status.consume_failed_tps:.2f} msg/s")
+                print(f"平均消费RT: {consume_status.consume_rt:.2f} ms")
+                print(f"拉取TPS: {consume_status.pull_tps:.2f} msg/s")
+                print(f"平均拉取RT: {consume_status.pull_rt:.2f} ms")
+            
+            # 获取Stats Manager实例进行详细分析
+            stats_manager = consumer.get_stats_manager()
+            if stats_manager:
+                # 获取分钟级统计
+                minute_stats = stats_manager.get_minute_stats(f"{config.consumer_group}@stats_topic")
+                if minute_stats:
+                    print(f"分钟级TPS: {minute_stats.tps:.2f} msg/s")
+                    print(f"分钟级平均RT: {minute_stats.avgpt:.2f} ms")
                 
-                # 监听器统计
-                listener = consumer.message_listener
-                if hasattr(listener, 'processed_count'):
-                    print(f"监听器处理: {listener.processed_count}")
-                    print(f"监听器失败: {listener.failed_count}")
+                # 获取小时级统计
+                hour_stats = stats_manager.get_hour_stats(f"{config.consumer_group}@stats_topic")
+                if hour_stats:
+                    print(f"小时级累计TPS: {hour_stats.tps:.2f} msg/s")
+                    print(f"小时级累计RT: {hour_stats.avgpt:.2f} ms")
+            
+            # 监听器统计
+            listener = consumer.message_listener
+            if hasattr(listener, 'processed_count'):
+                print(f"监听器处理: {listener.processed_count}")
+                print(f"监听器失败: {listener.failed_count}")
     
     # 启动监控任务
     monitor_task = asyncio.create_task(monitor_stats())
@@ -1437,13 +1524,13 @@ async def stats_monitoring_example():
             await asyncio.sleep(1)
     
     except KeyboardInterrupt:
-        print("\n停止统计监控...")
+        print("\n停止Stats Manager监控...")
         monitor_task.cancel()
         await consumer.shutdown()
 
 # 性能基准测试
 async def performance_benchmark():
-    """性能基准测试"""
+    """使用Stats Manager的性能基准测试"""
     config = create_consumer_config(
         consumer_group="benchmark_consumer",
         namesrv_addr="localhost:9876",
@@ -1457,7 +1544,7 @@ async def performance_benchmark():
     await consumer.start()
     await consumer.subscribe("benchmark_topic", "*")
     
-    print("开始性能基准测试...")
+    print("开始Stats Manager性能基准测试...")
     
     # 运行基准测试
     start_time = asyncio.get_event_loop().time()
@@ -1467,19 +1554,37 @@ async def performance_benchmark():
         await asyncio.sleep(test_duration)
     finally:
         end_time = asyncio.get_event_loop().time()
+        duration = end_time - start_time
         
-        if hasattr(consumer, 'get_stats'):
-            stats = consumer.get_stats()
-            duration = end_time - start_time
-            
-            print(f"\n=== 性能基准测试结果 ===")
-            print(f"测试时长: {duration:.2f} 秒")
-            print(f"总处理消息: {stats.processed_messages}")
-            print(f"平均TPS: {stats.processed_messages / duration:.2f} msg/s")
-            print(f"成功率: {stats.success_rate:.2f}%")
-            print(f"平均延迟: {stats.avg_latency:.2f} ms")
-            print(f"最大延迟: {stats.max_latency:.2f} ms")
-            print(f"P99延迟: {stats.p99_latency:.2f} ms")
+        # 使用Stats Manager获取最终统计
+        consume_status = consumer.get_consume_status("benchmark_topic")
+        stats_manager = consumer.get_stats_manager()
+        
+        print(f"\n=== Stats Manager 基准测试结果 ===")
+        print(f"测试时长: {duration:.2f} 秒")
+        
+        if consume_status:
+            print(f"最终消费成功TPS: {consume_status.consume_ok_tps:.2f} msg/s")
+            print(f"最终消费失败TPS: {consume_status.consume_failed_tps:.2f} msg/s")
+            print(f"平均消费RT: {consume_status.consume_rt:.2f} ms")
+            print(f"平均拉取RT: {consume_status.pull_rt:.2f} ms")
+        
+        if stats_manager:
+            # 获取不同时间窗口的统计
+            day_stats = stats_manager.get_day_stats(f"{config.consumer_group}@benchmark_topic")
+            if day_stats:
+                print(f"天级累计消息: {day_stats.sum}")
+                print(f"天级平均TPS: {day_stats.tps:.2f} msg/s")
+        
+        # 监听器统计
+        listener = consumer.message_listener
+        if hasattr(listener, 'processed_count'):
+            total_processed = listener.processed_count
+            total_failed = listener.failed_count
+            print(f"监听器总处理: {total_processed}")
+            print(f"监听器总失败: {total_failed}")
+            print(f"监听器成功率: {(total_processed / (total_processed + total_failed) * 100):.2f}%")
+            print(f"监听器平均TPS: {total_processed / duration:.2f} msg/s")
         
         await consumer.shutdown()
 
