@@ -17,7 +17,6 @@ AsyncConcurrentConsumer是pyrocketmq的异步并发消费者实现，支持高�
 import asyncio
 import time
 from datetime import datetime
-from typing import Any
 
 # pyrocketmq导入
 from pyrocketmq.broker import AsyncBrokerClient, MessagePullError
@@ -198,8 +197,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 启动消息处理任务
                 await self._start_consume_tasks()
 
-                self._consumer_stats.start_time = time.time()
-
                 # 获取分配队列数量用于日志统计
                 async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
                     assigned_queues_count = len(self._assigned_queues)
@@ -275,13 +272,10 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 关闭AsyncBaseConsumer
                 await super().shutdown()
 
-                # 获取最终统计信息
-                final_stats = await self._get_final_stats()
                 logger.info(
                     "AsyncConcurrentConsumer shutdown completed",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "final_stats": final_stats,
                     },
                 )
 
@@ -474,9 +468,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     await self._handle_pulled_messages(
                         message_queue, messages, next_begin_offset
                     )
-                else:
-                    async with self._stats_lock:
-                        self._consumer_stats.pull_requests += 1
 
                 # 控制拉取频率 - 传入是否有消息的标志
                 await self._apply_pull_interval(len(messages) > 0)
@@ -514,9 +505,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                     exc_info=True,
                 )
 
-                async with self._stats_lock:
-                    self._consumer_stats.pull_failures += 1
-
                 # 拉取失败时等待一段时间再重试
                 await asyncio.sleep(3.0)
 
@@ -542,6 +530,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         # 获取当前偏移量
         current_offset: int = await self._get_or_initialize_offset(message_queue)
 
+        pull_start_time = time.time()
         # 拉取消息
         messages, next_begin_offset, next_suggest_id = await self._pull_messages(
             message_queue,
@@ -562,6 +551,17 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         # 根据订阅信息过滤消息
         if sub_data.tags_set:
             messages = self._filter_messages_by_tags(messages, sub_data.tags_set)
+
+        # 记录拉取统计
+        pull_rt = int((time.time() - pull_start_time) * 1000)  # 转换为毫秒
+        message_count = len(messages)
+
+        self._stats_manager.increase_pull_rt(
+            self._config.consumer_group, message_queue.topic, pull_rt
+        )
+        self._stats_manager.increase_pull_tps(
+            self._config.consumer_group, message_queue.topic, message_count
+        )
 
         return messages, next_begin_offset, next_suggest_id
 
@@ -591,11 +591,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         await self._submit_messages_for_processing(message_queue, messages)
 
         # 更新统计信息
-        message_count = len(messages)
-        async with self._stats_lock:
-            self._consumer_stats.pull_successes += 1
-            self._consumer_stats.messages_consumed += message_count
-            self._consumer_stats.pull_requests += 1
+        self._stats_manager.increase_pull_tps(
+            self._config.consumer_group, message_queue.topic, len(messages)
+        )
 
     async def _submit_messages_for_processing(
         self, message_queue: MessageQueue, messages: list[MessageExt]
@@ -741,9 +739,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             - 返回的empty消息列表并不意味着队列中没有消息，可能是由于网络延迟
         """
         try:
-            async with self._stats_lock:
-                self._consumer_stats.pull_requests += 1
-
             broker_info: (
                 tuple[str, bool] | None
             ) = await self._nameserver_manager.get_broker_address_in_subscription(
@@ -905,19 +900,12 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         # 获取所有订阅主题
         topic_set = set(self._subscription_manager.get_topics())
 
-        # 更新统计信息
-        async with self._stats_lock:
-            self._consumer_stats.rebalance_count += 1
-            self._consumer_stats.rebalance_success_count += 1
-            self._consumer_stats.last_rebalance_time = time.time()  # 保留原有的统计项
-
         logger.info(
             "Rebalance completed",
             extra={
                 "consumer_group": self._config.consumer_group,
                 "assigned_queue_count": len(new_assigned_queues),
                 "topics": list(topic_set),
-                "success_count": self._consumer_stats.rebalance_success_count,
             },
         )
 
@@ -960,8 +948,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 extra={"consumer_group": self._config.consumer_group, "error": str(e)},
                 exc_info=True,
             )
-            async with self._stats_lock:
-                self._consumer_stats.rebalance_failure_count += 1
 
         finally:
             # 只有成功获取锁时才释放锁
@@ -998,16 +984,10 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
         # 检查锁是否已被占用，避免重复尝试获取
         if self._rebalance_lock.locked():
-            print("已经锁上辣！")
-            # 锁已被占用，跳过本次重平衡
-            async with self._stats_lock:
-                self._consumer_stats.rebalance_skipped_count += 1
-
             logger.debug(
                 "Rebalance lock already locked, skipping",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "skipped_count": self._consumer_stats.rebalance_skipped_count,
                 },
             )
             return False
@@ -1181,7 +1161,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
                 while messages:
                     # 处理消息
-                    success, duration = await self._process_messages_with_timing(
+                    success: bool = await self._process_messages_with_timing(
                         messages, message_queue
                     )
 
@@ -1198,7 +1178,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                             continue  # 跳过后续处理，直接重试
 
                     # 更新统计信息
-                    await self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
@@ -1212,7 +1191,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
     async def _process_messages_with_timing(
         self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> tuple[bool, float]:
+    ) -> bool:
         """
         异步处理消息并计时
 
@@ -1221,15 +1200,46 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             message_queue: 消息队列信息
 
         Returns:
-            tuple[bool, float]: (处理是否成功, 处理耗时)
+            bool: 处理是否成功
         """
         start_time = time.time()
         try:
             success = await self._concurrent_consume_message(messages, message_queue)
-            return success, time.time() - start_time
+            duration = time.time() - start_time
+
+            # 记录消费统计
+            consume_rt = int(duration * 1000)  # 转换为毫秒
+            message_count = len(messages)
+
+            self._stats_manager.increase_consume_rt(
+                self._config.consumer_group, message_queue.topic, consume_rt
+            )
+
+            if success:
+                self._stats_manager.increase_consume_ok_tps(
+                    self._config.consumer_group, message_queue.topic, message_count
+                )
+            else:
+                self._stats_manager.increase_consume_failed_tps(
+                    self._config.consumer_group, message_queue.topic, message_count
+                )
+
+            return success
         except Exception as e:
             logger.error(f"Message processing failed: {e}", exc_info=True)
-            return False, time.time() - start_time
+            duration = time.time() - start_time
+
+            # 记录失败统计
+            consume_rt = int(duration * 1000)
+            message_count = len(messages)
+            self._stats_manager.increase_consume_rt(
+                self._config.consumer_group, message_queue.topic, consume_rt
+            )
+            self._stats_manager.increase_consume_failed_tps(
+                self._config.consumer_group, message_queue.topic, message_count
+            )
+
+            return False
 
     async def _handle_successful_consume(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -1309,22 +1319,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             # 广播模式，直接丢掉消息
             logger.warning("Broadcast mode, discard failed messages")
             return []
-
-    async def _update_consume_stats(
-        self, success: bool, duration: float, message_count: int
-    ) -> None:
-        """
-        异步更新消费统计信息
-
-        Args:
-            success: 处理是否成功
-            duration: 处理耗时
-            message_count: 消息数量
-        """
-        async with self._stats_lock:
-            self._consumer_stats.consume_duration_total += duration
-            if not success:
-                self._consumer_stats.messages_failed += message_count
 
     # ==================== 偏移量管理模块 ====================
     # 功能：负责消息偏移量的管理，包括初始化、读取、更新和缓存操作
@@ -1494,44 +1488,15 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     # 包含：统计信息收集、性能监控、状态报告等
     # 作用：为系统监控、性能调优和故障诊断提供数据支持
 
-    async def _get_final_stats(self) -> dict[str, Any]:
-        """获取最终统计信息"""
-        async with self._stats_lock:
-            stats = self._consumer_stats.to_dict()
+    async def get_stats_manager(self):
+        """异步获取统计管理器"""
+        return self._stats_manager
 
-        if stats["start_time"] > 0:
-            stats["running_time"] = time.time() - stats["start_time"]
-        else:
-            stats["running_time"] = 0
-
-        return stats
-
-    async def get_stats(self) -> dict[str, Any]:
-        """获取消费者统计信息"""
-        # 获取消费者统计信息
-        async with self._stats_lock:
-            stats = self._consumer_stats.to_dict()
-
-        if stats["start_time"] > 0:
-            stats["running_time"] = time.time() - stats["start_time"]
-        else:
-            stats["running_time"] = 0
-
-        # 添加缓存统计
-        async with self._assigned_queues_lock:  # 🔐保护_assigned_queues访问
-            stats["assigned_queue_count"] = len(self._assigned_queues)
-            stats["cached_message_count"] = sum(
-                pq.get_count() for pq in self._msg_cache.values()
-            )
-            stats["cached_message_size"] = sum(
-                pq.get_total_size() for pq in self._msg_cache.values()
-            )
-
-        # 添加任务统计
-        stats["pull_task_count"] = len(self._pull_tasks)
-        stats["process_queue_size"] = self._process_queue.qsize()
-
-        return stats
+    async def get_consume_status(self, topic: str):
+        """异步获取指定主题的消费状态"""
+        return self._stats_manager.get_consume_status(
+            self._config.consumer_group, topic
+        )
 
     # ==================== 资源管理模块 ====================
     # 功能：负责资源的分配、管理和清理，确保系统资源的正确使用和释放
@@ -1615,7 +1580,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
                 while messages:
                     # 处理消息
-                    success, duration = await self._process_messages_with_timing(
+                    success: bool = await self._process_messages_with_timing(
                         messages, message_queue
                     )
 
@@ -1632,7 +1597,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                             continue  # 跳过后续处理，直接重试
 
                     # 更新统计信息
-                    await self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
