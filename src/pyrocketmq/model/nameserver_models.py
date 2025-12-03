@@ -116,7 +116,7 @@ class QueueData:
             read_queue_nums=data["readQueueNums"],
             write_queue_nums=data["writeQueueNums"],
             perm=data["perm"],
-            topic_syn_flag=data["topicSynFlag"],
+            topic_syn_flag=data.get("topicSynFlag", data.get("topicSysFlag", 0)),
             compression_type=data.get("compressionType", "gzip"),
         )
 
