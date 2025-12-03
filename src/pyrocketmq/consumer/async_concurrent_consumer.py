@@ -1406,7 +1406,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     # 作用：实现与Broker的双向通信，响应各种控制指令和通知
 
     async def _on_notify_consumer_ids_changed(
-        self, remoting_cmd: RemotingCommand, remote_addr: tuple[str, int]
+        self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
     ) -> None:
         """处理消费者ID变更通知"""
         logger.info("Received notification of consumer IDs changed")
