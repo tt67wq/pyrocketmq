@@ -46,6 +46,7 @@ from pyrocketmq.remote import ConnectionPool, RemoteConfig
 from .config import ConsumerConfig
 from .errors import ConsumerError, InvalidConsumeResultError
 from .listener import ConsumeContext, MessageListener
+from .stats_manager import StatsManager
 from .subscription_manager import SubscriptionManager
 
 logger = get_logger(__name__)
@@ -162,6 +163,9 @@ class BaseConsumer:
         self._is_running: bool = False
         self._lock: threading.RLock = threading.RLock()
 
+        # 统计管理器
+        self._stats_manager: StatsManager = StatsManager()
+
         # 路由刷新定时任务
         self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
         self._route_refresh_event: threading.Event = (
@@ -248,6 +252,9 @@ class BaseConsumer:
         # 关闭线程池和清理资源
         self._shutdown_thread_pools()
         self._cleanup_resources()
+
+        # 关闭统计管理器
+        self._stats_manager.shutdown()
 
     def is_running(self) -> bool:
         """
@@ -1149,6 +1156,29 @@ class BaseConsumer:
             SubscriptionManager: 订阅管理器实例
         """
         return self._subscription_manager
+
+    def get_stats_manager(self) -> StatsManager:
+        """
+        获取统计管理器
+
+        Returns:
+            StatsManager: 统计管理器实例
+        """
+        return self._stats_manager
+
+    def get_consume_status(self, topic: str):
+        """
+        获取指定主题的消费状态
+
+        Args:
+            topic: 主题名称
+
+        Returns:
+            ConsumeStatus: 消费状态信息
+        """
+        return self._stats_manager.get_consume_status(
+            self._config.consumer_group, topic
+        )
 
     # ==============================================================================
     # 5. 路由信息管理模块

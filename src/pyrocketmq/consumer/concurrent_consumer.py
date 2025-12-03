@@ -21,7 +21,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 
 # pyrocketmq导入
 from datetime import datetime
-from typing import Any
 
 from pyrocketmq.broker import BrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import AllocateContext
@@ -216,8 +215,6 @@ class ConcurrentConsumer(BaseConsumer):
                 # 启动消息处理任务
                 self._start_consume_tasks()
 
-                self._stats["start_time"] = time.time()
-
                 with self._assigned_queues_lock:
                     assigned_queue_count = len(self._assigned_queues)
 
@@ -323,7 +320,6 @@ class ConcurrentConsumer(BaseConsumer):
                     "ConcurrentConsumer shutdown completed",
                     extra={
                         "consumer_group": self._config.consumer_group,
-                        "final_stats": self._get_final_stats(),
                     },
                 )
 
@@ -371,12 +367,10 @@ class ConcurrentConsumer(BaseConsumer):
         # 使用可重入锁保护重平衡操作
         if not self._rebalance_lock.acquire(blocking=False):
             # 如果无法获取锁，说明正在执行重平衡，跳过本次请求
-            self._stats["rebalance_skipped_count"] += 1
             logger.debug(
                 "Rebalance already in progress, skipping",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "skipped_count": self._stats["rebalance_skipped_count"],
                 },
             )
             return False
@@ -460,9 +454,6 @@ class ConcurrentConsumer(BaseConsumer):
         """
         self._last_rebalance_time = time.time()
 
-        # 更新成功统计
-        self._stats["rebalance_success_count"] += 1
-
         with self._assigned_queues_lock:
             assigned_queue_count = len(self._assigned_queues)
 
@@ -472,7 +463,6 @@ class ConcurrentConsumer(BaseConsumer):
                 "consumer_group": self._config.consumer_group,
                 "total_topics": total_topics,
                 "assigned_queues": assigned_queue_count,
-                "success_count": self._stats["rebalance_success_count"],
             },
         )
 
@@ -517,9 +507,6 @@ class ConcurrentConsumer(BaseConsumer):
                 extra={"consumer_group": self._config.consumer_group},
             )
 
-            # 更新统计信息
-            self._stats["rebalance_count"] += 1
-
             # 收集所有可用队列并执行分配
             allocated_queues = self._collect_and_allocate_queues()
 
@@ -541,8 +528,6 @@ class ConcurrentConsumer(BaseConsumer):
                 },
                 exc_info=True,
             )
-            # 更新失败统计
-            self._stats["rebalance_failure_count"] += 1
 
         finally:
             # 释放重平衡锁
@@ -551,7 +536,6 @@ class ConcurrentConsumer(BaseConsumer):
                 "Rebalance lock released",
                 extra={
                     "consumer_group": self._config.consumer_group,
-                    "rebalance_count": self._stats["rebalance_count"],
                 },
             )
 
@@ -897,8 +881,6 @@ class ConcurrentConsumer(BaseConsumer):
                     self._handle_pulled_messages(
                         message_queue, messages, next_begin_offset
                     )
-                else:
-                    self._stats["pull_requests"] += 1
 
                 # 控制拉取频率 - 传入是否有消息的标志
                 self._apply_pull_interval(len(messages) > 0)
@@ -929,8 +911,6 @@ class ConcurrentConsumer(BaseConsumer):
                     },
                     exc_info=True,
                 )
-
-                self._stats["pull_failures"] += 1
 
                 # 拉取失败时等待一段时间再重试
                 if stop_event.wait(timeout=3.0):
@@ -1005,12 +985,6 @@ class ConcurrentConsumer(BaseConsumer):
 
         # 将消息按批次放入处理队列
         self._submit_messages_for_processing(message_queue, messages)
-
-        # 更新统计信息
-        message_count = len(messages)
-        self._stats["pull_successes"] += 1
-        self._stats["messages_consumed"] += message_count
-        self._stats["pull_requests"] += 1
 
     def _submit_messages_for_processing(
         self, message_queue: MessageQueue, messages: list[MessageExt]
@@ -1427,7 +1401,7 @@ class ConcurrentConsumer(BaseConsumer):
             - 返回的empty消息列表并不意味着队列中没有消息，可能是由于网络延迟
         """
         try:
-            self._stats["pull_requests"] += 1
+            pull_start_time = time.time()
 
             broker_info: tuple[str, bool] | None = (
                 self._name_server_manager.get_broker_address_in_subscription(
@@ -1462,6 +1436,17 @@ class ConcurrentConsumer(BaseConsumer):
                     ),
                     commit_offset=commit_offset,
                     timeout=30,
+                )
+
+                # 记录拉取统计
+                pull_rt = int((time.time() - pull_start_time) * 1000)  # 转换为毫秒
+                message_count = len(result.messages) if result.messages else 0
+
+                self._stats_manager.increase_pull_rt(
+                    self._config.consumer_group, message_queue.topic, pull_rt
+                )
+                self._stats_manager.increase_pull_tps(
+                    self._config.consumer_group, message_queue.topic, message_count
                 )
 
                 if result.messages:
@@ -1545,7 +1530,7 @@ class ConcurrentConsumer(BaseConsumer):
     - _process_messages_with_timing(): 带计时的消息处理
     - _handle_successful_consume(): 处理成功消费的消息
     - _handle_failed_consume(): 处理消费失败的消息
-    - _update_consume_stats(): 更新消费统计
+
     - _wait_for_processing_completion(): 等待处理完成
     """
 
@@ -1580,7 +1565,7 @@ class ConcurrentConsumer(BaseConsumer):
             3. 根据处理结果执行后续操作：
                - 成功: 更新偏移量，清理处理队列
                - 失败: 发送回broker进行重试
-            4. 更新消费统计信息 (_update_consume_stats)
+
             5. 对发送回broker失败的消息进行延迟重试
 
         重试机制:
@@ -1617,7 +1602,7 @@ class ConcurrentConsumer(BaseConsumer):
 
                 while messages:
                     # 处理消息
-                    success, duration = self._process_messages_with_timing(
+                    success = self._process_messages_with_timing(
                         messages, message_queue
                     )
 
@@ -1631,9 +1616,6 @@ class ConcurrentConsumer(BaseConsumer):
                         )
                         if messages:
                             time.sleep(5)
-
-                    # 更新统计信息
-                    self._update_consume_stats(success, duration, len(messages))
 
             except Exception as e:
                 logger.error(
@@ -1664,22 +1646,39 @@ class ConcurrentConsumer(BaseConsumer):
 
     def _process_messages_with_timing(
         self, messages: list[MessageExt], message_queue: MessageQueue
-    ) -> tuple[bool, float]:
+    ) -> bool:
         """
-        处理消息并计时
+        处理消息并计时，同时记录统计信息
 
         Args:
             messages: 要处理的消息列表
             message_queue: 消息队列
 
         Returns:
-            消费结果，包含成功状态和耗时
+            消费结果，True表示成功，False表示失败
         """
         start_time: float = time.time()
         success: bool = self._concurrent_consume_message(messages, message_queue)
         duration: float = time.time() - start_time
 
-        return success, duration
+        # 记录消费统计
+        consume_rt = int(duration * 1000)  # 转换为毫秒
+        message_count = len(messages)
+
+        self._stats_manager.increase_consume_rt(
+            self._config.consumer_group, message_queue.topic, consume_rt
+        )
+
+        if success:
+            self._stats_manager.increase_consume_ok_tps(
+                self._config.consumer_group, message_queue.topic, message_count
+            )
+        else:
+            self._stats_manager.increase_consume_failed_tps(
+                self._config.consumer_group, message_queue.topic, message_count
+            )
+
+        return success
 
     def _handle_successful_consume(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -1772,23 +1771,6 @@ class ConcurrentConsumer(BaseConsumer):
         # 广播模式，直接丢掉消息
         logger.warning("Broadcast mode, discard failed messages")
         return []
-
-    def _update_consume_stats(
-        self, success: bool, duration: float, message_count: int
-    ) -> None:
-        """
-        更新消费统计信息
-
-        Args:
-            consume_result: 消费结果
-            message_count: 消息数量
-        """
-        # 更新总消费时长
-        self._stats["consume_duration_total"] += duration
-
-        # 更新失败消息数
-        if not success:
-            self._stats["messages_failed"] += message_count
 
     def _wait_for_processing_completion(self) -> None:
         """
@@ -1943,114 +1925,6 @@ class ConcurrentConsumer(BaseConsumer):
         self._pull_tasks.clear()
         with self._assigned_queues_lock:
             self._assigned_queues.clear()
-
-    # ==================== 统计监控模块 ====================
-    """
-    统计监控模块提供消费者的实时状态和性能指标。
-    用于监控消费者健康状况和性能调优。
-    主要方法:
-    - get_stats(): 获取实时统计信息
-    - _get_final_stats(): 获取最终统计信息
-    """
-
-    def _get_final_stats(self) -> dict[str, Any]:
-        """
-        获取最终统计信息
-
-        Returns:
-            dict: 统计信息字典
-        """
-        uptime: float = time.time() - self._stats.get("start_time", time.time())
-        messages_consumed: int = self._stats["messages_consumed"]
-        pull_requests: int = self._stats["pull_requests"]
-        route_refresh_count: int = self._stats.get("route_refresh_count", 0)
-
-        # 计算路由刷新成功率
-        route_refresh_success_rate: float = 0.0
-        if route_refresh_count > 0:
-            route_refresh_success_rate = (
-                self._stats.get("route_refresh_success_count", 0) / route_refresh_count
-            )
-
-        with self._assigned_queues_lock:
-            assigned_queue_count = len(self._assigned_queues)
-
-        return {
-            **self._stats,
-            "uptime_seconds": uptime,
-            "assigned_queues": assigned_queue_count,
-            "avg_consume_duration": (
-                self._stats["consume_duration_total"] / max(messages_consumed, 1)
-            ),
-            "pull_success_rate": (
-                self._stats["pull_successes"] / max(pull_requests, 1)
-            ),
-            "consume_success_rate": (
-                (messages_consumed - self._stats["messages_failed"])
-                / max(messages_consumed, 1)
-            ),
-            # 路由刷新相关统计
-            "route_refresh_success_rate": route_refresh_success_rate,
-            "route_refresh_avg_interval": (uptime / max(route_refresh_count, 1))
-            if route_refresh_count > 0
-            else 0.0,
-            # 重平衡相关统计
-            "rebalance_success_rate": (
-                self._stats.get("rebalance_success_count", 0)
-                / max(self._stats.get("rebalance_count", 1), 1)
-            ),
-            "rebalance_avg_interval": (
-                uptime / max(self._stats.get("rebalance_count", 1), 1)
-            )
-            if self._stats.get("rebalance_count", 0) > 0
-            else 0.0,
-            "rebalance_skipped_rate": (
-                self._stats.get("rebalance_skipped_count", 0)
-                / max(
-                    self._stats.get("rebalance_count", 1)
-                    + self._stats.get("rebalance_skipped_count", 1),
-                    1,
-                )
-            ),
-        }
-
-    def get_stats(self) -> dict[str, Any]:
-        """获取消费者的实时统计信息。
-
-        返回包含消费者运行状态、性能指标和资源使用情况的详细统计数据。
-
-        Returns:
-            dict[str, Any]: 统计信息字典，包含以下字段：
-                - messages_consumed (int): 已消费的消息总数
-                - messages_failed (int): 消费失败的消息总数
-                - pull_requests (int): 拉取请求总数
-                - pull_successes (int): 拉取成功的次数
-                - pull_failures (int): 拉取失败的次数
-                - consume_duration_total (float): 总消费耗时（秒）
-                - start_time (float): 启动时间戳
-                - heartbeat_success_count (int): 心跳成功次数
-                - heartbeat_failure_count (int): 心跳失败次数
-                - uptime_seconds (float): 运行时长（秒）
-                - assigned_queues (int): 当前分配的队列数量
-                - avg_consume_duration (float): 平均消费耗时（秒）
-                - pull_success_rate (float): 拉取成功率（0-1之间）
-                - consume_success_rate (float): 消费成功率（0-1之间）
-
-        Raises:
-            None: 此方法不会抛出异常
-
-        Note:
-            - 统计数据在消费者生命周期内持续累积
-            - 平均值基于实际消费次数计算
-            - 成功率基于实际操作次数计算
-            - 可用于监控消费者健康状态和性能调优
-
-        Example:
-            >>> stats = consumer.get_stats()
-            >>> print(f"消费成功率: {stats['consume_success_rate']:.2%}")
-            >>> print(f"平均消费耗时: {stats['avg_consume_duration']:.3f}秒")
-        """
-        return self._get_final_stats()
 
     # ==================== 远程通信模块 ====================
     """
