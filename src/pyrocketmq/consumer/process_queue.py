@@ -19,7 +19,7 @@ from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
 
-from pyrocketmq.model import MessageExt
+from pyrocketmq.model import MessageExt, ProcessQueueInfo
 
 
 @dataclass
@@ -780,3 +780,27 @@ class ProcessQueue:
             self._consuming_orderly_msgs = remaining_consuming_msgs
 
         return rollback_count
+
+    def current_info(self) -> ProcessQueueInfo:
+        """获取当前队列状态信息
+
+        Returns:
+            ProcessQueueInfo: 当前队列的状态信息
+        """
+        with self._lock:
+            return ProcessQueueInfo(
+                commit_offset=0,  # 当前实现中没有跟踪提交偏移量，使用默认值
+                cached_msg_min_offset=self.get_min_offset() or 0,
+                cached_msg_max_offset=self.get_max_offset() or 0,
+                cached_msg_count=self.get_count(),
+                cached_msg_size_in_mib=int(self.get_total_size_mb()),
+                transaction_msg_min_offset=0,  # 当前实现中没有区分事务消息，使用默认值
+                transaction_msg_max_offset=0,
+                transaction_msg_count=0,
+                locked=False,  # 当前实现中没有锁定机制，使用默认值
+                try_unlock_times=0,
+                last_lock_timestamp=0,
+                dropped=False,  # 当前实现中没有丢弃状态，使用默认值
+                last_pull_timestamp=0,  # 当前实现中没有跟踪时间戳，使用默认值
+                last_consume_timestamp=0,
+            )

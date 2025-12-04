@@ -16,7 +16,6 @@ AsyncProcessQueue单元测试
 
 import asyncio
 import unittest
-from typing import Any
 
 from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue, QueueEntry
 from pyrocketmq.model import MessageExt
