@@ -1305,7 +1305,7 @@ class ConcurrentConsumer(BaseConsumer):
             _update_offset_from_cache: 更新消费偏移量（独立方法）
             _get_or_create_process_queue: 获取或创建ProcessQueue
         """
-        process_queue = self._get_or_create_process_queue(queue)
+        process_queue: ProcessQueue = self._get_or_create_process_queue(queue)
 
         if not messages:
             # 如果没有消息要移除，直接返回当前最小offset
@@ -1594,12 +1594,14 @@ class ConcurrentConsumer(BaseConsumer):
                     continue
 
                 messages, message_queue = message_data
+                pq: ProcessQueue = self._get_or_create_process_queue(message_queue)
 
                 while messages:
                     # 处理消息
                     success = self._process_messages_with_timing(
                         messages, message_queue
                     )
+                    pq.update_consume_timestamp()
 
                     # 根据处理结果进行后续处理
                     if success:
@@ -1687,7 +1689,9 @@ class ConcurrentConsumer(BaseConsumer):
         """
         try:
             # 从缓存中移除已处理的消息，并获取当前最小offset
-            min_offset = self._remove_messages_from_cache(message_queue, messages)
+            min_offset: int | None = self._remove_messages_from_cache(
+                message_queue, messages
+            )
 
             # 直接更新最小offset到offset_store，避免重复查询
             if min_offset is not None:

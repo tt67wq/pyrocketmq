@@ -1160,11 +1160,15 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 except asyncio.TimeoutError:
                     continue
 
+                pq: AsyncProcessQueue = await self._get_or_create_process_queue(
+                    message_queue
+                )
                 while messages:
                     # 处理消息
                     success: bool = await self._process_messages_with_timing(
                         messages, message_queue
                     )
+                    await pq.update_consume_timestamp()
 
                     # 根据处理结果进行后续处理
                     if success:
@@ -1269,9 +1273,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                             "topic": message_queue.topic,
                             "queue_id": message_queue.queue_id,
                             "offset": min_offset,
-                            "cache_stats": (
-                                await self._get_or_create_process_queue(message_queue)
-                            ).get_stats(),
                         },
                     )
                 except Exception as e:
@@ -1525,91 +1526,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 extra={"error": str(e)},
                 exc_info=True,
             )
-        """
-        持续处理消息的异步消费循环。
-
-        这是并发消费者核心的异步消息处理循环，运行在独立的消费任务中。
-        该循环负责从消息处理队列中获取消息并调用用户注册的消息监听器进行处理。
-
-        主要功能:
-            - 异步从处理队列阻塞式获取消息批次
-            - 调用用户消息监听器进行业务处理
-            - 根据处理结果执行成功/失败后的处理逻辑
-            - 更新消费统计信息
-            - 处理重试机制和异常情况
-
-        处理流程:
-            1. 从处理队列获取消息批次（使用asyncio.wait_for超时机制）
-            2. 调用消息监听器处理消息 (_concurrent_consume_message)
-            3. 根据处理结果执行后续操作：
-               - 成功: 更新偏移量，清理处理队列
-               - 失败: 发送回broker进行重试
-            4. 更新消费统计信息
-            5. 对发送回broker失败的消息进行延迟重试
-
-        重试机制:
-            - 消费失败的消息会尝试发送回broker进行重试
-            - 发送回broker失败的消息会在本地延迟5秒后重试
-            - 避免因broker连接问题导致的消息丢失
-
-        异步特性:
-            - 使用asyncio.wait_for实现非阻塞超时获取
-            - 所有IO操作都是异步的，不阻塞事件循环
-            - 支持高并发消息处理
-            - 异步锁保护共享状态
-
-        异常处理:
-            - 捕获所有异常，确保单个消息处理失败不影响整个循环
-            - 记录详细的错误日志和异常堆栈信息
-            - 保持循环继续运行，确保消费者服务可用
-
-        Note:
-            - 该方法是消费者消息处理的核心逻辑，不应被外部调用
-            - 循环会在消费者关闭时(_is_running=False)自动退出
-            - 消费延迟主要取决于消息处理时间和队列深度
-            - 统计信息用于监控消费性能和健康状态
-        """
-        while self._is_running:
-            try:
-                # 从处理队列获取消息
-                try:
-                    messages: list[MessageExt]
-                    message_queue: MessageQueue
-                    messages, message_queue = await asyncio.wait_for(
-                        self._process_queue.get(), timeout=1.0
-                    )
-                except asyncio.TimeoutError:
-                    continue
-
-                while messages:
-                    # 处理消息
-                    success: bool = await self._process_messages_with_timing(
-                        messages, message_queue
-                    )
-
-                    # 根据处理结果进行后续处理
-                    if success:
-                        await self._handle_successful_consume(messages, message_queue)
-                        messages = []
-                    else:
-                        messages = await self._handle_failed_consume(
-                            messages, message_queue
-                        )
-                        if messages:
-                            await asyncio.sleep(5)  # 异步延迟
-                            continue  # 跳过后续处理，直接重试
-
-                    # 更新统计信息
-
-            except Exception as e:
-                logger.error(
-                    f"Error in async consume messages loop: {e}",
-                    extra={
-                        "consumer_group": self._config.consumer_group,
-                        "error": str(e),
-                    },
-                    exc_info=True,
-                )
 
     async def _update_offset_from_cache(self, queue: MessageQueue, offset: int) -> None:
         """从缓存更新偏移量"""

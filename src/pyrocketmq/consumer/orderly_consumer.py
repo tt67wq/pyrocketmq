@@ -1653,6 +1653,7 @@ class OrderlyConsumer(BaseConsumer):
             success, result = self._process_messages_with_timing(
                 messages, message_queue
             )
+            pq.update_consume_timestamp()
 
             # 根据提交模式处理结果
             if self._config.enable_auto_commit:
