@@ -26,6 +26,7 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
 from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManager
 from pyrocketmq.consumer.offset_store import OffsetStore
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
+from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
@@ -137,6 +138,13 @@ class BaseConsumer:
         self._broker_manager: BrokerManager = BrokerManager(
             RemoteConfig(connection_pool_size=32, connection_max_lifetime=30)
         )
+
+        # 消息缓存管理 - 使用ProcessQueue解决并发消费偏移量问题
+        # ProcessQueue支持高效的insert/remove/min/max/count计算
+        # 还能统计MessageExt的body总体积，提供更好的性能
+        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
+        self._cache_lock = threading.Lock()  # 用于保护_msg_cache字典
+
         # 创建偏移量存储
         self._offset_store: OffsetStore = OffsetStoreFactory.create_offset_store(
             consumer_group=self._config.consumer_group,

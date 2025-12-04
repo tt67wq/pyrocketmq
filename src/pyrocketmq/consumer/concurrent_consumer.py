@@ -106,12 +106,6 @@ class ConcurrentConsumer(BaseConsumer):
             queue.Queue()
         )
 
-        # 消息缓存管理 - 使用ProcessQueue解决并发消费偏移量问题
-        # ProcessQueue支持高效的insert/remove/min/max/count计算
-        # 还能统计MessageExt的body总体积，提供更好的性能
-        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
-        self._cache_lock = threading.Lock()  # 用于保护_msg_cache字典
-
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
         self._pull_stop_events: dict[

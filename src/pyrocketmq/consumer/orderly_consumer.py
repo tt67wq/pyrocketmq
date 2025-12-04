@@ -53,12 +53,6 @@ class OrderlyConsumer(BaseConsumer):
         self._queue_locks: dict[MessageQueue, threading.RLock] = {}
         self._queue_lock_management_lock = threading.Lock()  # 🔐保护_queue_locks字典
 
-        # 消息缓存管理 - 使用ProcessQueue解决并发消费偏移量问题
-        # ProcessQueue支持高效的insert/remove/min/max/count计算
-        # 还能统计MessageExt的body总体积，提供更好的性能
-        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}
-        self._cache_lock = threading.Lock()  # 用于保护_msg_cache字典
-
         # 状态管理
         self._pull_tasks: dict[MessageQueue, Future[None]] = {}
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset
