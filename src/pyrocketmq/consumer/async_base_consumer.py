@@ -24,6 +24,7 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
 from pyrocketmq.consumer.async_listener import AsyncConsumeContext
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
+from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
@@ -152,6 +153,11 @@ class AsyncBaseConsumer:
         self._message_listeners: dict[str, AsyncMessageListener] = {}
         self._is_running: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
+
+        # ==================== 消息缓存管理 ====================
+        # ProcessQueue缓存 - 消息拉取和消费之间的缓冲区
+        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}  # 消息缓存队列
+        self._cache_lock = asyncio.Lock()  # 🔐保护_msg_cache字典的并发访问
 
         # 异步管理器初始化
         self._initialize_async_managers()

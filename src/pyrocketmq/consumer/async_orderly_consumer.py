@@ -138,11 +138,6 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         self._consume_tasks_lock = asyncio.Lock()  # 🔐保护_consume_tasks字典的并发访问
         self._pull_tasks: dict[MessageQueue, asyncio.Task[None]] = {}  # 队列拉取任务
 
-        # ==================== 消息缓存管理 ====================
-        # ProcessQueue缓存 - 消息拉取和消费之间的缓冲区
-        self._msg_cache: dict[MessageQueue, ProcessQueue] = {}  # 消息缓存队列
-        self._cache_lock = asyncio.Lock()  # 🔐保护_msg_cache字典的并发访问
-
         # ==================== 状态和队列管理 ====================
         # 分配队列状态 - 当前消费者负责的队列及其偏移量
         self._assigned_queues: dict[MessageQueue, int] = {}  # queue -> last_offset

@@ -119,11 +119,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
 
         # ==================== 队列和缓存管理 ====================
         self._process_queue: asyncio.Queue[ProcessQueueItem] = asyncio.Queue()
-        self._msg_cache: ProcessQueueDict = {}
         self._assigned_queues: MessageQueueDict = {}
 
         # ==================== 异步锁 ====================
-        self._cache_lock = asyncio.Lock()
         self._assigned_queues_lock = (
             asyncio.Lock()
         )  # 🔐保护_assigned_queues字典的并发访问
