@@ -82,11 +82,44 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
     # - shutdown: 优雅关闭消费者，清理所有资源
 
     def __init__(self, config: ConsumerConfig):
-        """
-        初始化异步顺序消费者
+        """初始化异步顺序消费者实例。
+
+        创建一个新的异步顺序消费者，配置所有必要的组件和状态变量。
+        顺序消费者保证同一消息队列中的消息按照偏移量严格顺序处理。
 
         Args:
-            config: 消费者配置
+            config (ConsumerConfig): 消费者配置对象，包含以下关键配置：
+                - consumer_group: 消费者组名称
+                - message_model: 消息模式（CLUSTERING或BROADCASTING）
+                - consume_thread_max: 最大消费线程数
+                - pull_batch_size: 拉取消息的批次大小
+                - max_reconsume_times: 最大重试次数
+                - enable_auto_commit: 是否启用自动提交
+                - consume_from_where: 消费起始位置策略
+                - pull_interval: 拉取间隔（毫秒）
+                - max_cache_count_per_queue: 每队列最大缓存消息数
+                - max_cache_size_per_queue: 每队列最大缓存大小（MB）
+
+        Raises:
+            TypeError: 当config参数不是ConsumerConfig类型时抛出
+            ValueError: 当config中的必要参数缺失或无效时抛出
+
+        Note:
+            - 初始化过程中会创建队列锁、任务管理器、消息缓存等核心组件
+            - 顺序消费者使用本地锁和远程锁机制确保消息顺序性
+            - 远程锁默认有效期为30秒，可通过_remote_lock_expire_time配置
+            - 重平衡默认间隔为20秒，可通过_rebalance_interval配置
+
+        Examples:
+            >>> from pyrocketmq.consumer.config import ConsumerConfig
+            >>> from pyrocketmq.consumer.async_orderly_consumer import AsyncOrderlyConsumer
+            >>>
+            >>> config = ConsumerConfig(
+            ...     consumer_group="test_group",
+            ...     namesrv_addr="localhost:9876",
+            ...     message_model=MessageModel.CLUSTERING
+            ... )
+            >>> consumer = AsyncOrderlyConsumer(config)
         """
 
         # 调用父类初始化
@@ -653,20 +686,88 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             )
 
     async def _trigger_rebalance(self) -> None:
-        """触发重平衡"""
+        """触发消费者重平衡操作。
+
+        通过设置重平衡事件来立即触发重平衡流程，而不是等待定期的重平衡间隔。
+        这通常在以下情况下调用：
+        - 消费者组成员发生变化
+        - Topic路由信息更新
+        - 收到Broker的重平衡通知
+
+        Returns:
+            None
+
+        Note:
+            - 只有在消费者正在运行时才会触发重平衡
+            - 使用异步事件机制，不会阻塞调用线程
+            - 重平衡会在事件循环的下一次迭代中执行
+            - 多次调用只会触发一次重平衡，避免重复执行
+
+        Raises:
+            None: 此方法不会抛出异常，所有异常都在重平衡循环中处理
+        """
         if self._is_running:
             # 唤醒重平衡循环，使其立即执行重平衡
             self._rebalance_event.set()
 
     async def _start_rebalance_task(self) -> None:
-        """启动定期重平衡任务"""
+        """启动定期重平衡异步任务。
+
+        创建并启动一个后台异步任务，该任务负责定期执行消费者重平衡操作，
+        确保队列分配的动态调整和负载均衡。重平衡任务会持续运行直到消费者关闭。
+
+        Returns:
+            None
+
+        Note:
+            - 任务名称格式为"{consumer_group}-rebalance-task"
+            - 重平衡间隔由_rebalance_interval配置（默认20秒）
+            - 任务会自动处理异常并继续运行
+            - 只能在消费者启动过程中调用，重复调用会创建多个任务
+
+        Raises:
+            RuntimeError: 当在消费者未启动状态下调用时可能抛出
+            asyncio.CancelledError: 当消费者关闭时任务会被取消
+
+        See Also:
+            _rebalance_loop: 重平衡循环的具体实现
+            _do_rebalance: 执行重平衡的核心逻辑
+        """
         self._rebalance_task = asyncio.create_task(
             self._rebalance_loop(),
             name=f"{self._config.consumer_group}-rebalance-task",
         )
 
     async def _rebalance_loop(self) -> None:
-        """定期重平衡循环"""
+        """执行定期重平衡循环。
+
+        这是重平衡任务的核心执行循环，负责定期或在事件触发时执行重平衡操作。
+        循环会持续运行直到消费者停止，支持定时重平衡和事件驱动的即时重平衡。
+
+        执行逻辑：
+        1. 等待重平衡事件或超时（默认20秒间隔）
+        2. 如果事件被触发，检查消费者是否仍在运行
+        3. 重置事件状态并执行重平衡操作
+        4. 捕获并记录所有异常，确保循环继续运行
+
+        Returns:
+            None
+
+        Note:
+            - 使用asyncio.wait_for支持可中断的等待
+            - 超时是正常情况，会触发定期重平衡
+            - 事件触发会立即执行重平衡，跳过等待
+            - 所有异常都会被捕获并记录，不会中断循环
+            - 消费者停止时会自动退出循环
+
+        Raises:
+            None: 此方法会捕获所有异常，不会向上抛出
+
+        See Also:
+            _trigger_rebalance: 触发重平衡事件
+            _do_rebalance: 执行重平衡的具体逻辑
+            _start_rebalance_task: 启动重平衡任务
+        """
         while self._is_running:
             try:
                 try:
@@ -696,14 +797,35 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 )
 
     async def _find_consumer_list(self, topic: str) -> list[str]:
-        """
-        查找消费者列表
+        """查找指定Topic的消费者组成员列表。
+
+        通过NameServer获取Topic对应的Broker地址，然后向Broker查询
+        指定消费者组下的所有活跃消费者客户端ID列表。这是重平衡
+        过程中获取消费者组成员信息的关键步骤。
 
         Args:
-            topic: 主题名称
+            topic (str): 要查询的Topic名称，必须是已订阅的有效Topic
 
         Returns:
-            消费者列表
+            list[str]: 消费者组成员的客户端ID列表，包含以下情况：
+                - 非空列表：成功获取到的消费者客户端ID列表
+                - 空列表：无法获取Broker地址或查询失败时返回空列表
+
+        Raises:
+            None: 此方法不会抛出异常，所有异常情况都会返回空列表
+
+        Note:
+            - 只在集群模式下（MessageModel.CLUSTERING）需要调用此方法
+            - 广播模式下每个消费者独立处理所有队列，无需查询其他消费者
+            - 查询失败时会记录警告日志并返回空列表
+            - 返回的客户端ID列表用于队列分配算法的输入
+
+        Examples:
+            >>> consumer_ids = await consumer._find_consumer_list("test_topic")
+            >>> if consumer_ids:
+            ...     print(f"Found {len(consumer_ids)} consumers")
+            ... else:
+            ...     print("No consumers found or query failed")
         """
         addresses: list[str] = await self._nameserver_manager.get_all_broker_addresses(
             topic
@@ -2549,11 +2671,77 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         await self._trigger_rebalance()
 
     async def get_stats_manager(self):
-        """异步获取统计管理器"""
+        """异步获取消费者的统计管理器实例。
+
+        返回用于收集和管理消费者运行时统计信息的管理器对象。
+        统计管理器提供了丰富的性能指标和监控数据，用于性能调优
+        和问题诊断。
+
+        Returns:
+            StatsManager: 统计管理器实例，提供以下功能：
+                - 消费TPS统计：成功和失败的消息处理速率
+                - 消费耗时统计：消息处理的响应时间分布
+                - 拉取统计：消息拉取的成功率和延迟
+                - 重平衡统计：重平衡操作的执行情况
+                - 队列状态统计：分配队列的活跃状态
+
+        Note:
+            - 统计数据在内存中维护，重启后会清零
+            - 支持实时查询历史统计数据
+            - 可用于集成外部监控系统
+            - 统计数据对性能影响极小
+
+        Examples:
+            >>> stats_manager = await consumer.get_stats_manager()
+            >>> # 获取消费TPS
+            >>> tps = stats_manager.get_consume_tps("consumer_group", "topic")
+            >>> # 获取消费耗时
+            >>> rt = stats_manager.get_consume_rt("consumer_group", "topic")
+
+        Raises:
+            None: 此方法不会抛出异常
+        """
         return self._stats_manager
 
     async def get_consume_status(self, topic: str):
-        """异步获取指定主题的消费状态"""
+        """异步获取指定Topic的消费状态信息。
+
+        查询并返回指定Topic的消费状态统计数据，包括消费进度、
+        性能指标和队列状态等信息。这些数据用于监控消费者的
+        运行状况和诊断消费问题。
+
+        Args:
+            topic (str): 要查询消费状态的Topic名称，必须是消费者已订阅的Topic
+
+        Returns:
+            ConsumeStatus: 消费状态对象，包含以下关键信息：
+                - consume_tps: 当前消费TPS（每秒处理消息数）
+                - consume_rt: 平均消费响应时间（毫秒）
+                - pull_tps: 当前拉取TPS
+                - pull_rt: 平均拉取响应时间（毫秒）
+                - total_messages: 总处理消息数
+                - failed_messages: 失败消息数
+                - queue_status: 各队列的消费状态
+                - last_consume_time: 最后一次消费时间
+
+        Note:
+            - 返回的数据是实时统计，反映当前时刻的消费状态
+            - 如果Topic未被订阅，返回的状态数据可能为空或无效
+            - 可用于构建监控仪表板和告警系统
+            - 统计数据基于内存计算，查询性能很高
+
+        Examples:
+            >>> status = await consumer.get_consume_status("test_topic")
+            >>> print(f"Consume TPS: {status.consume_tps}")
+            >>> print(f"Consume RT: {status.consume_rt}ms")
+            >>> print(f"Total Messages: {status.total_messages}")
+
+        Raises:
+            None: 此方法不会抛出异常，查询失败时返回默认状态对象
+
+        See Also:
+            get_stats_manager: 获取统计管理器以访问更详细的统计数据
+        """
         return self._stats_manager.get_consume_status(
             self._config.consumer_group, topic
         )
