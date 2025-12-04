@@ -7,6 +7,8 @@ pyrocketmq模型层
 from .client_data import (
     SUBSCRIBE_ALL,
     ConsumerData,
+    ConsumerRunningInfo,
+    ConsumeStatus,
     ExpressionType,
     MessageSelector,
     ProducerData,
@@ -144,6 +146,8 @@ __all__ = [
     # 核心数据结构
     "ProducerData",
     "ConsumerData",
+    "ConsumerRunningInfo",
+    "ConsumeStatus",
     "HeartbeatData",
     "RemotingCommand",
     "Message",

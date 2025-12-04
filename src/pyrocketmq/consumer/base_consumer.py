@@ -32,12 +32,14 @@ from pyrocketmq.model import (
     BrokerData,
     ConsumerData,
     ConsumeResult,
+    ConsumerRunningInfo,
     HeartbeatData,
     MessageExt,
     MessageModel,
     MessageProperty,
     MessageQueue,
     MessageSelector,
+    RemotingCommand,
 )
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 from pyrocketmq.remote import ConnectionPool, RemoteConfig
@@ -1179,6 +1181,19 @@ class BaseConsumer:
         return self._stats_manager.get_consume_status(
             self._config.consumer_group, topic
         )
+
+    def _on_notify_get_consumer_info(
+        self, command: RemotingCommand, _addr: tuple[str, int]
+    ) -> RemotingCommand:
+        running_info: ConsumerRunningInfo = ConsumerRunningInfo()
+        for sub in self._subscription_manager.get_all_subscriptions():
+            running_info.add_subscription(sub.subscription_data)
+            status = self._stats_manager.get_consume_status(
+                self._config.consumer_group, sub.topic
+            )
+            running_info.add_status(sub.topic, status)
+
+        return RemotingCommand(0)
 
     # ==============================================================================
     # 5. 路由信息管理模块

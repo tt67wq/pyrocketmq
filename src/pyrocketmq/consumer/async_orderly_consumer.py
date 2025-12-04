@@ -1798,7 +1798,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         return False, False
 
     async def _check_reconsume_times(
-        self, message_queue: MessageQueue, messages: list[MessageExt]
+        self, _message_queue: MessageQueue, messages: list[MessageExt]
     ) -> bool:
         """检查消息是否还需要重新消费
 

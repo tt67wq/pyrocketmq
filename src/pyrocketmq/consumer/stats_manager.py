@@ -10,6 +10,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from pyrocketmq.model import ConsumeStatus
+
 
 @dataclass
 class StatsSnapshot:
@@ -27,18 +29,6 @@ class CallSnapshot:
     timestamp: int  # 毫秒时间戳
     times: int  # 调用次数
     value: int  # 累计值
-
-
-@dataclass
-class ConsumeStatus:
-    """消费状态数据结构"""
-
-    pull_rt: float = 0.0
-    pull_tps: float = 0.0
-    consume_rt: float = 0.0
-    consume_ok_tps: float = 0.0
-    consume_failed_tps: float = 0.0
-    consume_failed_msgs: int = 0
 
 
 class StatsItem:
