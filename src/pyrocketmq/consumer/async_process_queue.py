@@ -16,6 +16,7 @@ AsyncProcessQueue是ProcessQueue的异步版本，专门为异步RocketMQ Consum
 """
 
 import asyncio
+import time
 from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
@@ -90,6 +91,10 @@ class AsyncProcessQueue:
 
         # 顺序消费处理中的消息（待提交区）
         self._consuming_orderly_msgs: list[QueueEntry] = []
+
+        # 时间戳跟踪
+        self._last_pull_timestamp: int = 0
+        self._last_consume_timestamp: int = 0
 
     async def add_message(self, message: MessageExt) -> bool:
         """
@@ -796,6 +801,16 @@ class AsyncProcessQueue:
         """同步版本的get_count，为了向后兼容"""
         return await self.get_count()
 
+    async def update_pull_timestamp(self) -> None:
+        """异步更新最后拉取时间戳"""
+        async with self._lock:
+            self._last_pull_timestamp = int(time.time() * 1000)  # 毫秒时间戳
+
+    async def update_consume_timestamp(self) -> None:
+        """异步更新最后消费时间戳"""
+        async with self._lock:
+            self._last_consume_timestamp = int(time.time() * 1000)  # 毫秒时间戳
+
     async def current_info(self) -> ProcessQueueInfo:
         """获取当前队列状态信息
 
@@ -838,6 +853,6 @@ class AsyncProcessQueue:
                 try_unlock_times=0,
                 last_lock_timestamp=0,
                 dropped=False,  # 当前实现中没有丢弃状态，使用默认值
-                last_pull_timestamp=0,  # 当前实现中没有跟踪时间戳，使用默认值
-                last_consume_timestamp=0,
+                last_pull_timestamp=self._last_pull_timestamp,
+                last_consume_timestamp=self._last_consume_timestamp,
             )

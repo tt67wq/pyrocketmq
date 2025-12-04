@@ -15,6 +15,7 @@ ProcessQueue是一个专门为RocketMQ Consumer设计的高效消息缓存数据
 """
 
 import threading
+import time
 from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
@@ -88,6 +89,10 @@ class ProcessQueue:
 
         # 顺序消费处理中的消息（待提交区）
         self._consuming_orderly_msgs: list[QueueEntry] = []
+
+        # 时间戳跟踪
+        self._last_pull_timestamp: int = 0
+        self._last_consume_timestamp: int = 0
 
     def add_message(self, message: MessageExt) -> bool:
         """
@@ -781,6 +786,16 @@ class ProcessQueue:
 
         return rollback_count
 
+    def update_pull_timestamp(self) -> None:
+        """更新最后拉取时间戳"""
+        with self._lock:
+            self._last_pull_timestamp = int(time.time() * 1000)  # 毫秒时间戳
+
+    def update_consume_timestamp(self) -> None:
+        """更新最后消费时间戳"""
+        with self._lock:
+            self._last_consume_timestamp = int(time.time() * 1000)  # 毫秒时间戳
+
     def current_info(self) -> ProcessQueueInfo:
         """获取当前队列状态信息
 
@@ -823,6 +838,6 @@ class ProcessQueue:
                 try_unlock_times=0,
                 last_lock_timestamp=0,
                 dropped=False,  # 当前实现中没有丢弃状态，使用默认值
-                last_pull_timestamp=0,  # 当前实现中没有跟踪时间戳，使用默认值
-                last_consume_timestamp=0,
+                last_pull_timestamp=self._last_pull_timestamp,
+                last_consume_timestamp=self._last_consume_timestamp,
             )
