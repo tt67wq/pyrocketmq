@@ -854,6 +854,7 @@ class ConcurrentConsumer(BaseConsumer):
                 pull_result: tuple[list[MessageExt], int, int] | None = (
                     self._perform_single_pull(message_queue, suggest_broker_id)
                 )
+                pq.update_consume_timestamp()
 
                 if pull_result is None:
                     # 如果返回None，说明没有订阅信息，停止消费
