@@ -27,10 +27,10 @@ from datetime import datetime
 from pyrocketmq.broker import AsyncBrokerClient, MessagePullError
 from pyrocketmq.consumer.allocate_queue_strategy import AllocateContext
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
+from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue
 from pyrocketmq.consumer.config import ConsumerConfig
 from pyrocketmq.consumer.errors import MessageConsumeError
 from pyrocketmq.consumer.offset_store import ReadOffsetType
-from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     ConsumeMessageDirectlyHeader,
@@ -1610,7 +1610,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     async def _fetch_messages_from_queue(
         self, message_queue: MessageQueue, stop_event: asyncio.Event
-    ) -> tuple[ProcessQueue, list[MessageExt]]:
+    ) -> tuple[AsyncProcessQueue, list[MessageExt]]:
         """
         从处理队列获取消息。
 
@@ -1621,10 +1621,12 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         Returns:
             tuple[ProcessQueue, list[MessageExt]]: (处理队列, 消息列表)
         """
-        pq: ProcessQueue = await self._get_or_create_process_queue(message_queue)
+        pq: AsyncProcessQueue = await self._get_or_create_process_queue(message_queue)
 
         # 使用ProcessQueue的take_messages方法
-        messages: list[MessageExt] = pq.take_messages(self._config.consume_batch_size)
+        messages: list[MessageExt] = await pq.take_messages(
+            self._config.consume_batch_size
+        )
 
         if not messages:
             # 没有消息时等待
@@ -1716,7 +1718,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     async def _handle_auto_commit_result(
         self,
-        pq: ProcessQueue,
+        pq: AsyncProcessQueue,
         message_queue: MessageQueue,
         messages: list[MessageExt],
         success: bool,
@@ -1736,7 +1738,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             tuple[bool, bool]: (是否继续循环, 是否需要等待)
         """
         if success:
-            offset = pq.commit()
+            offset = await pq.commit()
             if offset:
                 await self._offset_store.update_offset(message_queue, offset)
             return False, False  # 跳出循环，不等待
@@ -1744,14 +1746,14 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             if await self._check_reconsume_times(message_queue, messages):
                 return True, True  # 继续循环，需要等待
             else:
-                offset = pq.commit()
+                offset = await pq.commit()
                 if offset:
                     await self._offset_store.update_offset(message_queue, offset)
                 return False, False  # 跳出循环，不等待
 
     async def _handle_manual_commit_result(
         self,
-        pq: ProcessQueue,
+        pq: AsyncProcessQueue,
         message_queue: MessageQueue,
         messages: list[MessageExt],
         success: bool,
@@ -1776,13 +1778,13 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 return False, False  # 跳出循环，不等待
             else:
                 # commit
-                offset = pq.commit()
+                offset = await pq.commit()
                 if offset:
                     await self._offset_store.update_offset(message_queue, offset)
                 return False, False  # 跳出循环，不等待
         else:
             if result == ConsumeResult.ROLLBACK:
-                _ = pq.rollback(messages)
+                _ = await pq.rollback(messages)
                 return False, True  # 跳出循环，需要等待
             elif result == ConsumeResult.RECONSUME_LATER:
                 if await self._check_reconsume_times(message_queue, messages):
@@ -1856,7 +1858,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
     async def _process_messages_with_retry(
         self,
         message_queue: MessageQueue,
-        pq: ProcessQueue,
+        pq: AsyncProcessQueue,
         messages: list[MessageExt],
         stop_event: asyncio.Event,
     ) -> None:
@@ -2066,18 +2068,20 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 except asyncio.TimeoutError:
                     continue  # 超时是正常的，继续重试
 
-    async def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
+    async def _get_or_create_process_queue(
+        self, queue: MessageQueue
+    ) -> AsyncProcessQueue:
         """获取或创建指定队列的ProcessQueue（消息缓存队列）
 
         Args:
             queue: 消息队列
 
         Returns:
-            ProcessQueue: 指定队列的处理队列对象
+            AsyncProcessQueue: 指定队列的处理队列对象
         """
         async with self._cache_lock:
             if queue not in self._msg_cache:
-                self._msg_cache[queue] = ProcessQueue(
+                self._msg_cache[queue] = AsyncProcessQueue(
                     max_cache_count=self._config.max_cache_count_per_queue,
                     max_cache_size_mb=self._config.max_cache_size_per_queue,
                 )
@@ -2246,8 +2250,10 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         if not messages:
             return
 
-        process_queue: ProcessQueue = await self._get_or_create_process_queue(queue)
-        _ = process_queue.add_batch_messages(messages)
+        process_queue: AsyncProcessQueue = await self._get_or_create_process_queue(
+            queue
+        )
+        _ = await process_queue.add_batch_messages(messages)
 
         self.logger.debug(
             f"Added {len(messages)} messages to cache for queue: {queue}",
@@ -2447,7 +2453,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         try:
             # 清理ProcessQueue消息缓存
             for process_queue in self._msg_cache.values():
-                _ = process_queue.clear()
+                _ = await process_queue.clear()
             self._msg_cache.clear()
 
             # 清理停止事件

@@ -512,7 +512,7 @@ class AsyncProcessQueue:
 
         return True
 
-    async def need_flow_control(self) -> bool:
+    def need_flow_control(self) -> bool:
         """异步检查是否需要限流"""
         return not self._check_cache_limits()
 

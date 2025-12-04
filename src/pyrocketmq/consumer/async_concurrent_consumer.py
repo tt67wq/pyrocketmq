@@ -25,13 +25,13 @@ from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.async_listener import (
     ConsumeResult,
 )
+from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue
 from pyrocketmq.consumer.config import ConsumerConfig
 from pyrocketmq.consumer.errors import (
     ConsumerShutdownError,
     MessageConsumeError,
 )
 from pyrocketmq.consumer.offset_store import ReadOffsetType
-from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     ConsumeMessageDirectlyHeader,
@@ -56,7 +56,6 @@ logger = get_logger(__name__)
 ProcessQueueItem = tuple[list[MessageExt], MessageQueue]
 PullTaskDict = dict[MessageQueue, asyncio.Task[None]]
 MessageQueueDict = dict[MessageQueue, int]
-ProcessQueueDict = dict[MessageQueue, ProcessQueue]
 
 
 class AsyncConcurrentConsumer(AsyncBaseConsumer):
@@ -437,7 +436,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         """
         suggest_broker_id = 0
         while self._is_running:
-            pq: ProcessQueue = await self._get_or_create_process_queue(message_queue)
+            pq: AsyncProcessQueue = await self._get_or_create_process_queue(
+                message_queue
+            )
             if pq.need_flow_control():
                 await asyncio.sleep(3.0)
                 continue
@@ -1323,11 +1324,13 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     # 包含：偏移量初始化策略、缓存管理、远程存储等
     # 作用：确保消息消费位置的准确性，支持消息的可靠消费和故障恢复
 
-    async def _get_or_create_process_queue(self, queue: MessageQueue) -> ProcessQueue:
+    async def _get_or_create_process_queue(
+        self, queue: MessageQueue
+    ) -> AsyncProcessQueue:
         """获取或创建指定队列的ProcessQueue"""
         async with self._cache_lock:
             if queue not in self._msg_cache:
-                self._msg_cache[queue] = ProcessQueue(
+                self._msg_cache[queue] = AsyncProcessQueue(
                     max_cache_count=self._config.max_cache_count_per_queue,
                     max_cache_size_mb=self._config.max_cache_size_per_queue,
                 )
@@ -1338,7 +1341,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     ) -> None:
         """将消息添加到缓存"""
         pq = await self._get_or_create_process_queue(queue)
-        _ = pq.add_batch_messages(messages)
+        _ = await pq.add_batch_messages(messages)
 
     async def _get_or_initialize_offset(self, queue: MessageQueue) -> int:
         """获取或初始化队列偏移量
@@ -1617,7 +1620,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     ) -> int | None:
         """从缓存中移除消息"""
         pq = await self._get_or_create_process_queue(queue)
-        _ = pq.remove_batch_messages(
+        _ = await pq.remove_batch_messages(
             [m.queue_offset for m in messages if m.queue_offset is not None]
         )
-        return pq.get_min_offset()
+        return await pq.get_min_offset()
