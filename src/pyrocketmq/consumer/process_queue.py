@@ -788,15 +788,37 @@ class ProcessQueue:
             ProcessQueueInfo: 当前队列的状态信息
         """
         with self._lock:
+            # 计算_consuming_orderly_msgs中有效消息的统计信息
+            consuming_msgs = [
+                entry
+                for entry in self._consuming_orderly_msgs
+                if not entry.is_tombstone
+            ]
+            transaction_msg_count = len(consuming_msgs)
+
+            if consuming_msgs:
+                transaction_offsets = [
+                    entry.message_offset for entry in consuming_msgs if entry.message
+                ]
+                transaction_msg_min_offset = (
+                    min(transaction_offsets) if transaction_offsets else 0
+                )
+                transaction_msg_max_offset = (
+                    max(transaction_offsets) if transaction_offsets else 0
+                )
+            else:
+                transaction_msg_min_offset = 0
+                transaction_msg_max_offset = 0
+
             return ProcessQueueInfo(
                 commit_offset=0,  # 当前实现中没有跟踪提交偏移量，使用默认值
                 cached_msg_min_offset=self.get_min_offset() or 0,
                 cached_msg_max_offset=self.get_max_offset() or 0,
                 cached_msg_count=self.get_count(),
                 cached_msg_size_in_mib=int(self.get_total_size_mb()),
-                transaction_msg_min_offset=0,  # 当前实现中没有区分事务消息，使用默认值
-                transaction_msg_max_offset=0,
-                transaction_msg_count=0,
+                transaction_msg_min_offset=transaction_msg_min_offset,
+                transaction_msg_max_offset=transaction_msg_max_offset,
+                transaction_msg_count=transaction_msg_count,
                 locked=False,  # 当前实现中没有锁定机制，使用默认值
                 try_unlock_times=0,
                 last_lock_timestamp=0,
