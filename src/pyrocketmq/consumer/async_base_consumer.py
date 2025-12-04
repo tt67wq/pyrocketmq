@@ -25,18 +25,21 @@ from pyrocketmq.consumer.async_listener import AsyncConsumeContext
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
 from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue
+from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
     ConsumerData,
     ConsumeResult,
+    ConsumerRunningInfo,
     HeartbeatData,
     MessageExt,
     MessageModel,
     MessageProperty,
     MessageQueue,
     MessageSelector,
+    ProcessQueueInfo,
     TopicRouteData,
 )
 from pyrocketmq.nameserver.async_manager import (
@@ -170,6 +173,9 @@ class AsyncBaseConsumer:
 
         # 日志记录器初始化
         self._logger = get_logger(f"{__name__}.{config.consumer_group}")
+
+        # 启动时间
+        self._start_time = time.time()
 
         self._logger.info(
             "异步消费者初始化完成",
@@ -1596,6 +1602,68 @@ class AsyncBaseConsumer:
         return self._stats_manager.get_consume_status(
             self._config.consumer_group, topic
         )
+
+    async def get_consumer_info(self) -> ConsumerRunningInfo:
+        """异步获取消费者运行信息
+
+        收集并返回当前消费者的详细运行状态信息，包括订阅信息、队列处理状态、
+        消费统计数据和配置属性等。该信息对于监控消费者健康状况和调试问题非常有用。
+
+        Returns:
+            ConsumerRunningInfo: 包含以下信息的消费者运行状态对象：
+                - subscription_data: 订阅数据，包含所有订阅的主题和标签过滤信息
+                - mq_table: 消息队列处理信息表，包含每个队列的处理状态、缓存信息、提交偏移量等
+                - status_table: 消费状态表，包含每个主题的拉取和消费统计数据(TPS、响应时间等)
+                - properties: 消费者属性配置，包含名称服务器地址、消费类型、启动时间戳等
+
+        返回的运行信息包含：
+        - 所有订阅的主题数据
+        - 每个消息队列的处理队列信息(缓存消息数量、偏移量、锁状态等)
+        - 每个主题的消费统计信息(拉取TPS、消费TPS、失败统计等)
+        - 消费者的基础配置信息(名称服务器地址、启动时间等)
+
+        注意:
+            - 该方法会访问异步偏移量存储来获取每个队列的提交偏移量
+            - 统计数据来自于统计管理器的实时计算
+            - 返回的信息可用于监控系统和故障诊断
+            - 该方法是异步的，不会阻塞消费者正常运行
+
+        Example:
+            >>> consumer = AsyncBaseConsumer(config)
+            >>> info = await consumer.get_consumer_info()
+            >>> print(f"订阅主题数: {len(info.subscription_data)}")
+            >>> print(f"处理队列数: {len(info.mq_table)}")
+            >>> for topic, status in info.status_table.items():
+            ...     print(f"主题 {topic} 消费TPS: {status.consume_ok_tps}")
+        """
+        running_info: ConsumerRunningInfo = ConsumerRunningInfo()
+
+        # 添加订阅信息
+        for sub in self._subscription_manager.get_all_subscriptions():
+            running_info.add_subscription(sub.subscription_data)
+            status = self._stats_manager.get_consume_status(
+                self._config.consumer_group, sub.topic
+            )
+            running_info.add_status(sub.topic, status)
+
+        # 异步添加队列信息
+        async with self._cache_lock:
+            for q, pq in self._msg_cache.items():
+                info: ProcessQueueInfo = await pq.current_info()
+                info.commit_offset = await self._offset_store.read_offset(
+                    q, ReadOffsetType.MEMORY_FIRST_THEN_STORE
+                )
+                running_info.add_queue_info(q, info)
+
+        # 添加属性信息
+        running_info.properties["PROP_NAMESERVER_ADDR"] = self._config.namesrv_addr
+        running_info.properties["PROP_CONSUME_TYPE"] = "CONSUME_PASSIVELY"
+        running_info.properties["PROP_THREADPOOL_CORE_SIZE"] = "-1"
+        running_info.properties["PROP_CONSUMER_START_TIMESTAMP"] = str(
+            int(self._start_time)
+        )
+
+        return running_info
 
     # ==================== 7. 资源清理和工具模块 ====================
     #

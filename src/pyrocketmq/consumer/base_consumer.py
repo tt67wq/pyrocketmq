@@ -24,7 +24,7 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateQueueStrategyFactory,
 )
 from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManager
-from pyrocketmq.consumer.offset_store import OffsetStore
+from pyrocketmq.consumer.offset_store import OffsetStore, ReadOffsetType
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.process_queue import ProcessQueue
 from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
@@ -40,7 +40,7 @@ from pyrocketmq.model import (
     MessageProperty,
     MessageQueue,
     MessageSelector,
-    RemotingCommand,
+    ProcessQueueInfo,
 )
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 from pyrocketmq.remote import ConnectionPool, RemoteConfig
@@ -190,6 +190,9 @@ class BaseConsumer:
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
         self._heartbeat_event: threading.Event = threading.Event()  # 用于心跳循环的事件
+
+        # 启动时间
+        self._start_time: float = time.time()
 
         logger.info(
             "Initializing BaseConsumer",
@@ -1190,9 +1193,38 @@ class BaseConsumer:
             self._config.consumer_group, topic
         )
 
-    def _on_notify_get_consumer_info(
-        self, command: RemotingCommand, _addr: tuple[str, int]
-    ) -> RemotingCommand:
+    def get_consumer_info(self) -> ConsumerRunningInfo:
+        """获取消费者运行信息
+
+        收集并返回当前消费者的详细运行状态信息，包括订阅信息、队列处理状态、
+        消费统计数据和配置属性等。该信息对于监控消费者健康状况和调试问题非常有用。
+
+        Returns:
+            ConsumerRunningInfo: 包含以下信息的消费者运行状态对象：
+                - subscription_data: 订阅数据，包含所有订阅的主题和标签过滤信息
+                - mq_table: 消息队列处理信息表，包含每个队列的处理状态、缓存信息、提交偏移量等
+                - status_table: 消费状态表，包含每个主题的拉取和消费统计数据(TPS、响应时间等)
+                - properties: 消费者属性配置，包含名称服务器地址、消费类型、启动时间戳等
+
+        返回的运行信息包含：
+        - 所有订阅的主题数据
+        - 每个消息队列的处理队列信息(缓存消息数量、偏移量、锁状态等)
+        - 每个主题的消费统计信息(拉取TPS、消费TPS、失败统计等)
+        - 消费者的基础配置信息(名称服务器地址、启动时间等)
+
+        注意:
+            - 该方法会访问偏移量存储来获取每个队列的提交偏移量
+            - 统计数据来自于统计管理器的实时计算
+            - 返回的信息可用于监控系统和故障诊断
+
+        Example:
+            >>> consumer = BaseConsumer(config)
+            >>> info = consumer.get_consumer_info()
+            >>> print(f"订阅主题数: {len(info.subscription_data)}")
+            >>> print(f"处理队列数: {len(info.mq_table)}")
+            >>> for topic, status in info.status_table.items():
+            ...     print(f"主题 {topic} 消费TPS: {status.consume_ok_tps}")
+        """
         running_info: ConsumerRunningInfo = ConsumerRunningInfo()
         for sub in self._subscription_manager.get_all_subscriptions():
             running_info.add_subscription(sub.subscription_data)
@@ -1201,7 +1233,21 @@ class BaseConsumer:
             )
             running_info.add_status(sub.topic, status)
 
-        return RemotingCommand(0)
+        for q, pq in self._msg_cache.items():
+            info: ProcessQueueInfo = pq.current_info()
+            info.commit_offset = self._offset_store.read_offset(
+                q, ReadOffsetType.MEMORY_FIRST_THEN_STORE
+            )
+            running_info.add_queue_info(q, info)
+
+        running_info.properties["PROP_NAMESERVER_ADDR"] = self._config.namesrv_addr
+        running_info.properties["PROP_CONSUME_TYPE"] = "CONSUME_PASSIVELY"
+        running_info.properties["PROP_THREADPOOL_CORE_SIZE"] = "-1"
+        running_info.properties["PROP_CONSUMER_START_TIMESTAMP"] = str(
+            int(self._start_time)
+        )
+
+        return running_info
 
     # ==============================================================================
     # 5. 路由信息管理模块
