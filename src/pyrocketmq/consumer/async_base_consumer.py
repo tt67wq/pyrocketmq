@@ -21,11 +21,25 @@ from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateQueueStrategyBase,
     AllocateQueueStrategyFactory,
 )
-from pyrocketmq.consumer.async_listener import AsyncConsumeContext
+from pyrocketmq.consumer.async_consume_from_where_manager import (
+    AsyncConsumeFromWhereManager,
+)
+from pyrocketmq.consumer.async_listener import AsyncConsumeContext, AsyncMessageListener
 from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
 from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue
+
+# 本地模块导入
+from pyrocketmq.consumer.config import ConsumerConfig
+from pyrocketmq.consumer.errors import (
+    ConsumerError,
+    InvalidConsumeResultError,
+    SubscribeError,
+    UnsubscribeError,
+)
 from pyrocketmq.consumer.offset_store import ReadOffsetType
+from pyrocketmq.consumer.stats_manager import StatsManager
+from pyrocketmq.consumer.subscription_manager import AsyncSubscriptionManager
 from pyrocketmq.consumer.topic_broker_mapping import AsyncConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
@@ -48,20 +62,6 @@ from pyrocketmq.nameserver.async_manager import (
 )
 from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.config import RemoteConfig
-
-from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
-from .async_listener import AsyncMessageListener
-
-# 本地模块导入
-from .config import ConsumerConfig
-from .errors import (
-    ConsumerError,
-    InvalidConsumeResultError,
-    SubscribeError,
-    UnsubscribeError,
-)
-from .stats_manager import StatsManager
-from .subscription_manager import AsyncSubscriptionManager
 
 logger = get_logger(__name__)
 
