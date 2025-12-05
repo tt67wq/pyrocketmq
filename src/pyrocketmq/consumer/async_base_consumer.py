@@ -26,7 +26,7 @@ from pyrocketmq.consumer.async_offset_store import AsyncOffsetStore
 from pyrocketmq.consumer.async_offset_store_factory import AsyncOffsetStoreFactory
 from pyrocketmq.consumer.async_process_queue import AsyncProcessQueue
 from pyrocketmq.consumer.offset_store import ReadOffsetType
-from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
+from pyrocketmq.consumer.topic_broker_mapping import AsyncConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
@@ -258,8 +258,8 @@ class AsyncBaseConsumer:
     def _initialize_routing_and_stats(self) -> None:
         """初始化路由映射和统计信息"""
         # 路由映射
-        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
-            ConsumerTopicBrokerMapping()
+        self._topic_broker_mapping: AsyncConsumerTopicBrokerMapping = (
+            AsyncConsumerTopicBrokerMapping()
         )
 
         # 统计管理器
@@ -1122,14 +1122,14 @@ class AsyncBaseConsumer:
 
                 # 执行路由刷新
                 await self._refresh_all_routes()
-                self._topic_broker_mapping.clear_expired_routes()
+                await self._topic_broker_mapping.aclear_expired_routes()
 
                 self._logger.debug(
                     "Async route refresh completed",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "topics_count": (
-                            len(self._topic_broker_mapping.get_all_topics())
+                            len(await self._topic_broker_mapping.aget_all_topics())
                         ),
                     },
                 )
@@ -1164,12 +1164,12 @@ class AsyncBaseConsumer:
         topics: set[str] = set()
 
         # 收集所有需要刷新路由的Topic
-        topics.update(self._topic_broker_mapping.get_all_topics())
+        topics.update(await self._topic_broker_mapping.aget_all_topics())
         topics.update(await self._subscription_manager.aget_topics())
 
         for topic in topics:
             try:
-                if self._topic_broker_mapping.get_route_info(topic) is None:
+                if await self._topic_broker_mapping.aget_route_info(topic) is None:
                     _ = await self._update_route_info(topic)
             except Exception as e:
                 self._logger.debug(
@@ -1196,7 +1196,9 @@ class AsyncBaseConsumer:
                 return False
 
             # 更新TopicBrokerMapping中的路由信息
-            _ = self._topic_broker_mapping.update_route_info(topic, topic_route_data)
+            _ = await self._topic_broker_mapping.aupdate_route_info(
+                topic, topic_route_data
+            )
 
             return True
 
@@ -1395,7 +1397,7 @@ class AsyncBaseConsumer:
 
         # 获取所有Topic：缓存的Topic + 订阅的Topic
         all_topics: set[str] = set()
-        all_topics = self._topic_broker_mapping.get_all_topics().union(
+        all_topics = (await self._topic_broker_mapping.aget_all_topics()).union(
             await self._subscription_manager.aget_topics()
         )
 
@@ -1405,9 +1407,9 @@ class AsyncBaseConsumer:
 
         for topic in all_topics:
             # 使用TopicBrokerMapping获取可用的Broker
-            brokers: list[BrokerData] = (
-                self._topic_broker_mapping.get_available_brokers(topic)
-            )
+            brokers: list[
+                BrokerData
+            ] = await self._topic_broker_mapping.aget_available_brokers(topic)
             for broker_data in brokers:
                 # 获取主从地址
                 if broker_data.broker_addresses:

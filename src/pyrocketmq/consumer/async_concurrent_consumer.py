@@ -540,9 +540,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
         )
 
         # 检查订阅信息
-        sub: SubscriptionEntry | None = self._subscription_manager.get_subscription(
-            message_queue.topic
-        )
+        sub: (
+            SubscriptionEntry | None
+        ) = await self._subscription_manager.aget_subscription(message_queue.topic)
         if sub is None:
             # 如果没有订阅信息，则停止消费
             return None
@@ -844,7 +844,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             Exception: 路由信息更新或队列分配失败时抛出异常
         """
         allocated_queues: set[MessageQueue] = set()
-        topics = self._subscription_manager.get_topics()
+        topics: set[str] = await self._subscription_manager.aget_topics()
 
         for topic in topics:
             try:
@@ -854,7 +854,10 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 获取Topic的所有可用队列
                 all_queues: list[MessageQueue] = [
                     x
-                    for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)
+                    for (
+                        x,
+                        _,
+                    ) in await self._topic_broker_mapping.aget_subscribe_queues(topic)
                 ]
 
                 if not all_queues:
@@ -899,7 +902,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             None: 此方法不会抛出异常
         """
         # 获取所有订阅主题
-        topic_set = set(self._subscription_manager.get_topics())
+        topic_set: set[str] = await self._subscription_manager.aget_topics()
 
         logger.info(
             "Rebalance completed",
@@ -978,7 +981,7 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             None: 此方法不会抛出异常
         """
         # 首先检查是否有订阅的Topic，避免不必要的锁获取
-        topics: set[str] = set(self._subscription_manager.get_topics())
+        topics: set[str] = await self._subscription_manager.aget_topics()
         if not topics:
             logger.debug("No topics subscribed, skipping rebalance")
             return False
