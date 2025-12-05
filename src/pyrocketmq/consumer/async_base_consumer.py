@@ -61,7 +61,7 @@ from .errors import (
     UnsubscribeError,
 )
 from .stats_manager import StatsManager
-from .subscription_manager import SubscriptionManager
+from .subscription_manager import AsyncSubscriptionManager
 
 logger = get_logger(__name__)
 
@@ -152,7 +152,9 @@ class AsyncBaseConsumer:
         """
         # 基础配置和状态初始化
         self._config: ConsumerConfig = config
-        self._subscription_manager: SubscriptionManager = SubscriptionManager()
+        self._subscription_manager: AsyncSubscriptionManager = (
+            AsyncSubscriptionManager()
+        )
         self._message_listeners: dict[str, AsyncMessageListener] = {}
         self._is_running: bool = False
         self._lock: asyncio.Lock = asyncio.Lock()
@@ -316,7 +318,7 @@ class AsyncBaseConsumer:
 
             # 订阅重试主题（集群模式）
             if self._config.message_model == MessageModel.CLUSTERING:
-                self._subscribe_retry_topic()
+                await self._subscribe_retry_topic()
 
         except Exception as e:
             self._logger.error(
@@ -364,9 +366,8 @@ class AsyncBaseConsumer:
 
     def __str__(self) -> str:
         """字符串表示"""
-        subscription_count: int = len(
-            self._subscription_manager.get_all_subscriptions()
-        )
+        # 由于 __str__ 不能是 async 方法，我们使用一个估计值
+        subscription_count: int = len(self._message_listeners)
         return (
             f"AsyncBaseConsumer["
             f"group={self._config.consumer_group}, "
@@ -429,7 +430,7 @@ class AsyncBaseConsumer:
         try:
             async with self._lock:
                 # 验证订阅参数
-                if not self._subscription_manager.validate_subscription(
+                if not await self._subscription_manager.avalidate_subscription(
                     topic, selector
                 ):
                     raise SubscribeError(
@@ -437,7 +438,9 @@ class AsyncBaseConsumer:
                     )
 
                 # 订阅Topic
-                success: bool = self._subscription_manager.subscribe(topic, selector)
+                success: bool = await self._subscription_manager.asubscribe(
+                    topic, selector
+                )
                 if not success:
                     raise SubscribeError(topic, f"订阅失败: topic={topic}")
 
@@ -488,7 +491,7 @@ class AsyncBaseConsumer:
         try:
             async with self._lock:
                 # 取消订阅Topic
-                success: bool = self._subscription_manager.unsubscribe(topic)
+                success: bool = await self._subscription_manager.aunsubscribe(topic)
 
                 # 同时移除对应的监听器
                 removed_listener = self._message_listeners.pop(topic, None)
@@ -526,7 +529,7 @@ class AsyncBaseConsumer:
         Raises:
             ConsumerError: 获取失败时抛出
         """
-        return self._subscription_manager.get_topics()
+        return await self._subscription_manager.aget_topics()
 
     async def is_subscribed(self, topic: str) -> bool:
         """
@@ -538,7 +541,7 @@ class AsyncBaseConsumer:
         Returns:
             如果已订阅返回True，否则返回False
         """
-        return self._subscription_manager.is_subscribed(topic)
+        return await self._subscription_manager.ais_subscribed(topic)
 
     def _get_retry_topic(self) -> str:
         """
@@ -571,7 +574,7 @@ class AsyncBaseConsumer:
         retry_topic_prefix = f"%RETRY%{self._config.consumer_group}"
         return topic == retry_topic_prefix
 
-    def _subscribe_retry_topic(self) -> None:
+    async def _subscribe_retry_topic(self) -> None:
         """
         订阅重试主题。
 
@@ -596,9 +599,11 @@ class AsyncBaseConsumer:
             retry_selector = create_tag_selector("*")
 
             # 检查是否已经订阅了重试主题，避免重复订阅
-            is_subscribed: bool = self._subscription_manager.is_subscribed(retry_topic)
+            is_subscribed: bool = await self._subscription_manager.ais_subscribed(
+                retry_topic
+            )
             if not is_subscribed:
-                success = self._subscription_manager.subscribe(
+                success = await self._subscription_manager.asubscribe(
                     retry_topic, retry_selector
                 )
 
@@ -1160,7 +1165,7 @@ class AsyncBaseConsumer:
 
         # 收集所有需要刷新路由的Topic
         topics.update(self._topic_broker_mapping.get_all_topics())
-        topics.update(self._subscription_manager.get_topics())
+        topics.update(await self._subscription_manager.aget_topics())
 
         for topic in topics:
             try:
@@ -1353,7 +1358,7 @@ class AsyncBaseConsumer:
                 return
 
             # 构建心跳数据
-            heartbeat_data: HeartbeatData = self._build_heartbeat_data()
+            heartbeat_data: HeartbeatData = await self._build_heartbeat_data()
 
             # 向每个Broker发送心跳
             heartbeat_success_count: int = 0
@@ -1391,7 +1396,7 @@ class AsyncBaseConsumer:
         # 获取所有Topic：缓存的Topic + 订阅的Topic
         all_topics: set[str] = set()
         all_topics = self._topic_broker_mapping.get_all_topics().union(
-            self._subscription_manager.get_topics()
+            await self._subscription_manager.aget_topics()
         )
 
         if not all_topics:
@@ -1415,7 +1420,7 @@ class AsyncBaseConsumer:
 
         return broker_addrs
 
-    def _build_heartbeat_data(self) -> HeartbeatData:
+    async def _build_heartbeat_data(self) -> HeartbeatData:
         """构建心跳数据
 
         Returns:
@@ -1431,7 +1436,7 @@ class AsyncBaseConsumer:
                     consume_from_where=self._config.consume_from_where,
                     subscription_data=[
                         e.subscription_data
-                        for e in self._subscription_manager.get_all_subscriptions()
+                        for e in await self._subscription_manager.aget_all_subscriptions()
                     ],
                 )
             ],
@@ -1505,7 +1510,7 @@ class AsyncBaseConsumer:
         """
         return self._config
 
-    async def get_subscription_manager(self) -> SubscriptionManager:
+    async def get_subscription_manager(self) -> AsyncSubscriptionManager:
         """
         异步获取订阅管理器
 
@@ -1553,7 +1558,9 @@ class AsyncBaseConsumer:
         Returns:
             包含消费者状态信息的字典
         """
-        subscriptions: dict[str, Any] = self._subscription_manager.get_status_summary()
+        subscriptions: dict[
+            str, Any
+        ] = await self._subscription_manager.aget_status_summary()
 
         return {
             "consumer_group": self._config.consumer_group,
@@ -1639,7 +1646,7 @@ class AsyncBaseConsumer:
         running_info: ConsumerRunningInfo = ConsumerRunningInfo()
 
         # 添加订阅信息
-        for sub in self._subscription_manager.get_all_subscriptions():
+        for sub in await self._subscription_manager.aget_all_subscriptions():
             running_info.add_subscription(sub.subscription_data)
             status = self._stats_manager.get_consume_status(
                 self._config.consumer_group, sub.topic
@@ -1717,8 +1724,8 @@ class AsyncBaseConsumer:
             await self._offset_store.stop()
 
             # 清理订阅管理器
-            self._subscription_manager.cleanup_inactive_subscriptions()
-            self._subscription_manager.clear_all()
+            await self._subscription_manager.acleanup_inactive_subscriptions()
+            await self._subscription_manager.aclear_all()
 
             # 关闭Broker管理器
             await self._broker_manager.shutdown()
