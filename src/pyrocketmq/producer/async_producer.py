@@ -57,8 +57,8 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
-from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
+from pyrocketmq.producer.router import AsyncMessageRouter, RoutingStrategy
+from pyrocketmq.producer.topic_broker_mapping import AsyncTopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
@@ -114,12 +114,12 @@ class AsyncProducer:
         self._running: bool = False
 
         # 核心组件
-        self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping(
+        self._topic_mapping: AsyncTopicBrokerMapping = AsyncTopicBrokerMapping(
             route_timeout=self._config.route_timeout_seconds
         )
 
         # 消息路由器
-        self._message_router: MessageRouter = MessageRouter(
+        self._message_router: AsyncMessageRouter = AsyncMessageRouter(
             topic_mapping=self._topic_mapping,
             default_strategy=RoutingStrategy(self._config.routing_strategy),
         )
@@ -270,7 +270,8 @@ class AsyncProducer:
             validate_message(message, self._config.max_message_size)
 
             # 2. 更新路由信息
-            if message.topic not in self._topic_mapping.get_all_topics():
+            all_topics = await self._topic_mapping.aget_all_topics()
+            if message.topic not in all_topics:
                 updated: bool = await self.update_route_info(message.topic)
                 if not updated:
                     raise RouteNotFoundError(
@@ -278,7 +279,9 @@ class AsyncProducer:
                     )
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(message.topic, message)
+            routing_result = await self._message_router.aroute_message(
+                message.topic, message
+            )
             if not routing_result.success:
                 raise RouteNotFoundError(
                     f"Route not found for topic: {message.topic}, error: {routing_result.error}"
@@ -393,11 +396,12 @@ class AsyncProducer:
             )
 
             # 3. 更新路由信息
-            if batch_message.topic not in self._topic_mapping.get_all_topics():
+            all_topics = await self._topic_mapping.aget_all_topics()
+            if batch_message.topic not in all_topics:
                 _ = await self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
-            routing_result = self._message_router.route_message(
+            routing_result = await self._message_router.aroute_message(
                 batch_message.topic, batch_message
             )
             if not routing_result.success:
@@ -496,11 +500,14 @@ class AsyncProducer:
             validate_message(message, self._config.max_message_size)
 
             # 2. 更新路由信息
-            if message.topic not in self._topic_mapping.get_all_topics():
+            all_topics = await self._topic_mapping.aget_all_topics()
+            if message.topic not in all_topics:
                 _ = await self.update_route_info(message.topic)
 
             # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(message.topic, message)
+            routing_result = await self._message_router.aroute_message(
+                message.topic, message
+            )
             if not routing_result.success:
                 raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
 
@@ -612,11 +619,12 @@ class AsyncProducer:
             )
 
             # 3. 更新路由信息
-            if batch_message.topic not in self._topic_mapping.get_all_topics():
+            all_topics = await self._topic_mapping.aget_all_topics()
+            if batch_message.topic not in all_topics:
                 _ = await self.update_route_info(batch_message.topic)
 
             # 4. 获取队列和Broker
-            routing_result = self._message_router.route_message(
+            routing_result = await self._message_router.aroute_message(
                 batch_message.topic, batch_message
             )
             if not routing_result.success:
@@ -732,7 +740,7 @@ class AsyncProducer:
                         extra={"loop_count": loop_count},
                     )
                     await self._refresh_all_routes()
-                    _ = self._topic_mapping.clear_expired_routes()
+                    _ = await self._topic_mapping.aclear_expired_routes()
                     last_route_refresh_time = current_time
 
                 # 检查是否需要发送心跳
@@ -754,7 +762,7 @@ class AsyncProducer:
 
                 # 每10次循环记录一次状态
                 if loop_count % 10 == 0:
-                    topics: list[str] = list(self._topic_mapping.get_all_topics())
+                    topics = await self._topic_mapping.aget_all_topics()
                     logger.debug(
                         "Async background task active",
                         extra={
@@ -778,7 +786,7 @@ class AsyncProducer:
 
     async def _refresh_all_routes(self) -> None:
         """异步刷新所有Topic的路由信息"""
-        topics = list(self._topic_mapping.get_all_topics())
+        topics = await self._topic_mapping.aget_all_topics()
 
         for topic in topics:
             try:
@@ -930,10 +938,10 @@ class AsyncProducer:
         try:
             # 获取所有已知的Broker地址
             broker_addrs: set[str] = set()
-            all_topics: set[str] = self._topic_mapping.get_all_topics()
+            all_topics = await self._topic_mapping.aget_all_topics()
 
             for topic in all_topics:
-                route_info = self._topic_mapping.get_route_info(topic)
+                route_info = await self._topic_mapping.aget_route_info(topic)
                 if route_info:
                     for broker_data in route_info.broker_data_list:
                         # 获取主从地址
@@ -1012,8 +1020,8 @@ class AsyncProducer:
 
         await self._nameserver_manager.stop()
 
-    def get_stats(self) -> dict[str, str | int | bool | None]:
-        """获取Producer统计信息
+    async def aget_stats(self) -> dict[str, str | int | bool | None]:
+        """异步获取Producer统计信息
 
         Returns:
             dict: 统计信息
@@ -1024,6 +1032,8 @@ class AsyncProducer:
             else 0.0
         )
 
+        all_topics = await self._topic_mapping.aget_all_topics()
+
         return {
             "running": self._running,
             "producer_group": self._config.producer_group,
@@ -1031,7 +1041,30 @@ class AsyncProducer:
             "total_sent": self._total_sent,
             "total_failed": self._total_failed,
             "success_rate": f"{success_rate:.2%}",
-            "cached_topics": len(self._topic_mapping.get_all_topics()),
+            "cached_topics": len(all_topics),
+        }
+
+    def get_stats(self) -> dict[str, str | int | bool | None]:
+        """获取Producer统计信息（同步版本，用于兼容性）
+
+        Returns:
+            dict: 统计信息
+        """
+        success_rate: float = (
+            self._total_sent / (self._total_sent + self._total_failed)
+            if (self._total_sent + self._total_failed) > 0
+            else 0.0
+        )
+
+        # 注意：这个同步方法只能获取基本信息，无法获取异步缓存的topics数量
+        return {
+            "running": self._running,
+            "producer_group": self._config.producer_group,
+            "client_id": self._config.client_id,
+            "total_sent": self._total_sent,
+            "total_failed": self._total_failed,
+            "success_rate": f"{success_rate:.2%}",
+            "cached_topics": "N/A (use aget_stats for async info)",
         }
 
     async def update_route_info(self, topic: str) -> bool:
@@ -1074,7 +1107,9 @@ class AsyncProducer:
                     broker_data.broker_name,
                 )
         # 更新本地缓存
-        success: bool = self._topic_mapping.update_route_info(topic, topic_route_data)
+        success: bool = await self._topic_mapping.aupdate_route_info(
+            topic, topic_route_data
+        )
 
         if success:
             logger.info(
@@ -1092,7 +1127,7 @@ class AsyncProducer:
             )
 
         # 如果所有NameServer都失败，强制刷新缓存
-        return self._topic_mapping.force_refresh(topic)
+        return await self._topic_mapping.aforce_refresh(topic)
 
     def is_running(self) -> bool:
         """检查Producer是否正在运行
