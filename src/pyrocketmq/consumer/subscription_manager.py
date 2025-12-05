@@ -281,7 +281,10 @@ class SubscriptionManager:
             subscription_data_list: 订阅数据列表
         """
         with self._lock:
-            self.clear_all()
+            # 直接清除，避免死锁
+            self._subscriptions.clear()
+            pass  # MVP版本移除指标记录
+            self._update_metrics()
 
             for sub_data in subscription_data_list:
                 try:
@@ -334,7 +337,10 @@ class SubscriptionManager:
             data: 导入的订阅数据
         """
         with self._lock:
-            self.clear_all()
+            # 直接清除，避免死锁
+            self._subscriptions.clear()
+            pass  # MVP版本移除指标记录
+            self._update_metrics()
 
             # 导入订阅数据
             for sub_data in data.get("subscriptions", []):
@@ -870,7 +876,10 @@ class AsyncSubscriptionManager:
             subscription_data_list: 订阅数据列表
         """
         async with self._lock:
-            await self.aclear_all()
+            # 直接清除，避免死锁
+            self._subscriptions.clear()
+            pass  # MVP版本移除指标记录
+            await self._aupdate_metrics()
 
             for sub_data in subscription_data_list:
                 try:
@@ -923,7 +932,10 @@ class AsyncSubscriptionManager:
             data: 导入的订阅数据
         """
         async with self._lock:
-            await self.aclear_all()
+            # 直接清除，避免死锁
+            self._subscriptions.clear()
+            pass  # MVP版本移除指标记录
+            await self._aupdate_metrics()
 
             # 导入订阅数据
             for sub_data in data.get("subscriptions", []):
