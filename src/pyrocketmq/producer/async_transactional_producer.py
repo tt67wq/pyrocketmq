@@ -204,11 +204,11 @@ class AsyncTransactionProducer(AsyncProducer):
         validate_message(message, self._config.max_message_size)
 
         # 2. 更新路由信息
-        if message.topic not in self._topic_mapping.get_all_topics():
+        if message.topic not in await self._topic_mapping.aget_all_topics():
             _ = await self.update_route_info(message.topic)
 
         # 3. 获取路由结果
-        routing_result: RoutingResult = self._message_router.route_message(
+        routing_result: RoutingResult = await self._message_router.aroute_message(
             message.topic, message
         )
         if not routing_result.success:
