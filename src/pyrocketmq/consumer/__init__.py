@@ -43,17 +43,24 @@ store = await create_offset_store(
 ```
 """
 
-# ==================== 核心消费者类 ====================
-# ==================== 异步消费者工厂函数 ====================
+# 标准库导入 - 按字母排序
+# (当前文件中没有使用标准库中的特定类型)
 
+# 第三方库导入 - 按字母排序
+# (当前文件中没有第三方库导入)
+# 本地/项目内部模块导入 - 按模块路径排序
+# 核心消费者类
 from pyrocketmq.consumer.async_base_consumer import AsyncBaseConsumer
 from pyrocketmq.consumer.async_concurrent_consumer import AsyncConcurrentConsumer
 from pyrocketmq.consumer.async_listener import AsyncMessageListener
 from pyrocketmq.consumer.async_orderly_consumer import AsyncOrderlyConsumer
+from pyrocketmq.consumer.base_consumer import BaseConsumer
+from pyrocketmq.consumer.concurrent_consumer import ConcurrentConsumer
 from pyrocketmq.consumer.config import ConsumerConfig
+from pyrocketmq.consumer.orderly_consumer import OrderlyConsumer
 from pyrocketmq.logging import get_logger
 
-# ==================== 队列分配策略 ====================
+# 队列分配策略
 from .allocate_queue_strategy import (
     AllocateContext,
     AllocateQueueStrategyBase,
@@ -65,23 +72,14 @@ from .allocate_queue_strategy import (
 )
 from .async_consume_from_where_manager import AsyncConsumeFromWhereManager
 
-# ==================== Consumer便利工厂函数 ====================
-from .async_factory import (
-    create_and_start_async_orderly_consumer,
-    create_async_orderly_consumer,
-    create_async_orderly_consumer_fast,
-    create_async_orderly_consumer_light,
-    create_async_orderly_consumer_simple,
-    create_environment_based_async_orderly_consumer,
-    create_high_performance_async_orderly_consumer,
-    create_memory_optimized_async_orderly_consumer,
-    quick_start_async_orderly_consumer,
-)
+# 异步消息监听器
 from .async_listener import (
     AsyncConsumeContext,
     SimpleAsyncMessageListener,
     create_async_message_listener,
 )
+
+# 偏移量存储
 from .async_offset_store_factory import (
     AsyncOffsetStoreFactory,
 )
@@ -89,26 +87,15 @@ from .async_offset_store_factory import (
     create_offset_store as create_async_offset_store,
 )
 from .async_remote_offset_store import AsyncRemoteOffsetStore
-from .base_consumer import BaseConsumer
-from .concurrent_consumer import ConcurrentConsumer
 
-# ==================== 配置管理 ====================
+# 配置管理
 from .config import (
     create_config,
     create_consumer_config,
 )
-
-# ==================== 消费起始位置管理 ====================
 from .consume_from_where_manager import ConsumeFromWhereManager
-from .consumer_factory import (
-    create_async_concurrent_consumer,
-    create_async_consumer,  # 向后兼容
-    create_concurrent_consumer,
-    create_consumer,
-    create_orderly_consumer,
-)
 
-# ==================== 异常类 ====================
+# 异常类 - 核心异常
 from .errors import (
     BrokerNotAvailableError,
     ConfigError,
@@ -134,7 +121,41 @@ from .errors import (
     create_timeout_error,
 )
 
-# ==================== 消息监听器 ====================
+# 工厂函数
+from .factory import (
+    # 便利启动函数
+    create_and_start_async_consumer,
+    create_and_start_async_orderly_consumer,
+    # 异步消费者
+    create_async_concurrent_consumer,
+    create_async_consumer_deprecated,
+    create_async_consumer_fast,
+    create_async_consumer_light,
+    # 便利别名
+    create_async_consumer_simple,
+    create_async_orderly_consumer,
+    create_async_orderly_consumer_fast,
+    create_async_orderly_consumer_light,
+    create_async_orderly_consumer_simple,
+    create_async_orderly_consumer_with_subscription,
+    create_concurrent_consumer,
+    # 同步消费者
+    create_consumer,
+    # 环境相关函数
+    create_environment_based_async_consumer,
+    create_environment_based_async_orderly_consumer,
+    # 高性能消费者
+    create_high_performance_async_consumer,
+    create_high_performance_async_orderly_consumer,
+    # 内存优化消费者
+    create_memory_optimized_async_consumer,
+    create_memory_optimized_async_orderly_consumer,
+    create_orderly_consumer,
+    quick_start_async_consumer,
+    quick_start_async_orderly_consumer,
+)
+
+# 消息监听器
 from .listener import (
     ConsumeContext,
     ConsumeResult,
@@ -143,8 +164,6 @@ from .listener import (
     create_message_listener,
 )
 from .local_offset_store import LocalOffsetStore
-
-# ==================== 偏移量存储 ====================
 from .offset_store import (
     OffsetEntry,
     OffsetStore,
@@ -155,8 +174,9 @@ from .offset_store_factory import (
     create_offset_store,
     validate_offset_store_config,
 )
-from .orderly_consumer import OrderlyConsumer
 from .remote_offset_store import RemoteOffsetStore
+
+# 异常类 - 订阅异常
 from .subscription_exceptions import (
     InvalidSelectorError,
     InvalidTopicError,
@@ -167,18 +187,21 @@ from .subscription_exceptions import (
     TopicNotSubscribedError,
 )
 
-# ==================== 订阅管理 ====================
+# 订阅管理
 from .subscription_manager import (
     SubscriptionConflict,
     SubscriptionEntry,
     SubscriptionManager,
 )
 
-# ==================== Topic-Broker映射 ====================
+# Topic-Broker映射
 from .topic_broker_mapping import (
     ConsumerTopicBrokerMapping,
     TopicBrokerMapping,  # 别名
 )
+
+# 向后兼容别名
+create_async_consumer = create_async_consumer_deprecated
 
 logger = get_logger(__name__)
 
@@ -199,18 +222,33 @@ __all__ = [
     # Consumer便利工厂函数
     "create_consumer",
     "create_concurrent_consumer",
+    "create_orderly_consumer",
+    # 异步消费者
     "create_async_concurrent_consumer",
     "create_async_consumer",  # 向后兼容
+    "create_async_consumer_deprecated",
     "create_async_orderly_consumer",
-    "create_orderly_consumer",
-    # 异步顺序消费者工厂函数
+    "create_async_orderly_consumer_with_subscription",
+    # 高性能消费者
+    "create_high_performance_async_consumer",
+    "create_high_performance_async_orderly_consumer",
+    # 内存优化消费者
+    "create_memory_optimized_async_consumer",
+    "create_memory_optimized_async_orderly_consumer",
+    # 便利启动函数
+    "create_and_start_async_consumer",
+    "create_and_start_async_orderly_consumer",
+    # 环境相关函数
+    "create_environment_based_async_consumer",
+    "create_environment_based_async_orderly_consumer",
+    # 便利别名
+    "create_async_consumer_simple",
+    "create_async_consumer_fast",
+    "create_async_consumer_light",
+    "quick_start_async_consumer",
     "create_async_orderly_consumer_simple",
     "create_async_orderly_consumer_fast",
     "create_async_orderly_consumer_light",
-    "create_high_performance_async_orderly_consumer",
-    "create_memory_optimized_async_orderly_consumer",
-    "create_and_start_async_orderly_consumer",
-    "create_environment_based_async_orderly_consumer",
     "quick_start_async_orderly_consumer",
     # 偏移量存储
     "OffsetStore",
