@@ -415,7 +415,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         await self._rebalance_lock.acquire()
 
         # 检查是否有订阅的Topic
-        topics: set[str] = self._subscription_manager.get_topics()
+        topics: set[str] = await self._subscription_manager.aget_topics()
         if not topics:
             self.logger.debug("No topics subscribed, skipping rebalance")
             self._rebalance_lock.release()
@@ -436,7 +436,7 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
             Exception: 路由信息更新或队列分配失败时抛出异常
         """
         allocated_queues: list[MessageQueue] = []
-        topics = self._subscription_manager.get_topics()
+        topics: set[str] = await self._subscription_manager.aget_topics()
 
         for topic in topics:
             try:
@@ -446,7 +446,10 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 # 获取Topic的所有可用队列
                 all_queues: list[MessageQueue] = [
                     x
-                    for (x, _) in self._topic_broker_mapping.get_subscribe_queues(topic)
+                    for (
+                        x,
+                        _,
+                    ) in await self._topic_broker_mapping.aget_subscribe_queues(topic)
                 ]
 
                 if not all_queues:
@@ -658,7 +661,8 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
             # 完成重平衡处理
             await self._finalize_rebalance(
-                len(self._subscription_manager.get_topics()), len(allocated_queues)
+                len(await self._subscription_manager.aget_topics()),
+                len(allocated_queues),
             )
 
         except Exception as e:
@@ -1231,9 +1235,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
         )
 
         # 检查订阅信息
-        sub: SubscriptionEntry | None = self._subscription_manager.get_subscription(
-            message_queue.topic
-        )
+        sub: (
+            SubscriptionEntry | None
+        ) = await self._subscription_manager.aget_subscription(message_queue.topic)
         if sub is None:
             # 如果没有订阅信息，则停止消费
             return None
