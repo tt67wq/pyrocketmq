@@ -714,6 +714,41 @@ class ConcurrentConsumer(BaseConsumer):
     def _on_notify_consumer_ids_changed(
         self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]
     ) -> None:
+        """
+        处理消费者ID变更通知。
+
+        当消费者组中有消费者加入或退出时，Broker会向所有消费者发送此通知。
+        该方法接收通知并触发重平衡操作，以重新分配队列。
+
+        Args:
+            _remoting_cmd (RemotingCommand): 通知命令对象
+                - 参数名使用下划线前缀表示该参数在当前实现中未被使用
+            _remote_addr (tuple[str, int]): 通知来源地址（IP地址和端口）
+                - 参数名使用下划线前缀表示该参数在当前实现中未被使用
+
+        Returns:
+            None
+
+        处理流程：
+            1. 记录接收通知的日志
+            2. 调用_do_rebalance()触发重平衡
+
+        触发场景：
+            1. 新消费者加入消费者组
+            2. 消费者异常退出或正常关闭
+            3. Broker检测到消费者心跳超时
+            4. 网络分区导致消费者状态变化
+
+        重平衡效果：
+            - 重新分配队列给存活的消费者
+            - 确保每个队列只被一个消费者消费
+            - 保证负载均衡
+
+        Note:
+            - 该方法由Netty的I/O线程调用，应该快速返回
+            - 实际的重平衡操作在后台线程中执行
+            - 频繁的重平衡可能影响消费性能
+        """
         logger.info("Received notification of consumer IDs changed")
         self._do_rebalance()
 
@@ -1927,14 +1962,61 @@ class ConcurrentConsumer(BaseConsumer):
 
     # ==================== 远程通信模块 ====================
     """
-    远程通信模块处理与Broker的远程通信和请求处理。
-    包括直接消费请求、消费者ID变更通知等。
-    主要方法:
-    - _prepare_consumer_remote(): 准备消费者远程通信处理器
-    - _on_notify_consume_message_directly(): 处理直接消费请求
+    远程通信模块处理与Broker的双向通信，包括请求接收和响应处理。
+    该模块注册了多个请求处理器，用于处理Broker发送的各种控制命令和消费请求。
+
+    功能说明：
+    1. 接收并处理来自Broker的远程请求
+    2. 提供直接消费消息的调试接口
+    3. 响应消费者ID变更通知
+    4. 提供消费者运行信息查询接口
+
+    注册的请求处理器：
+    - NOTIFY_CONSUMER_IDS_CHANGED: 消费者组ID变更通知
+    - CONSUME_MESSAGE_DIRECTLY: 直接消费消息请求（调试用）
+    - GET_CONSUMER_RUNNING_INFO: 获取消费者运行信息请求
+
+    方法说明：
+    - _prepare_consumer_remote(): 注册所有远程请求处理器
+    - _on_notify_consumer_ids_changed(): 处理消费者ID变更通知
+    - _on_notify_consume_message_directly(): 处理直接消费请求的入口
+    - _on_notify_consume_message_directly_internal(): 实际处理直接消费请求
+    - _on_notify_get_consumer_running_info(): 处理运行信息查询（继承自基类）
+
+    使用场景：
+    1. 集群重平衡时接收Broker的消费者组变更通知
+    2. 运维工具通过直接消费接口调试消息处理逻辑
+    3. 监控系统查询消费者运行状态和统计信息
     """
 
     def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
+        """
+        注册消费者远程通信处理器。
+
+        该方法在与Broker建立连接池时被调用，用于注册所有需要处理的远程请求。
+        每个请求类型都有对应的处理方法，确保能够正确响应Broker的请求。
+
+        Args:
+            pool (ConnectionPool): 连接池，用于注册请求处理器
+
+        注册的请求类型：
+            1. NOTIFY_CONSUMER_IDS_CHANGED: 消费者组ID变更通知
+               - 触发重平衡操作
+               - 处理方法: _on_notify_consumer_ids_changed
+
+            2. CONSUME_MESSAGE_DIRECTLY: 直接消费消息请求
+               - 主要用于调试和测试
+               - 处理方法: _on_notify_consume_message_directly
+
+            3. GET_CONSUMER_RUNNING_INFO: 获取消费者运行信息
+               - 用于监控和诊断
+               - 处理方法: _on_notify_get_consumer_running_info（继承自基类）
+
+        Note:
+            - 这些处理器会在消费者与Broker建立连接时自动注册
+            - 处理器运行在Netty的I/O线程中，应该避免耗时操作
+            - 所有响应都通过RemotingCommand返回，保持协议一致性
+        """
         pool.register_request_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
             self._on_notify_consumer_ids_changed,
@@ -1943,10 +2025,50 @@ class ConcurrentConsumer(BaseConsumer):
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
         )
+        pool.register_request_processor(
+            RequestCode.GET_CONSUMER_RUNNING_INFO,
+            self._on_notify_get_consumer_running_info,
+        )
 
     def _on_notify_consume_message_directly(
         self, command: RemotingCommand, _addr: tuple[str, int]
     ) -> RemotingCommand:
+        """
+        处理直接消费消息请求的入口方法。
+
+        该方法是CONSUME_MESSAGE_DIRECTLY请求的处理入口，主要功能是：
+        1. 解码请求头，获取消费者客户端ID
+        2. 验证请求是否针对当前消费者实例
+        3. 路由到内部处理方法或返回错误响应
+
+        Args:
+            command (RemotingCommand): 包含直接消费请求的命令对象
+                - ext_fields: 包含ConsumeMessageDirectlyHeader的编码数据
+                - body: 包含要消费的消息数据
+            _addr (tuple[str, int]): 请求来源地址（IP地址和端口）
+                - 参数名使用下划线前缀表示该参数在当前实现中未被使用
+
+        Returns:
+            RemotingCommand: 包含消费结果的响应命令对象
+                - 成功时：返回SUCCESS状态码和消费结果
+                - 失败时：返回ERROR状态码和错误信息
+
+        处理流程：
+            1. 解码请求头获取客户端ID
+            2. 检查客户端ID是否匹配当前消费者
+            3. 如果匹配，调用内部处理方法
+            4. 如果不匹配，返回错误响应
+
+        使用场景：
+            - 运维工具调试消息处理逻辑
+            - 消息轨迹跟踪
+            - 问题排查和诊断
+
+        Note:
+            - 此接口主要用于调试，生产环境应谨慎使用
+            - 请求处理是同步的，可能影响其他消息的消费
+            - 需要确保client_id匹配以保证请求的安全性
+        """
         header: ConsumeMessageDirectlyHeader = ConsumeMessageDirectlyHeader.decode(
             command.ext_fields
         )
@@ -1962,6 +2084,54 @@ class ConcurrentConsumer(BaseConsumer):
     def _on_notify_consume_message_directly_internal(
         self, header: ConsumeMessageDirectlyHeader, command: RemotingCommand
     ) -> RemotingCommand:
+        """
+        内部方法：实际处理直接消费消息请求。
+
+        该方法负责：
+        1. 验证消息体的有效性
+        2. 解码消息并构建消息队列对象
+        3. 调用消费者的并发消费方法处理消息
+        4. 统计处理时间并返回详细结果
+
+        Args:
+            header (ConsumeMessageDirectlyHeader): 解码后的请求头
+                - broker_name: Broker名称
+                - 其他消费相关的元数据
+            command (RemotingCommand): 原始命令对象
+                - body: 包含要消费的消息的编码数据
+
+        Returns:
+            RemotingCommand: 包含详细消费结果的响应命令对象
+                - 成功时：返回SUCCESS状态码、消费结果统计和处理时间
+                - 失败时：返回ERROR状态码和具体的错误信息
+
+        处理流程：
+            1. 验证请求体是否存在（command.body）
+            2. 解码消息列表（MessageExt.decode_messages）
+            3. 构建MessageQueue对象，用于标识消息来源
+            4. 为每条消息重置重试属性（调用_reset_retry）
+            5. 调用并发消费方法处理消息（_concurrent_consume_message）
+            6. 构建ConsumeMessageDirectlyResult包含处理结果
+            7. 计算并记录处理耗时
+
+        返回结果包含：
+            - order: 是否顺序消费（并发消费始终为False）
+            - auto_commit: 是否自动提交偏移量（始终为True）
+            - consume_result: 消费结果（SUCCESS或失败状态）
+            - remark: 处理结果的文字描述
+            - spent_time_mills: 处理耗时（毫秒）
+
+        使用场景：
+            - 调试特定消息的处理逻辑
+            - 验证消息监听器的正确性
+            - 分析消息处理性能
+
+        Note:
+            - 该方法会实际调用注册的消息监听器
+            - 处理是同步的，可能阻塞I/O线程
+            - 消息会被正常处理，但不会影响正常的消费流程
+            - 用于调试时应该控制使用频率，避免影响正常消费
+        """
         if not command.body:
             return (
                 RemotingCommandBuilder(ResponseCode.ERROR)
