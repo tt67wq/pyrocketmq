@@ -201,6 +201,9 @@ class ConcurrentConsumer(BaseConsumer):
                     thread_name_prefix=f"pull-{self._config.consumer_group}",
                 )
 
+                # 准备消息处理器
+                self._prepare_processors()
+
                 self._do_rebalance()
 
                 # 启动重平衡任务
@@ -1453,7 +1456,6 @@ class ConcurrentConsumer(BaseConsumer):
             pool: ConnectionPool = self._broker_manager.must_connection_pool(
                 broker_address
             )
-            self._prepare_consumer_remote(pool)
             with pool.get_connection(usage="拉取消息") as conn:
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
@@ -1989,43 +1991,16 @@ class ConcurrentConsumer(BaseConsumer):
     3. 监控系统查询消费者运行状态和统计信息
     """
 
-    def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
-        """
-        注册消费者远程通信处理器。
-
-        该方法在与Broker建立连接池时被调用，用于注册所有需要处理的远程请求。
-        每个请求类型都有对应的处理方法，确保能够正确响应Broker的请求。
-
-        Args:
-            pool (ConnectionPool): 连接池，用于注册请求处理器
-
-        注册的请求类型：
-            1. NOTIFY_CONSUMER_IDS_CHANGED: 消费者组ID变更通知
-               - 触发重平衡操作
-               - 处理方法: _on_notify_consumer_ids_changed
-
-            2. CONSUME_MESSAGE_DIRECTLY: 直接消费消息请求
-               - 主要用于调试和测试
-               - 处理方法: _on_notify_consume_message_directly
-
-            3. GET_CONSUMER_RUNNING_INFO: 获取消费者运行信息
-               - 用于监控和诊断
-               - 处理方法: _on_notify_get_consumer_running_info（继承自基类）
-
-        Note:
-            - 这些处理器会在消费者与Broker建立连接时自动注册
-            - 处理器运行在Netty的I/O线程中，应该避免耗时操作
-            - 所有响应都通过RemotingCommand返回，保持协议一致性
-        """
-        pool.register_request_processor(
+    def _prepare_processors(self) -> None:
+        self._broker_manager.register_pool_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
             self._on_notify_consumer_ids_changed,
         )
-        pool.register_request_processor(
+        self._broker_manager.register_pool_processor(
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
         )
-        pool.register_request_processor(
+        self._broker_manager.register_pool_processor(
             RequestCode.GET_CONSUMER_RUNNING_INFO,
             self._on_notify_get_consumer_running_info,
         )

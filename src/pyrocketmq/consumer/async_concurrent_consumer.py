@@ -185,6 +185,9 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
                 # 启动AsyncBaseConsumer
                 await super().start()
 
+                # 准备消息处理器
+                await self._prepare_processor()
+
                 # 执行重平衡
                 await self._do_rebalance()
 
@@ -759,16 +762,6 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
             # 使用BrokerManager拉取消息
             pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
                 broker_address
-            )
-
-            # 注册异步请求处理器
-            await pool.register_request_processor(
-                RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
-                self._on_notify_consumer_ids_changed,
-            )
-            await pool.register_request_processor(
-                RequestCode.CONSUME_MESSAGE_DIRECTLY,
-                self._on_notify_consume_message_directly,
             )
 
             async with pool.get_connection(usage="pull_message") as conn:
@@ -1411,6 +1404,22 @@ class AsyncConcurrentConsumer(AsyncBaseConsumer):
     # 功能：处理来自Broker的各种通知和回调请求
     # 包含：消费者ID变更通知、直接消费消息通知等
     # 作用：实现与Broker的双向通信，响应各种控制指令和通知
+    #
+
+    async def _prepare_processor(self) -> None:
+        # 注册异步请求处理器
+        await self._broker_manager.register_pool_processor(
+            RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
+            self._on_notify_consumer_ids_changed,
+        )
+        await self._broker_manager.register_pool_processor(
+            RequestCode.CONSUME_MESSAGE_DIRECTLY,
+            self._on_notify_consume_message_directly,
+        )
+        await self._broker_manager.register_pool_processor(
+            RequestCode.GET_CONSUMER_RUNNING_INFO,
+            self._on_notify_get_consumer_running_info,
+        )
 
     async def _on_notify_consumer_ids_changed(
         self, _remoting_cmd: RemotingCommand, _remote_addr: tuple[str, int]

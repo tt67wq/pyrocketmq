@@ -153,6 +153,9 @@ class OrderlyConsumer(BaseConsumer):
                     thread_name_prefix=f"pull-{self._config.consumer_group}",
                 )
 
+                # 初始化处理器
+                self._prepare_processors()
+
                 self._do_rebalance()
 
                 # 启动重平衡任务
@@ -1316,7 +1319,6 @@ class OrderlyConsumer(BaseConsumer):
             pool: ConnectionPool = self._broker_manager.must_connection_pool(
                 broker_address
             )
-            self._prepare_consumer_remote(pool)
             with pool.get_connection(usage="拉取消息") as conn:
                 result: PullMessageResult = BrokerClient(conn).pull_message(
                     consumer_group=self._config.consumer_group,
@@ -2046,16 +2048,16 @@ class OrderlyConsumer(BaseConsumer):
 
     # ==================== 远程通信处理模块 ====================
 
-    def _prepare_consumer_remote(self, pool: ConnectionPool) -> None:
-        pool.register_request_processor(
+    def _prepare_processors(self) -> None:
+        self._broker_manager.register_pool_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
             self._on_notify_consumer_ids_changed,
         )
-        pool.register_request_processor(
+        self._broker_manager.register_pool_processor(
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
         )
-        pool.register_request_processor(
+        self._broker_manager.register_pool_processor(
             RequestCode.GET_CONSUMER_RUNNING_INFO,
             self._on_notify_get_consumer_running_info,
         )

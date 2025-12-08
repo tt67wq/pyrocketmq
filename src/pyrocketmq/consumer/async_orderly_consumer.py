@@ -222,6 +222,9 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
                 # 启动AsyncBaseConsumer
                 await super().start()
 
+                # 准备消息处理器
+                await self._prepare_processor()
+
                 # 执行初始重平衡
                 await self._do_rebalance()
 
@@ -2522,52 +2525,92 @@ class AsyncOrderlyConsumer(AsyncBaseConsumer):
 
     # ==================== 8. 远程通信处理模块 ====================
     #
-    # 该模块负责处理与RocketMQ Broker的远程通信，包括接收Broker的通知
-    # 和处理直接消费请求。这些通信是RocketMQ协调机制的重要组成部分。
+    # 该模块负责处理与RocketMQ Broker的远程通信，是消费者与Broker协调机制的重要组成部分。
+    # 通过异步网络通信处理Broker的各种管理请求和通知，确保消费者集群的正常运行。
     #
     # 核心功能：
-    # 1. 通知处理：处理Broker发送的各种管理通知
-    # 2. 直接消费：响应Broker的直接消费请求，用于消息验证和调试
-    # 3. 消费者协调：处理消费者组成员变更通知
-    # 4. 连接管理：注册和注销请求处理器
-    # 5. 错误处理：处理通信异常和格式错误
+    # 1. 请求处理器注册：在连接池中注册各类请求处理器，实现请求的路由分发
+    # 2. 通知处理：异步处理Broker发送的各种管理通知和状态变更
+    # 3. 直接消费：响应Broker的直接消费请求，用于消息验证、调试和轨迹跟踪
+    # 4. 消费者协调：处理消费者组成员变更通知，触发重平衡机制
+    # 5. 运行信息查询：提供消费者的运行状态信息给管理端
+    # 6. 错误处理：完善处理通信异常、格式错误和业务异常
+    # 7. 响应构建：标准化响应构建流程，确保协议兼容性
     #
     # 支持的请求类型：
-    # - NOTIFY_CONSUMER_IDS_CHANGED: 消费者组成员变更通知
-    # - CONSUME_MESSAGE_DIRECTLY: 直接消费消息请求
+    # - NOTIFY_CONSUMER_IDS_CHANGED (21): 消费者组成员变更通知
+    #   - 当消费者组内有成员加入或离开时，Broker会通知所有成员
+    #   - 触发重平衡流程，重新分配队列资源
+    # - CONSUME_MESSAGE_DIRECTLY (202): 直接消费消息请求
+    #   - 用于验证特定消息是否能被正确消费
+    #   - 支持管理控制台的消息诊断和轨迹跟踪功能
+    # - GET_CONSUMER_RUNNING_INFO (308): 获取消费者运行信息
+    #   - 查询消费者的内部状态、性能指标和配置信息
+    #   - 用于运维监控和问题诊断
+    #
+    # 通信架构：
+    # 1. 连接池层：使用AsyncConnectionPool管理TCP连接复用
+    # 2. 协议层：基于RocketMQ的RemotingCommand协议进行通信
+    # 3. 路由层：通过请求码(RequestCode)路由到对应的处理器
+    # 4. 编解码层：自动处理请求头和消息体的序列化/反序列化
+    # 5. 异步处理：所有请求处理都是异步的，不阻塞其他操作
     #
     # 通知处理流程：
-    # 1. 接收Broker发送的通知请求
-    # 2. 解析请求头和参数
-    # 3. 验证请求的合法性（如客户端ID匹配）
-    # 4. 执行相应的处理逻辑
-    # 5. 构造响应并返回
+    # 1. Broker发起TCP连接，发送RemotingCommand请求
+    # 2. 连接池接收请求，根据RequestCode路由到注册的处理器
+    # 3. 异步执行处理器函数，解析请求头和参数
+    # 4. 验证请求的合法性（如客户端ID匹配、Topic订阅状态等）
+    # 5. 执行相应的业务逻辑（如触发重平衡、执行消息消费等）
+    # 6. 构造标准化响应，包含状态码和可选的响应体
+    # 7. 返回响应给Broker
     #
     # 直接消费场景：
-    # - 消息轨迹跟踪：验证消息是否被正确消费
-    # - 问题诊断：检查特定消息的处理情况
-    # - 管理界面：支持管理控制台的消息验证功能
+    # - 消息轨迹跟踪：在管理控制台跟踪特定消息的消费路径和结果
+    # - 问题诊断：检查特定消息的处理情况，定位消费异常
+    # - 功能验证：验证新开发的消息处理器是否正常工作
+    # - 性能测试：测试特定消息的消费性能
+    # - 死信队列分析：分析消息进入死信队列的原因
+    #
+    # 性能优化：
+    # - 连接复用：复用TCP连接，减少连接建立开销
+    # - 异步处理：所有I/O操作都是非阻塞的，提高并发能力
+    # - 请求校验：快速校验请求有效性，避免无效处理
+    # - 异常隔离：单个请求处理异常不影响其他请求
+    # - 超时控制：合理的超时设置，避免资源长时间占用
+    #
+    # 错误处理策略：
+    # - 协议错误：返回ERROR状态码和详细错误信息
+    # - 业务异常：根据异常类型返回适当的响应码
+    # - 超时处理：合理设置处理超时，避免长时间阻塞
+    # - 资源保护：异常情况下自动释放占用的资源
+    # - 日志记录：详细记录异常信息，便于问题排查
     #
     # 相关函数：
-    # - _prepare_consumer_remote: 注册远程通信处理器
-    # - _on_notify_consume_message_directly: 处理直接消费通知
-    # - _on_notify_consume_message_directly_internal: 内部直接消费处理
+    # - _prepare_processor: 注册所有远程通信处理器到连接池
+    # - _on_notify_consume_message_directly: 处理直接消费通知的入口函数
+    # - _on_notify_consume_message_directly_internal: 执行直接消费的核心逻辑
     # - _on_notify_consumer_ids_changed: 处理消费者ID变更通知
-    # - _get_final_stats: 获取最终统计信息（包含通信统计）
+    # - _on_notify_get_consumer_running_info: 获取消费者运行信息的处理器
+    #
+    # 监控指标：
+    # - 请求处理次数：各类请求的处理计数
+    # - 平均响应时间：请求处理的平均耗时
+    # - 成功/失败率：请求处理的成功率和失败原因分布
+    # - 并发处理数：当前正在处理的请求数量
 
-    async def _prepare_consumer_remote(self, pool: AsyncConnectionPool) -> None:
-        """准备异步消费者远程通信处理器
-
-        Args:
-            pool: 异步连接池
-        """
-        await pool.register_request_processor(
+    async def _prepare_processor(self) -> None:
+        # 注册异步请求处理器
+        await self._broker_manager.register_pool_processor(
             RequestCode.NOTIFY_CONSUMER_IDS_CHANGED,
             self._on_notify_consumer_ids_changed,
         )
-        await pool.register_request_processor(
+        await self._broker_manager.register_pool_processor(
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
+        )
+        await self._broker_manager.register_pool_processor(
+            RequestCode.GET_CONSUMER_RUNNING_INFO,
+            self._on_notify_get_consumer_running_info,
         )
 
     async def _on_notify_consume_message_directly(
