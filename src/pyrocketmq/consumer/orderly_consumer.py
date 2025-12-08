@@ -2055,6 +2055,10 @@ class OrderlyConsumer(BaseConsumer):
             RequestCode.CONSUME_MESSAGE_DIRECTLY,
             self._on_notify_consume_message_directly,
         )
+        pool.register_request_processor(
+            RequestCode.GET_CONSUMER_RUNNING_INFO,
+            self._on_notify_get_consumer_running_info,
+        )
 
     def _on_notify_consume_message_directly(
         self, command: RemotingCommand, _addr: tuple[str, int]
