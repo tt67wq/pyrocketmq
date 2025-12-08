@@ -1,0 +1,352 @@
+{
+  "module_name": "broker",
+  "purpose": "提供与 RocketMQ Broker 通信的完整功能，包括消息发送、拉取、偏移量管理、心跳机制和连接池管理。支持同步和异步两种编程模式，为 Producer 和 Consumer 提供稳定高效的底层通信支持。",
+
+  "functions": [
+    {
+      "name": "BrokerManager",
+      "parameters": {
+        "remote_config": "RemoteConfig - 远程通信配置，包含连接池大小、超时时间等",
+        "transport_config": "TransportConfig | None - 传输层配置，可选"
+      },
+      "return_value": "BrokerManager实例",
+      "description": "同步版本的Broker连接管理器，负责管理与多个RocketMQ Broker的连接"
+    },
+    {
+      "name": "AsyncBrokerManager",
+      "parameters": {
+        "remote_config": "RemoteConfig - 远程通信配置",
+        "transport_config": "TransportConfig | None - 传输层配置，可选"
+      },
+      "return_value": "AsyncBrokerManager实例",
+      "description": "异步版本的Broker连接管理器，使用asyncio提供异步连接管理"
+    },
+    {
+      "name": "BrokerClient",
+      "parameters": {
+        "remote": "Remote - 同步远程通信实例",
+        "timeout": "float - 请求超时时间（秒），默认5.0"
+      },
+      "return_value": "BrokerClient实例",
+      "description": "同步Broker客户端，提供与Broker交互的基础功能"
+    },
+    {
+      "name": "AsyncBrokerClient",
+      "parameters": {
+        "remote": "AsyncRemote - 异步远程通信实例",
+        "timeout": "float - 请求超时时间（秒），默认5.0"
+      },
+      "return_value": "AsyncBrokerClient实例",
+      "description": "异步Broker客户端，使用异步方式与Broker通信"
+    },
+    {
+      "name": "BrokerManager.add_broker",
+      "parameters": {
+        "broker_addr": "str - Broker地址，格式为'host:port'",
+        "broker_name": "str | None - Broker名称，可选"
+      },
+      "return_value": "None",
+      "description": "添加Broker到管理器，创建对应的连接池"
+    },
+    {
+      "name": "BrokerManager.remove_broker",
+      "parameters": {
+        "broker_addr": "str - 要移除的Broker地址"
+      },
+      "return_value": "bool - 是否成功移除",
+      "description": "从管理器中移除Broker，关闭相关连接池"
+    },
+    {
+      "name": "BrokerManager.connection_pool",
+      "parameters": {
+        "broker_addr": "str - Broker地址"
+      },
+      "return_value": "ConnectionPool | None - 连接池对象",
+      "description": "获取指定Broker的连接池，如果不存在则创建"
+    },
+    {
+      "name": "BrokerManager.shutdown",
+      "parameters": {},
+      "return_value": "None",
+      "description": "关闭所有连接池，清理资源"
+    },
+    {
+      "name": "AsyncBrokerManager.add_broker",
+      "parameters": {
+        "broker_addr": "str - Broker地址",
+        "broker_name": "str | None - Broker名称，可选"
+      },
+      "return_value": "None",
+      "description": "异步添加Broker到管理器"
+    },
+    {
+      "name": "AsyncBrokerManager.remove_broker",
+      "parameters": {
+        "broker_addr": "str - Broker地址"
+      },
+      "return_value": "bool - 是否成功移除",
+      "description": "异步移除Broker"
+    },
+    {
+      "name": "BrokerClient.send_message",
+      "parameters": {
+        "msg": "Message - 要发送的消息",
+        "mq": "MessageQueue - 目标消息队列",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "SendMessageResult - 发送结果",
+      "description": "同步发送单条消息"
+    },
+    {
+      "name": "BrokerClient.send_message_async",
+      "parameters": {
+        "msg": "Message - 要发送的消息",
+        "mq": "MessageQueue - 目标消息队列",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "SendMessageResult - 发送结果",
+      "description": "异步发送单条消息（实际上是同步实现）"
+    },
+    {
+      "name": "BrokerClient.send_batch_message",
+      "parameters": {
+        "messages": "List[Message] - 消息列表",
+        "mq": "MessageQueue - 目标消息队列",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "SendMessageResult - 发送结果",
+      "description": "同步发送批量消息"
+    },
+    {
+      "name": "BrokerClient.send_message_oneway",
+      "parameters": {
+        "msg": "Message - 要发送的消息",
+        "mq": "MessageQueue - 目标消息队列",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "None",
+      "description": "单向发送消息，不等待响应"
+    },
+    {
+      "name": "AsyncBrokerClient.send_message",
+      "parameters": {
+        "msg": "Message - 要发送的消息",
+        "mq": "MessageQueue - 目标消息队列",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "SendMessageResult - 发送结果",
+      "description": "异步发送单条消息"
+    },
+    {
+      "name": "AsyncBrokerClient.pull_message",
+      "parameters": {
+        "mq": "MessageQueue - 消息队列",
+        "offset": "int - 起始偏移量",
+        "max_nums": "int - 最大消息数",
+        "sub_expression": "str - 订阅表达式",
+        "timeout": "float | None - 超时时间，可选"
+      },
+      "return_value": "PullMessageResult - 拉取结果",
+      "description": "异步拉取消息"
+    },
+    {
+      "name": "create_broker_client",
+      "parameters": {
+        "broker_addr": "str - Broker地址",
+        "remote_config": "RemoteConfig - 远程配置"
+      },
+      "return_value": "BrokerClient - Broker客户端实例",
+      "description": "便利函数，创建同步Broker客户端"
+    },
+    {
+      "name": "create_async_broker_client",
+      "parameters": {
+        "broker_addr": "str - Broker地址",
+        "remote_config": "RemoteConfig - 远程配置"
+      },
+      "return_value": "AsyncBrokerClient - 异步Broker客户端实例",
+      "description": "便利函数，创建异步Broker客户端"
+    }
+  ],
+
+  "dependencies": {
+    "internal": [
+      "pyrocketmq.model - 数据模型和工厂类",
+      "pyrocketmq.remote - 远程通信模块",
+      "pyrocketmq.transport - 传输层模块",
+      "pyrocketmq.logging - 日志模块",
+      "pyrocketmq.utils - 工具类（ReadWriteLock等）"
+    ],
+    "external": [
+      "threading - 线程同步（同步版本）",
+      "asyncio - 异步编程（异步版本）",
+      "time - 时间相关函数",
+      "uuid - UUID生成",
+      "json - JSON序列化",
+      "typing - 类型注解支持",
+      "dataclasses - 数据类装饰器"
+    ]
+  },
+
+  "call_flow": {
+    "sync_client_creation_flow": [
+      "1. 创建 RemoteConfig 配置对象",
+      "2. 创建 TransportConfig 传输配置（可选）",
+      "3. 实例化 BrokerManager",
+      "4. 调用 manager.add_broker() 添加Broker地址",
+      "5. 获取连接池：pool = manager.connection_pool(broker_addr)",
+      "6. 从连接池获取连接：with pool.get_connection() as conn",
+      "7. 创建 BrokerClient 实例",
+      "8. 调用 client.connect() 建立连接"
+    ],
+    "async_client_creation_flow": [
+      "1. 创建 RemoteConfig 配置对象",
+      "2. 创建 TransportConfig 传输配置（可选）",
+      "3. 实例化 AsyncBrokerManager",
+      "4. 调用 await manager.add_broker() 异步添加Broker",
+      "5. 获取连接池：pool = await manager.connection_pool(broker_addr)",
+      "6. 创建 AsyncBrokerClient 实例",
+      "7. 调用 await client.connect() 异步建立连接"
+    ],
+    "message_send_flow": {
+      "sync": [
+        "1. 验证消息和队列参数",
+        "2. 创建 SEND_MESSAGE 请求命令",
+        "3. 设置消息头信息（topic、队列、属性等）",
+        "4. 序列化消息体",
+        "5. 通过 remote.rpc() 发送请求",
+        "6. 等待响应并检查状态码",
+        "7. 解析响应为 SendMessageResult",
+        "8. 更新消息队列偏移量"
+      ],
+      "async": [
+        "1. 验证消息和队列参数",
+        "2. 创建 SEND_MESSAGE 请求命令",
+        "3. 设置消息头信息",
+        "4. 序列化消息体",
+        "5. 通过 await remote.rpc() 异步发送请求",
+        "6. 异步等待响应",
+        "7. 解析响应为 SendMessageResult"
+      ]
+    },
+    "message_pull_flow": [
+      "1. 验证拉取参数（队列、偏移量、数量）",
+      "2. 创建 PULL_MESSAGE 请求命令",
+      "3. 设置拉取头信息",
+      "4. 发送请求到Broker",
+      "5. 接收响应数据",
+      "6. 解析消息列表",
+      "7. 更新下次拉取偏移量",
+      "8. 返回 PullMessageResult"
+    ],
+    "connection_pool_management": [
+      "1. BrokerManager 使用字典存储连接池：_broker_pools",
+      "2. 首次访问时懒加载创建连接池",
+      "3. 连接池复用TCP连接，提高性能",
+      "4. 使用 ReadWriteLock 保证线程安全",
+      "5. shutdown() 时清理所有连接池"
+    ]
+  },
+
+  "error_handling": {
+    "strategy": "分层异常处理机制，包含网络异常、业务异常和系统异常的处理，支持错误码和详细错误信息",
+    "exceptions": {
+      "BrokerError": {
+        "description": "Broker基础异常类，包含错误码",
+        "base_class": "RemoteError",
+        "attributes": ["error_code"]
+      },
+      "BrokerConnectionError": {
+        "description": "连接错误，无法建立或维持与Broker的连接",
+        "attributes": ["broker_address"],
+        "handling": "记录地址信息，支持重试机制"
+      },
+      "BrokerTimeoutError": {
+        "description": "操作超时，网络延迟或Broker响应慢",
+        "attributes": ["timeout"],
+        "handling": "记录超时时间，可配置重试"
+      },
+      "BrokerResponseError": {
+        "description": "响应错误，Broker返回错误状态码",
+        "attributes": ["response_code"],
+        "handling": "解析响应码，包含错误详情"
+      },
+      "BrokerProtocolError": {
+        "description": "协议错误，响应格式不符合预期",
+        "handling": "记录协议详情，便于调试"
+      },
+      "AuthorizationError": {
+        "description": "授权异常，操作权限不足",
+        "attributes": ["operation", "resource"],
+        "handling": "记录操作和资源信息"
+      },
+      "BrokerBusyError": {
+        "description": "Broker繁忙，系统负载过高",
+        "attributes": ["broker_address"],
+        "handling": "记录繁忙的Broker地址"
+      },
+      "MessagePullError": {
+        "description": "消息拉取异常",
+        "attributes": ["topic", "queue_id", "pull_offset"],
+        "handling": "记录拉取上下文信息"
+      },
+      "OffsetError": {
+        "description": "偏移量异常，无效或超出范围",
+        "attributes": ["topic", "queue_id", "offset"],
+        "handling": "记录偏移量详细信息"
+      },
+      "BrokerSystemError": {
+        "description": "Broker系统异常，内部错误",
+        "attributes": ["error_code"],
+        "handling": "记录系统错误码"
+      }
+    },
+    "error_recovery": {
+      "connection_failure": {
+        "description": "连接失败时的处理",
+        "strategy": "自动重连，使用连接池管理",
+        "retry_policy": "指数退避，最大重试次数限制"
+      },
+      "timeout_handling": {
+        "description": "超时处理",
+        "strategy": "记录超时时间，向上抛出异常",
+        "user_action": "可调整超时配置"
+      },
+      "response_error": {
+        "description": "响应错误处理",
+        "strategy": "解析错误码和消息，包装后抛出",
+        "retry_logic": "根据错误类型决定是否重试"
+      }
+    },
+    "validation": {
+      "address_validation": {
+        "description": "Broker地址格式验证",
+        "checks": ["非空检查", "host:port格式检查", "端口范围检查"]
+      },
+      "message_validation": {
+        "description": "消息参数验证",
+        "checks": ["topic非空", "body大小限制", "队列ID有效性"]
+      },
+      "offset_validation": {
+        "description": "偏移量验证",
+        "checks": ["非负数", "范围合理性", "类型正确性"]
+      }
+    },
+    "logging": {
+      "structured_logging": {
+        "description": "结构化日志记录",
+        "fields": [
+          "client_id - 客户端标识",
+          "broker_address - Broker地址",
+          "operation_type - 操作类型",
+          "error_code - 错误代码",
+          "timestamp - 时间戳"
+        ]
+      },
+      "error_context": {
+        "description": "错误上下文信息",
+        "includes": ["请求/响应详情", "连接状态", "操作参数", "异常堆栈"]
+      }
+    }
+  }
+}

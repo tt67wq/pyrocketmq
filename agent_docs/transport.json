@@ -1,0 +1,309 @@
+{
+  "module_name": "transport",
+  "purpose": "提供网络传输层的核心功能，包括TCP连接管理、状态机控制、同步和异步通信接口。该模块负责建立和维护网络连接，处理数据的发送和接收，并提供连接状态的可靠管理。",
+
+  "functions": [
+    {
+      "name": "TransportConfig",
+      "parameters": {
+        "host": "str - 服务器主机地址，默认'localhost'",
+        "port": "int - 服务器端口，默认8080",
+        "timeout": "float - 操作超时时间（秒），默认30.0",
+        "connect_timeout": "float - 连接超时时间（秒），默认10.0",
+        "retry_interval": "float - 重连间隔（秒），默认5.0",
+        "max_retries": "int - 最大重试次数，-1表示无限重连，默认-1",
+        "buffer_size": "int - 缓冲区大小，默认8192",
+        "send_buffer_size": "int - 发送缓冲区大小，默认8192",
+        "receive_buffer_size": "int - 接收缓冲区大小，默认8192",
+        "keep_alive": "bool - 是否启用TCP保活，默认True",
+        "keep_alive_interval": "float - 保活探测间隔（秒），默认30.0",
+        "keep_alive_timeout": "float - 保活超时时间（秒），默认10.0",
+        "enable_nodelay": "bool - 是否启用TCP_NODELAY，默认True",
+        "enable_reuse_address": "bool - 是否启用地址重用，默认True",
+        "max_message_size": "int - 最大消息大小（字节），默认1MB",
+        "idle_timeout": "float | None - 空闲超时时间（秒），默认None"
+      },
+      "return_value": "TransportConfig实例",
+      "description": "传输层配置类，定义所有连接相关的参数"
+    },
+    {
+      "name": "ConnectionStateMachine",
+      "parameters": {
+        "config": "TransportConfig - 传输配置对象"
+      },
+      "return_value": "ConnectionStateMachine实例",
+      "description": "基于python-statemachine的连接状态机，管理连接状态转换"
+    },
+    {
+      "name": "AsyncConnectionStateMachine",
+      "parameters": {
+        "config": "TransportConfig - 传输配置对象"
+      },
+      "return_value": "AsyncConnectionStateMachine实例",
+      "description": "异步版本的连接状态机，使用asyncio进行异步连接管理"
+    },
+    {
+      "name": "ConnectionStateMachine.start",
+      "parameters": {},
+      "return_value": "None",
+      "description": "启动连接过程，触发connect事件"
+    },
+    {
+      "name": "ConnectionStateMachine.stop",
+      "parameters": {},
+      "return_value": "None",
+      "description": "停止连接，触发close事件"
+    },
+    {
+      "name": "ConnectionStateMachine.output",
+      "parameters": {
+        "msg": "bytes - 要发送的二进制消息"
+      },
+      "return_value": "None",
+      "description": "发送二进制消息，支持大数据分片发送"
+    },
+    {
+      "name": "ConnectionStateMachine.recv",
+      "parameters": {
+        "size": "int - 要接收的字节数"
+      },
+      "return_value": "bytes - 接收到的数据",
+      "description": "接收指定长度的二进制数据"
+    },
+    {
+      "name": "ConnectionStateMachine.recv_pkg",
+      "parameters": {},
+      "return_value": "bytes - 完整的数据包body部分",
+      "description": "接收完整的数据包（包含header和body的协议格式）"
+    },
+    {
+      "name": "AsyncConnectionStateMachine.start",
+      "parameters": {},
+      "return_value": "None",
+      "description": "异步启动连接过程"
+    },
+    {
+      "name": "AsyncConnectionStateMachine.stop",
+      "parameters": {},
+      "return_value": "None",
+      "description": "异步停止连接"
+    },
+    {
+      "name": "AsyncConnectionStateMachine.output",
+      "parameters": {
+        "msg": "bytes - 要发送的二进制消息"
+      },
+      "return_value": "None",
+      "description": "异步发送二进制消息"
+    },
+    {
+      "name": "AsyncConnectionStateMachine.recv",
+      "parameters": {
+        "size": "int - 要接收的字节数"
+      },
+      "return_value": "bytes - 接收到的数据",
+      "description": "异步接收指定长度的二进制数据"
+    },
+    {
+      "name": "AsyncConnectionStateMachine.recv_pkg",
+      "parameters": {},
+      "return_value": "bytes - 完整的数据包body部分",
+      "description": "异步接收完整的数据包"
+    },
+    {
+      "name": "TransportConfig.copy_with",
+      "parameters": {
+        "**kwargs": "Any - 要更新的配置字段"
+      },
+      "return_value": "TransportConfig - 新的配置实例",
+      "description": "创建配置副本并更新指定字段"
+    },
+    {
+      "name": "TransportConfig.to_dict",
+      "parameters": {},
+      "return_value": "dict[str, str | int | float | None] - 配置字典",
+      "description": "将配置转换为字典格式"
+    },
+    {
+      "name": "TransportConfig.from_dict",
+      "parameters": {
+        "config_dict": "dict[str, Any] - 配置字典"
+      },
+      "return_value": "TransportConfig - 配置实例",
+      "description": "从字典创建配置实例"
+    }
+  ],
+
+  "dependencies": {
+    "internal": ["pyrocketmq.logging - 日志模块"],
+    "external": [
+      "socket - TCP套接字编程",
+      "asyncio - 异步IO支持",
+      "time - 时间相关函数",
+      "statemachine - 状态机库（python-statemachine）",
+      "dataclasses - 数据类装饰器",
+      "typing - 类型注解支持"
+    ]
+  },
+
+  "call_flow": {
+    "sync_connection_flow": [
+      "1. 创建 TransportConfig 配置对象",
+      "2. 实例化 ConnectionStateMachine",
+      "3. 调用 start() 方法触发 connect 事件",
+      "4. 状态机转换到 connecting 状态",
+      "5. 执行 on_connect() 回调，创建socket并连接",
+      "6. 连接成功后触发 connect_success 事件",
+      "7. 状态机转换到 connected 状态",
+      "8. 执行 on_connect_success() 回调，设置socket选项",
+      "9. 连接就绪，可以进行数据收发"
+    ],
+    "async_connection_flow": [
+      "1. 创建 TransportConfig 配置对象",
+      "2. 实例化 AsyncConnectionStateMachine",
+      "3. 调用异步 start() 方法",
+      "4. 状态机转换到 connecting 状态",
+      "5. 执行异步 on_connect() 回调，使用 asyncio.open_connection",
+      "6. 获取 reader 和 writer 对象",
+      "7. 连接成功后触发 connect_success 事件",
+      "8. 状态机转换到 connected 状态",
+      "9. 设置TCP选项，连接就绪"
+    ],
+    "data_transmission_flow": [
+      "1. 检查连接状态（is_connected）",
+      "2. 发送数据：调用 output() 方法",
+      "3. 验证消息大小不超过 max_message_size",
+      "4. 使用 socket.send() 或 writer.write() 发送",
+      "5. 处理分片发送（大数据）",
+      "6. 接收数据：调用 recv() 或 recv_pkg()",
+      "7. recv_pkg() 先读取4字节header，再读取body",
+      "8. 返回完整的数据包"
+    ],
+    "disconnection_flow": [
+      "1. 调用 stop() 方法触发 close 或 disconnect 事件",
+      "2. 状态机转换相应状态",
+      "3. 执行对应的回调函数",
+      "4. 关闭socket连接或writer/reader",
+      "5. 清理资源",
+      "6. 根据配置决定是否自动重连"
+    ],
+    "error_handling_flow": [
+      "1. 捕获连接异常（socket.error等）",
+      "2. 记录错误日志",
+      "3. 触发 disconnect 事件",
+      "4. 清理连接资源",
+      "5. 根据配置决定重连策略"
+    ]
+  },
+
+  "error_handling": {
+    "strategy": "基于状态机的错误处理机制，结合异常捕获、日志记录和状态转换，确保连接的可靠性",
+    "exceptions": {
+      "TransportError": {
+        "description": "传输层基础异常类",
+        "base_class": "Exception"
+      },
+      "ConnectionError": {
+        "description": "连接异常，包括连接失败、连接断开等",
+        "handling": "触发状态机转换，记录日志，尝试重连"
+      },
+      "TimeoutError": {
+        "description": "操作超时异常",
+        "handling": "根据超时类型处理，连接超时会触发重连"
+      },
+      "ConfigurationError": {
+        "description": "配置错误，无效的配置参数",
+        "handling": "在 __post_init__ 中验证，抛出 ValueError"
+      },
+      "InvalidStateTransitionError": {
+        "description": "无效的状态转换",
+        "handling": "状态机自动处理，忽略无效转换"
+      },
+      "ConnectionClosedError": {
+        "description": "连接已关闭异常",
+        "handling": "检查连接状态，抛出运行时异常"
+      }
+    },
+    "state_machine_error_handling": {
+      "connection_failure": {
+        "scenario": "on_connect() 中连接失败",
+        "handling": "捕获异常，记录日志，触发 disconnect 事件"
+      },
+      "send_failure": {
+        "scenario": "output() 中发送失败",
+        "handling": "捕获异常，断开连接，重新抛出"
+      },
+      "receive_failure": {
+        "scenario": "recv() 中接收失败",
+        "handling": "捕获超时和其他异常，断开连接"
+      },
+      "package_size_error": {
+        "scenario": "消息大小超过限制",
+        "handling": "抛出 ValueError，不发送数据"
+      }
+    },
+    "retry_mechanism": {
+      "auto_reconnect": {
+        "description": "自动重连机制",
+        "trigger": "连接断开时",
+        "condition": "max_retries != 0 且 retry_interval > 0",
+        "behavior": "等待 retry_interval 后重新连接"
+      },
+      "infinite_retry": {
+        "description": "无限重试",
+        "config": "max_retries = -1",
+        "behavior": "持续尝试重连直到手动停止"
+      },
+      "limited_retry": {
+        "description": "有限重试",
+        "config": "max_retries > 0",
+        "behavior": "重试指定次数后停止"
+      }
+    },
+    "resource_cleanup": {
+      "socket_cleanup": {
+        "description": "Socket资源清理",
+        "method": "_close_socket()",
+        "handling": "确保socket被正确关闭，捕获并记录关闭异常"
+      },
+      "async_cleanup": {
+        "description": "异步资源清理",
+        "method": "_close_connection()",
+        "handling": "关闭writer并等待，清理reader和socket"
+      }
+    },
+    "validation_and_bounds": {
+      "config_validation": {
+        "description": "配置参数验证",
+        "location": "__post_init__",
+        "checks": [
+          "端口范围检查（0-65535）",
+          "超时时间正数检查",
+          "缓冲区大小正数检查",
+          "消息大小限制检查"
+        ]
+      },
+      "runtime_validation": {
+        "description": "运行时参数验证",
+        "checks": [
+          "连接状态检查",
+          "消息大小检查",
+          "接收大小检查",
+          "Socket初始化检查"
+        ]
+      }
+    },
+    "logging_and_monitoring": {
+      "structured_logging": {
+        "description": "结构化日志记录",
+        "content": "包含地址、错误类型、状态等详细信息",
+        "purpose": "便于调试和问题定位"
+      },
+      "state_transitions": {
+        "description": "状态转换日志",
+        "events": ["连接开始", "连接成功", "连接断开", "连接关闭"],
+        "purpose": "跟踪连接生命周期"
+      }
+    }
+  }
+}

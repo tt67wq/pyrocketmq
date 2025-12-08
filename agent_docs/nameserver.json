@@ -1,0 +1,273 @@
+{
+  "module_name": "nameserver",
+  "purpose": "提供与 RocketMQ NameServer 交互的完整功能，包括 Topic 路由查询、Broker 集群信息获取、地址缓存管理等。支持同步和异步两种编程模式，提供智能缓存机制和容错设计，确保高性能和高可用的 NameServer 服务访问。",
+
+  "functions": [
+    {
+      "name": "NameServerManager",
+      "parameters": {
+        "config": "NameServerConfig - NameServer配置对象，包含地址列表、超时时间、缓存TTL等"
+      },
+      "return_value": "NameServerManager实例",
+      "description": "NameServer管理器，提供统一的同步接口，支持broker地址查询和路由信息缓存"
+    },
+    {
+      "name": "AsyncNameServerManager",
+      "parameters": {
+        "config": "NameServerConfig - NameServer配置对象"
+      },
+      "return_value": "AsyncNameServerManager实例",
+      "description": "异步NameServer管理器，提供异步接口，支持协程并发访问"
+    },
+    {
+      "name": "NameServerConfig",
+      "parameters": {
+        "nameserver_addrs": "str - NameServer地址列表，多个地址用分号分隔",
+        "timeout": "float - 请求超时时间（秒），默认30.0",
+        "connect_timeout": "float - 连接超时时间（秒），默认10.0",
+        "broker_cache_ttl": "int - broker地址缓存TTL（秒），默认300",
+        "route_cache_ttl": "int - 路由信息缓存TTL（秒），默认300",
+        "max_retry_times": "int - 最大重试次数，默认3",
+        "retry_interval": "float - 重试间隔（秒），默认1.0"
+      },
+      "return_value": "NameServerConfig实例",
+      "description": "NameServer管理器配置类，定义连接、缓存和重试相关参数"
+    },
+    {
+      "name": "SyncNameServerClient",
+      "parameters": {
+        "remote": "Remote - 远程通信实例",
+        "timeout": "float - 请求超时时间（秒），默认5.0"
+      },
+      "return_value": "SyncNameServerClient实例",
+      "description": "同步NameServer客户端，使用阻塞方式与NameServer通信"
+    },
+    {
+      "name": "AsyncNameServerClient",
+      "parameters": {
+        "remote": "AsyncRemote - 异步远程通信实例",
+        "timeout": "float - 请求超时时间（秒），默认5.0"
+      },
+      "return_value": "AsyncNameServerClient实例",
+      "description": "异步NameServer客户端，使用非阻塞方式与NameServer通信"
+    },
+    {
+      "name": "NameServerManager.get_broker_address",
+      "parameters": {
+        "broker_name": "str - Broker名称",
+        "retry_on_failure": "bool - 失败时是否重试，默认True"
+      },
+      "return_value": "str | None - Broker地址",
+      "description": "获取指定Broker的地址，支持缓存和自动重试"
+    },
+    {
+      "name": "NameServerManager.query_topic_route_info",
+      "parameters": {
+        "topic": "str - 主题名称",
+        "allow_cache": "bool - 是否允许使用缓存，默认True"
+      },
+      "return_value": "TopicRouteData - Topic路由信息",
+      "description": "查询Topic的路由信息，包含broker列表和队列配置"
+    },
+    {
+      "name": "AsyncNameServerManager.get_broker_address",
+      "parameters": {
+        "broker_name": "str - Broker名称",
+        "retry_on_failure": "bool - 失败时是否重试，默认True"
+      },
+      "return_value": "str | None - Broker地址",
+      "description": "异步获取指定Broker的地址"
+    },
+    {
+      "name": "AsyncNameServerManager.query_topic_route_info",
+      "parameters": {
+        "topic": "str - 主题名称",
+        "allow_cache": "bool - 是否允许使用缓存，默认True"
+      },
+      "return_value": "TopicRouteData - Topic路由信息",
+      "description": "异步查询Topic的路由信息"
+    },
+    {
+      "name": "CacheEntry",
+      "parameters": {
+        "data": "Any - 缓存的数据对象",
+        "timestamp": "float - 缓存创建时间戳",
+        "ttl": "int - 缓存生存时间（秒）"
+      },
+      "return_value": "CacheEntry实例",
+      "description": "缓存条目数据类，支持TTL过期检查"
+    },
+    {
+      "name": "create_nameserver_manager",
+      "parameters": {
+        "nameserver_addrs": "str - NameServer地址列表"
+      },
+      "return_value": "NameServerManager - NameServer管理器实例",
+      "description": "便利函数，创建并配置NameServer管理器"
+    },
+    {
+      "name": "create_async_nameserver_manager",
+      "parameters": {
+        "nameserver_addrs": "str - NameServer地址列表"
+      },
+      "return_value": "AsyncNameServerManager - 异步NameServer管理器实例",
+      "description": "便利函数，创建并配置异步NameServer管理器"
+    }
+  ],
+
+  "dependencies": {
+    "internal": [
+      "pyrocketmq.model - 数据模型和工厂类",
+      "pyrocketmq.remote - 远程通信模块",
+      "pyrocketmq.transport - 传输层模块",
+      "pyrocketmq.logging - 日志模块"
+    ],
+    "external": [
+      "threading - 线程同步（同步版本）",
+      "asyncio - 异步编程（异步版本）",
+      "time - 时间相关函数",
+      "dataclasses - 数据类装饰器",
+      "typing - 类型注解支持"
+    ]
+  },
+
+  "call_flow": {
+    "sync_initialization_flow": [
+      "1. 创建 NameServerConfig 配置对象",
+      "2. 实例化 NameServerManager",
+      "3. 调用 start() 方法启动管理器",
+      "4. 解析 NameServer 地址列表",
+      "5. 为每个地址创建 ConnectionPool 连接池",
+      "6. 初始化缓存存储和线程锁",
+      "7. 标记为已启动状态"
+    ],
+    "async_initialization_flow": [
+      "1. 创建 NameServerConfig 配置对象",
+      "2. 实例化 AsyncNameServerManager",
+      "3. 调用 start() 异步方法启动管理器",
+      "4. 并发创建 AsyncConnectionPool 连接池",
+      "5. 使用 asyncio.Lock 替代线程锁",
+      "6. 初始化异步缓存存储"
+    ],
+    "route_query_flow": {
+      "with_cache": [
+        "1. 检查路由缓存是否存在且未过期",
+        "2. 如果缓存有效，直接返回缓存数据",
+        "3. 如果缓存失效或不存在，继续后续流程"
+      ],
+      "without_cache": [
+        "1. 选择可用的 NameServer 连接",
+        "2. 创建 GET_ROUTE_INFO 请求命令",
+        "3. 发送 RPC 请求到 NameServer",
+        "4. 等待响应并检查状态码",
+        "5. 解析响应体为 TopicRouteData 对象",
+        "6. 更新缓存（如果启用）",
+        "7. 返回路由信息"
+      ]
+    },
+    "broker_address_query_flow": [
+      "1. 检查 broker 地址缓存",
+      "2. 如果缓存有效，返回缓存的地址",
+      "3. 如果缓存失效，从 TopicRouteData 中提取",
+      "4. 选择 master 或 slave 地址",
+      "5. 更新缓存并返回地址"
+    ],
+    "error_recovery_flow": [
+      "1. 捕获网络异常或超时",
+      "2. 记录错误日志",
+      "3. 根据配置决定是否重试",
+      "4. 如果重试，等待 retry_interval 后重试",
+      "5. 更新失败地址的黑名单",
+      "6. 尝试其他 NameServer 地址",
+      "7. 如果全部失败，抛出异常"
+    ]
+  },
+
+  "error_handling": {
+    "strategy": "分层异常处理机制，包含网络异常、协议异常和数据异常的处理，支持自动重试和故障转移",
+    "exceptions": {
+      "NameServerError": {
+        "description": "NameServer 基础异常类",
+        "base_class": "RemoteError"
+      },
+      "NameServerConnectionError": {
+        "description": "连接错误，无法建立到 NameServer 的连接",
+        "handling": "尝试连接其他 NameServer 地址，支持故障转移"
+      },
+      "NameServerTimeoutError": {
+        "description": "请求超时，网络延迟或 NameServer 响应慢",
+        "handling": "重试机制，可配置超时时间和重试次数"
+      },
+      "NameServerProtocolError": {
+        "description": "协议错误，响应格式不符合预期",
+        "handling": "记录协议详情，抛出详细错误信息"
+      },
+      "NameServerResponseError": {
+        "description": "响应错误，NameServer 返回错误状态码",
+        "handling": "解析错误信息，包含在异常消息中"
+      },
+      "NameServerDataParseError": {
+        "description": "数据解析错误，响应体无法正确解析",
+        "handling": "使用 ast.literal_eval 处理非标准 JSON 格式"
+      }
+    },
+    "retry_mechanism": {
+      "max_retry_times": {
+        "description": "最大重试次数，默认3次",
+        "config": "NameServerConfig.max_retry_times"
+      },
+      "retry_interval": {
+        "description": "重试间隔，默认1秒",
+        "config": "NameServerConfig.retry_interval",
+        "strategy": "固定间隔等待"
+      },
+      "retry_conditions": {
+        "network_errors": "网络异常自动重试",
+        "timeout_errors": "超时异常自动重试",
+        "server_errors": "服务器错误根据情况重试"
+      }
+    },
+    "cache_error_handling": {
+      "cache_expiration": {
+        "description": "缓存过期处理",
+        "mechanism": "TTL机制，自动检查和清理过期缓存"
+      },
+      "cache_corruption": {
+        "description": "缓存损坏处理",
+        "mechanism": "捕获异常，清除损坏的缓存，重新查询"
+      },
+      "cache_lock_timeout": {
+        "description": "缓存锁超时处理",
+        "mechanism": "使用 RLock 避免死锁，记录锁等待时间"
+      }
+    },
+    "connection_pool_management": {
+      "connection_failure": {
+        "description": "连接池创建失败",
+        "handling": "尝试其他地址，至少需要一个成功连接"
+      },
+      "connection_exhaustion": {
+        "description": "连接池耗尽",
+        "handling": "配置合适的池大小，支持连接复用"
+      },
+      "connection_cleanup": {
+        "description": "连接清理",
+        "handling": "stop()方法中关闭所有连接池，防止泄露"
+      }
+    },
+    "graceful_degradation": {
+      "partial_failure": {
+        "description": "部分 NameServer 不可用",
+        "handling": "使用可用的 NameServer，记录失败地址"
+      },
+      "cache_miss": {
+        "description": "缓存未命中",
+        "handling": "直接查询 NameServer，更新缓存"
+      },
+      "response_format_issues": {
+        "description": "Go 语言返回的特殊格式",
+        "handling": "使用 ast.literal_eval 兼容处理"
+      }
+    }
+  }
+}
