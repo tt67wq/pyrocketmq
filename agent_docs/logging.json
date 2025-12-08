@@ -1,0 +1,244 @@
+{
+  "module_name": "logging",
+  "purpose": "为 pyrocketmq 项目提供统一、灵活的日志记录功能，支持多种输出格式（普通文本/JSON）、多种输出目标（控制台/文件）、日志级别控制、彩色输出和结构化日志记录，便于调试、监控和日志分析。",
+
+  "functions": [
+    {
+      "name": "get_logger",
+      "parameters": {
+        "name": "str - logger名称，通常使用模块名"
+      },
+      "return_value": "logging.Logger - 配置好的logger实例",
+      "description": "获取指定名称的logger实例，如果未配置则使用默认配置"
+    },
+    {
+      "name": "setup_logging",
+      "parameters": {
+        "config": "LoggingConfig | None - 日志配置对象，None表示使用默认配置"
+      },
+      "return_value": "None",
+      "description": "设置全局日志配置，初始化根logger和处理器"
+    },
+    {
+      "name": "get_config",
+      "parameters": {},
+      "return_value": "LoggingConfig - 当前使用的日志配置",
+      "description": "获取当前全局日志配置"
+    },
+    {
+      "name": "LoggingConfig",
+      "parameters": {
+        "level": "str - 日志级别（DEBUG/INFO/WARNING/ERROR/CRITICAL）",
+        "format": "str - 日志格式字符串",
+        "date_format": "str - 日期时间格式",
+        "file_path": "str | None - 日志文件路径",
+        "file_mode": "str - 文件写入模式（'a'或'w'）",
+        "file_encoding": "str - 文件编码，默认'utf-8'",
+        "console_output": "bool - 是否输出到控制台",
+        "max_file_size": "int | None - 最大文件大小（字节）",
+        "backup_count": "int - 备份文件数量",
+        "capture_exceptions": "bool - 是否捕获异常信息",
+        "colored_output": "bool - 是否显示彩色输出",
+        "json_output": "bool - 是否输出JSON格式"
+      },
+      "return_value": "LoggingConfig实例",
+      "description": "日志配置类，支持从环境变量加载配置"
+    },
+    {
+      "name": "LoggingConfig.from_env",
+      "parameters": {},
+      "return_value": "LoggingConfig - 从环境变量创建的配置实例",
+      "description": "从环境变量PYROCKETMQ_LOG_*创建配置实例"
+    },
+    {
+      "name": "LoggerFactory.get_logger",
+      "parameters": {
+        "name": "str - logger名称"
+      },
+      "return_value": "logging.Logger - 配置好的logger实例",
+      "description": "工厂方法，创建并配置logger实例"
+    },
+    {
+      "name": "LoggerFactory.setup_default_config",
+      "parameters": {
+        "config": "LoggingConfig - 日志配置"
+      },
+      "return_value": "None",
+      "description": "设置默认配置，配置根logger和处理器"
+    },
+    {
+      "name": "JsonFormatter",
+      "parameters": {
+        "include_extra": "bool - 是否包含extra字段",
+        "include_timestamp": "bool - 是否包含时间戳",
+        "include_level": "bool - 是否包含日志级别",
+        "include_logger": "bool - 是否包含logger名称",
+        "include_module": "bool - 是否包含模块名",
+        "include_function": "bool - 是否包含函数名",
+        "include_line": "bool - 是否包含行号",
+        "indent": "bool - 是否缩进JSON输出",
+        "ensure_ascii": "bool - 是否确保ASCII编码"
+      },
+      "return_value": "JsonFormatter实例",
+      "description": "JSON格式化器，将日志转换为结构化JSON格式"
+    },
+    {
+      "name": "ExtraAwareFormatter",
+      "parameters": {
+        "fmt": "str - 格式字符串",
+        "datefmt": "str - 日期格式",
+        "colored_output": "bool - 是否彩色输出"
+      },
+      "return_value": "ExtraAwareFormatter实例",
+      "description": "支持extra字段的格式化器，可以处理额外的日志字段"
+    },
+    {
+      "name": "ColoredFormatter",
+      "parameters": {
+        "record": "logging.LogRecord - 日志记录对象"
+      },
+      "return_value": "str - 带颜色的格式化日志字符串",
+      "description": "彩色日志格式化器，为不同级别的日志添加颜色显示"
+    }
+  ],
+
+  "dependencies": {
+    "internal": [],
+    "external": [
+      "logging - Python标准日志模块",
+      "os - 操作系统接口，用于读取环境变量",
+      "sys - 系统相关参数和函数",
+      "dataclasses - 数据类装饰器",
+      "json - JSON序列化支持",
+      "time - 时间相关函数",
+      "typing - 类型注解支持",
+      "logging.handlers - 日志处理器（RotatingFileHandler等）"
+    ]
+  },
+
+  "call_flow": {
+    "initialization_flow": [
+      "1. 应用启动时调用 setup_logging() 或使用默认配置",
+      "2. LoggerFactory.setup_default_config() 设置全局配置",
+      "3. 创建根logger并设置级别",
+      "4. 根据配置创建处理器（StreamHandler/FileHandler/RotatingFileHandler）",
+      "5. 创建格式化器（普通格式化器或JsonFormatter）",
+      "6. 将格式化器设置到处理器",
+      "7. 将处理器添加到根logger",
+      "8. 清理已配置logger集合"
+    ],
+    "logger_usage_flow": [
+      "1. 调用 get_logger(name) 获取logger实例",
+      "2. LoggerFactory.get_logger() 检查是否已配置",
+      "3. 如果未配置，调用 _configure_logger() 配置logger",
+      "4. 返回配置好的logger实例",
+      "5. 应用程序使用logger记录日志（debug/info/warning/error/critical）",
+      "6. 日志通过propagate机制传递到根logger",
+      "7. 根logger将日志分发给所有处理器",
+      "8. 处理器使用格式化器格式化日志",
+      "9. 格式化后的日志输出到指定目标（控制台/文件）"
+    ],
+    "json_formatting_flow": [
+      "1. JsonFormatter.format() 接收LogRecord",
+      "2. 创建空的log_entry字典",
+      "3. 添加固定字段（extra_fields）",
+      "4. 根据配置添加时间戳、级别、logger等信息",
+      "5. 提取并添加代码位置信息（模块、函数、行号）",
+      "6. 处理消息内容",
+      "7. 处理异常信息（如果有）",
+      "8. 过滤并添加extra字段",
+      "9. 使用json.dumps()序列化为JSON字符串",
+      "10. 返回JSON格式的日志"
+    ],
+    "environment_config_flow": [
+      "1. 调用 LoggingConfig.from_env()",
+      "2. 创建默认LoggingConfig实例",
+      "3. 读取PYROCKETMQ_LOG_LEVEL环境变量",
+      "4. 读取PYROCKETMQ_LOG_FILE环境变量",
+      "5. 读取PYROCKETMQ_LOG_CONSOLE环境变量",
+      "6. 读取PYROCKETMQ_LOG_JSON环境变量",
+      "7. 应用环境变量值到配置",
+      "8. 返回配置实例"
+    ]
+  },
+
+  "error_handling": {
+    "strategy": "采用防御性编程和优雅降级策略，确保日志系统不会影响主程序运行",
+    "error_scenarios": {
+      "config_validation": {
+        "invalid_log_level": {
+          "error": "无效的日志级别",
+          "handling": "在__post_init__中验证，抛出ValueError并提示有效级别",
+          "recovery": "用户必须提供有效的日志级别"
+        },
+        "invalid_file_mode": {
+          "error": "无效的文件模式",
+          "handling": "在__post_init__中验证，抛出ValueError并提示有效模式",
+          "recovery": "用户必须提供有效的文件模式（'a'或'w'）"
+        }
+      },
+      "file_operations": {
+        "file_permission_error": {
+          "error": "文件权限不足或路径不存在",
+          "handling": "FileHandler会抛出异常，但不影响程序运行",
+          "recovery": "可以使用其他输出方式（如控制台输出）"
+        },
+        "disk_full_error": {
+          "error": "磁盘空间不足",
+          "handling": "文件写入失败，logging模块会处理异常",
+          "recovery": "建议配置日志轮转（max_file_size和backup_count）"
+        }
+      },
+      "json_serialization": {
+        "non_serializable_data": {
+          "error": "extra字段包含不可序列化的对象",
+          "handling": "json.dumps()会抛出TypeError",
+          "recovery": "确保extra字段只包含可序列化的数据类型"
+        },
+        "encoding_error": {
+          "error": "字符编码错误",
+          "handling": "使用ensure_ascii=False处理非ASCII字符",
+          "recovery": "检查文件编码配置是否正确"
+        }
+      },
+      "runtime_errors": {
+        "uninitialized_config": {
+          "error": "LoggerFactory配置未初始化",
+          "handling": "get_current_config()会抛出RuntimeError",
+          "recovery": "确保在首次使用前调用setup_logging()"
+        }
+      }
+    },
+    "graceful_degradation": {
+      "handler_creation_failure": {
+        "scenario": "RotatingFileHandler导入失败",
+        "handling": "降级使用普通FileHandler",
+        "fallback": "日志仍能正常写入文件，只是没有轮转功能"
+      },
+      "formatter_failure": {
+        "scenario": "JSON格式化失败",
+        "handling": "记录错误并使用默认格式",
+        "fallback": "日志仍能以普通文本格式输出"
+      },
+      "console_output_failure": {
+        "scenario": "控制台输出失败",
+        "handling": "异常会被logging模块捕获",
+        "fallback": "不影响文件输出，程序继续运行"
+      }
+    },
+    "best_practices": {
+      "error_logging": {
+        "strategy": "日志系统自身的错误通过sys.stderr输出",
+        "reason": "避免循环依赖和无限递归"
+      },
+      "exception_handling": {
+        "strategy": "捕获并记录异常，但不中断程序",
+        "reason": "确保日志系统不会成为单点故障"
+      },
+      "resource_cleanup": {
+        "strategy": "正确处理文件句柄和资源",
+        "reason": "防止资源泄露"
+      }
+    }
+  }
+}

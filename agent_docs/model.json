@@ -1,0 +1,320 @@
+{
+  "module_name": "model",
+  "purpose": "定义 RocketMQ 的核心数据模型，包括消息、队列、客户端、路由、命令等数据结构，以及相关的序列化/反序列化机制，为整个 pyrocketmq 项目提供统一的数据模型基础。",
+
+  "functions": [
+    {
+      "name": "Message",
+      "parameters": {
+        "topic": "str - 消息主题",
+        "body": "bytes - 消息体内容",
+        "tags": "str - 消息标签（可选）",
+        "keys": "str - 消息索引键（可选）",
+        "flag": "int - 消息标志（默认0）",
+        "transaction_id": "str - 事务消息ID（可选）"
+      },
+      "return_value": "Message实例",
+      "description": "RocketMQ 消息的基础数据结构，支持设置消息属性、标签、键等信息"
+    },
+    {
+      "name": "MessageExt",
+      "parameters": {
+        "msg_id": "str - 消息唯一ID",
+        "topic": "str - 消息主题",
+        "body": "bytes - 消息体",
+        "queue_offset": "int - 消息在队列中的偏移量",
+        "store_timestamp": "int - 存储时间戳",
+        "born_timestamp": "int - 生产时间戳"
+      },
+      "return_value": "MessageExt实例",
+      "description": "扩展消息模型，包含完整的系统属性和存储信息"
+    },
+    {
+      "name": "MessageQueue",
+      "parameters": {
+        "topic": "str - 主题名称",
+        "broker_name": "str - Broker名称",
+        "queue_id": "int - 队列ID"
+      },
+      "return_value": "MessageQueue实例",
+      "description": "表示主题下的具体消息队列，用于标识消息的位置"
+    },
+    {
+      "name": "RemotingCommand",
+      "parameters": {
+        "code": "int - 请求/响应代码",
+        "language": "LanguageCode - 客户端语言代码",
+        "version": "int - 协议版本",
+        "opaque": "int - 请求标识符",
+        "flag": "int - 通信标志（请求/响应/单向）",
+        "ext_fields": "dict - 扩展字段字典",
+        "body": "bytes - 消息体"
+      },
+      "return_value": "RemotingCommand实例",
+      "description": "RocketMQ 远程通信的核心命令结构，用于客户端与服务器之间的通信"
+    },
+    {
+      "name": "TopicRouteData",
+      "parameters": {
+        "order_topic_conf": "str - 顺序主题配置",
+        "queue_data_list": "List[QueueData] - 队列数据列表",
+        "broker_data_list": "List[BrokerData] - Broker数据列表"
+      },
+      "return_value": "TopicRouteData实例",
+      "description": "Topic 路由信息，包含 Topic 在集群中的分布信息"
+    },
+    {
+      "name": "BrokerData",
+      "parameters": {
+        "cluster": "str - 集群名称",
+        "broker_name": "str - Broker名称",
+        "broker_addresses": "Dict[int, str] - Broker地址列表"
+      },
+      "return_value": "BrokerData实例",
+      "description": "Broker 信息，包含 Broker 所属集群和地址信息"
+    },
+    {
+      "name": "QueueData",
+      "parameters": {
+        "broker_name": "str - Broker名称",
+        "read_queue_nums": "int - 读队列数量",
+        "write_queue_nums": "int - 写队列数量",
+        "perm": "int - 权限标识",
+        "topic_sys_flag": "int - 主题系统标志"
+      },
+      "return_value": "QueueData实例",
+      "description": "队列信息，定义了 Topic 在每个 Broker 上的队列配置"
+    },
+    {
+      "name": "MessageSelector",
+      "parameters": {
+        "type": "ExpressionType - 表达式类型（TAG或SQL92）",
+        "expression": "str - 过滤表达式"
+      },
+      "return_value": "MessageSelector实例",
+      "description": "消息选择器，用于在 Broker 端进行消息过滤"
+    },
+    {
+      "name": "SubscriptionData",
+      "parameters": {
+        "topic": "str - 订阅的主题",
+        "sub_string": "str - 订阅表达式",
+        "tags_set": "Set[str] - 标签集合",
+        "code_set": "Set[int] - 主题哈希码集合"
+      },
+      "return_value": "SubscriptionData实例",
+      "description": "订阅数据，记录消费者的订阅信息"
+    },
+    {
+      "name": "ConsumerData",
+      "parameters": {
+        "group_name": "str - 消费者组名",
+        "consume_type": "ConsumeType - 消费类型",
+        "message_model": "MessageModel - 消息模式",
+        "subscription_data": "List[SubscriptionData] - 订阅数据列表"
+      },
+      "return_value": "ConsumerData实例",
+      "description": "消费者信息，用于心跳和数据上报"
+    },
+    {
+      "name": "ProducerData",
+      "parameters": {
+        "group_name": "str - 生产者组名"
+      },
+      "return_value": "ProducerData实例",
+      "description": "生产者信息，用于心跳和数据上报"
+    },
+    {
+      "name": "SendMessageRequestHeader",
+      "parameters": {
+        "producer_group": "str - 生产者组",
+        "topic": "str - 主题",
+        "default_topic": "str - 默认主题",
+        "queue_id": "int - 队列ID",
+        "sys_flag": "int - 系统标志",
+        "born_timestamp": "int - 生产时间戳",
+        "flag": "int - 消息标志",
+        "properties": "str - 序列化的属性",
+        "reconsume_times": "int - 重试次数",
+        "unit_mode": "bool - 单位模式",
+        "batch": "bool - 是否批量消息"
+      },
+      "return_value": "SendMessageRequestHeader实例",
+      "description": "发送消息请求头，包含发送消息所需的所有参数"
+    },
+    {
+      "name": "PullMessageRequestHeader",
+      "parameters": {
+        "consumer_group": "str - 消费者组",
+        "topic": "str - 主题",
+        "queue_id": "int - 队列ID",
+        "queue_offset": "int - 起始偏移量",
+        "max_msg_nums": "int - 最大消息数",
+        "sys_flag": "int - 系统标志",
+        "sub_version": "int - 订阅版本",
+        "commit_offset": "int - 提交偏移量",
+        "suspend_timeout_millis": "int - 长轮询超时时间",
+        "sub_expression": "str - 订阅表达式"
+      },
+      "return_value": "PullMessageRequestHeader实例",
+      "description": "拉取消息请求头，定义消息拉取的参数"
+    },
+    {
+      "name": "RemotingCommandSerializer",
+      "parameters": {
+        "command": "RemotingCommand - 要序列化的命令对象"
+      },
+      "return_value": "bytes - 序列化后的二进制数据",
+      "description": "远程命令序列化器，将 RemotingCommand 对象序列化为 RocketMQ 协议格式的二进制数据"
+    }
+  ],
+
+  "dependencies": {
+    "internal": ["pyrocketmq.logging - 日志模块"],
+    "external": [
+      "json - JSON序列化支持",
+      "struct - 二进制数据打包解包",
+      "typing - 类型注解支持",
+      "dataclasses - 数据类支持",
+      "enum - 枚举类型支持"
+    ]
+  },
+
+  "call_flow": {
+    "message_creation_flow": [
+      "1. 调用 create_message() 或直接实例化 Message 类",
+      "2. 设置 topic、body 等基本属性",
+      "3. 通过 set_property() 设置自定义属性",
+      "4. 通过 set_tags() 和 set_keys() 设置标签和索引键",
+      "5. （可选）调用 set_delay_time_level() 设置延时级别",
+      "6. （可选）调用 set_sharding_key() 设置分片键（顺序消息）",
+      "7. 调用 marshal() 序列化消息用于传输"
+    ],
+    "message_serialization_flow": [
+      "1. 创建 RemotingCommand 对象",
+      "2. 设置命令代码和语言版本",
+      "3. 将 Message 序列化到 ext_fields",
+      "4. 设置消息体到 body 属性",
+      "5. 调用 RemotingCommandSerializer.serialize() 序列化",
+      "6. 按照 RocketMQ 协议格式打包：| length | header-length | header | body |"
+    ],
+    "command_processing_flow": [
+      "1. 接收二进制数据",
+      "2. RemotingCommandSerializer.deserialize() 反序列化",
+      "3. 验证协议格式和数据完整性",
+      "4. 根据命令代码路由到相应的处理器",
+      "5. 处理器从 ext_fields 提取请求参数",
+      "6. 执行业务逻辑",
+      "7. 创建响应命令",
+      "8. 序列化响应并返回"
+    ],
+    "route_info_update_flow": [
+      "1. 从 NameServer 获取 TopicRouteData",
+      "2. 解析 queue_data_list 和 broker_data_list",
+      "3. 根据 MessageModel 选择队列",
+      "4. 创建 MessageQueue 对象",
+      "5. 建立与 Broker 的连接",
+      "6. 缓存路由信息供后续使用"
+    ]
+  },
+
+  "error_handling": {
+    "strategy": "基于异常类的分层错误处理机制，包含协议验证、数据校验和异常恢复",
+    "exceptions": {
+      "RemotingCommandError": {
+        "description": "远程命令基础异常类",
+        "subtypes": {
+          "SerializationError": "序列化失败异常",
+          "DeserializationError": "反序列化失败异常",
+          "ProtocolError": "协议错误",
+          "ValidationError": "数据验证错误"
+        }
+      },
+      "ProtocolError": {
+        "description": "协议相关错误",
+        "subtypes": {
+          "MessageTooLargeError": {
+            "description": "消息大小超过限制",
+            "handling": "检查消息大小并提示限制值"
+          },
+          "HeaderTooLargeError": {
+            "description": "消息头超过限制",
+            "handling": "检查header大小并提示限制值"
+          },
+          "InvalidHeaderError": {
+            "description": "无效的消息头",
+            "handling": "验证请求头格式和必填字段"
+          },
+          "InvalidMessageError": {
+            "description": "无效的消息格式",
+            "handling": "验证消息结构和内容"
+          },
+          "UnsupportedVersionError": {
+            "description": "不支持的协议版本",
+            "handling": "检查版本兼容性并提示支持的版本"
+          },
+          "UnsupportedLanguageError": {
+            "description": "不支持的语言代码",
+            "handling": "验证语言代码是否在支持范围内"
+          },
+          "UnsupportedRequestCodeError": {
+            "description": "不支持的请求代码",
+            "handling": "验证请求代码是否有效"
+          }
+        }
+      },
+      "ConnectionError": {
+        "description": "网络连接相关错误",
+        "subtypes": {
+          "ConnectionClosedError": {
+            "description": "连接已关闭",
+            "handling": "尝试重新连接或报告连接状态"
+          },
+          "TimeoutError": {
+            "description": "操作超时",
+            "handling": "记录超时时间并支持重试机制"
+          }
+        }
+      }
+    },
+    "validation_mechanisms": {
+      "message_validation": {
+        "size_limits": {
+          "max_message_size": "32MB - 通过 MAX_FRAME_SIZE 定义",
+          "max_header_size": "64KB - 通过 MAX_HEADER_SIZE 定义"
+        },
+        "required_fields": [
+          "topic - 消息主题不能为空",
+          "body - 消息体不能为空（除非特殊消息类型）"
+        ],
+        "format_checks": ["topic格式验证", "tag格式验证", "key格式验证"]
+      },
+      "command_validation": {
+        "protocol_checks": [
+          "命令代码有效性",
+          "语言代码有效性",
+          "版本兼容性",
+          "标志位正确性"
+        ],
+        "data_integrity": ["长度字段验证", "CRC校验", "数据完整性检查"]
+      }
+    },
+    "serialization_error_handling": {
+      "encode_errors": {
+        "json_encode_error": "捕获JSON序列化异常",
+        "struct_pack_error": "捕获二进制打包异常",
+        "type_conversion_error": "捕获类型转换异常"
+      },
+      "decode_errors": {
+        "insufficient_data": "数据长度不足",
+        "invalid_format": "协议格式错误",
+        "corrupted_data": "数据损坏或篡改"
+      },
+      "recovery_strategies": {
+        "graceful_degradation": "部分功能降级运行",
+        "error_propagation": "向调用层传递错误信息",
+        "logging_and_metrics": "记录错误日志和统计信息"
+      }
+    }
+  }
+}
