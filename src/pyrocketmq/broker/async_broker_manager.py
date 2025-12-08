@@ -8,6 +8,7 @@ import logging
 import time
 
 from pyrocketmq.logging import get_logger
+from pyrocketmq.remote.async_remote import AsyncClientRequestFunc
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.pool import AsyncConnectionPool
 from pyrocketmq.transport.config import TransportConfig
@@ -30,6 +31,7 @@ class AsyncBrokerManager:
     _logger: logging.Logger
     _broker_pools: dict[str, AsyncConnectionPool]
     _rwlock: AsyncReadWriteLock
+    _pool_processors: dict[int, AsyncClientRequestFunc]
 
     def __init__(
         self,
@@ -51,6 +53,9 @@ class AsyncBrokerManager:
         # Broker连接池映射
         self._broker_pools = {}
         self._rwlock = AsyncReadWriteLock()
+
+        # 存储需要为所有连接池注册的处理器
+        self._pool_processors = {}
 
         self._logger.info(
             "异步Broker管理器初始化完成",
@@ -201,6 +206,10 @@ class AsyncBrokerManager:
             remote_config=self.remote_config,
             transport_config=transport_config,
         )
+
+        # 为新创建的连接池注册所有已存储的处理器
+        for request_code, processor_func in self._pool_processors.items():
+            await pool.register_request_processor(request_code, processor_func)
 
         self._logger.debug(
             "异步连接池创建成功",
@@ -363,3 +372,80 @@ class AsyncBrokerManager:
         # 再次使用读锁获取
         async with AsyncReadWriteContext(self._rwlock, write=False):
             return self._broker_pools[broker_addr]
+
+    async def register_pool_processor(
+        self, request_code: int, processor_func: AsyncClientRequestFunc
+    ) -> None:
+        """注册连接池处理器
+
+        注册一个异步处理器函数，该函数会自动应用到当前和所有未来创建的连接池。
+        这对于需要在所有Broker连接上统一处理特定请求代码的场景非常有用。
+
+        注册流程:
+        -----------
+        1. 将处理器函数存储到内部注册表中
+        2. 为所有现有连接池注册该处理器
+        3. 后续创建的新连接池会自动应用已注册的处理器
+
+        应用场景:
+        -----------
+        - 需要为所有Broker连接注册相同的异步请求处理器
+        - 统一处理特定的响应代码
+        - 实现全局的异步请求拦截或处理逻辑
+        - 避免在每个连接池创建后重复注册处理器
+
+        线程安全:
+        -----------
+        使用异步读写锁确保注册过程的线程安全，防止并发修改导致的竞争条件。
+
+        Args:
+            request_code (int): 请求代码
+                - 用于标识特定类型的请求
+                - 必须是整数类型
+                - 相同的request_code重复注册会覆盖之前的处理器
+            processor_func (AsyncClientRequestFunc): 异步处理器函数
+                - 类型为 Callable[[RemotingCommand, tuple[str, int]], Awaitable[RemotingCommand | None]]
+                - 接收RemotingCommand和连接地址，返回处理后的RemotingCommand或None
+                - 用于异步处理服务器主动发起的请求或特定类型的响应
+
+        Example:
+            >>> async def custom_processor(request, addr):
+            ...     # 异步处理自定义请求
+            ...     print(f"异步处理请求 {request.code} 来自 {addr}")
+            ...     await asyncio.sleep(0.1)  # 模拟异步操作
+            ...     return None  # 返回None表示不处理
+            ...
+            >>> manager = AsyncBrokerManager(remote_config)
+            >>> # 注册处理器，会应用到所有连接池
+            >>> await manager.register_pool_processor(1001, custom_processor)
+            >>>
+            >>> # 添加Broker，新连接池会自动注册处理器
+            >>> await manager.add_broker("localhost:10911")
+            >>>
+            >>> # 为已存在的连接池注册处理器
+            >>> await manager.add_broker("broker1:10911")
+            >>> await manager.register_pool_processor(1002, another_processor)
+            >>> # 1002处理器会立即应用到broker1的连接池
+
+        Note:
+            - 处理器注册是全局的，会影响到所有连接池
+            - 重复注册相同的request_code会覆盖之前的处理器
+            - 注册过程是异步且线程安全的
+            - 处理器函数应该是协程函数，可以被多个连接并发调用
+        """
+        # 存储处理器到注册表
+        self._pool_processors[request_code] = processor_func
+
+        # 为所有现有的连接池注册处理器
+        async with AsyncReadWriteContext(self._rwlock, write=False):
+            for pool in self._broker_pools.values():
+                await pool.register_request_processor(request_code, processor_func)
+
+        self._logger.info(
+            "已注册异步连接池处理器",
+            extra={
+                "request_code": request_code,
+                "existing_pools_count": len(self._broker_pools),
+                "timestamp": time.time(),
+            },
+        )
