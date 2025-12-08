@@ -1,0 +1,2212 @@
+{
+  "module_info": {
+    "name": "Producer模块",
+    "version": "v2.0",
+    "last_updated": "2025-01-04",
+    "maintainers": ["pyrocketmq开发团队"],
+    "review_status": "已完成代码验证和文档同步"
+  },
+  "overview": {
+    "description": "Producer模块是pyrocketmq的消息生产者实现，采用清晰的分层架构设计，提供完整高效的消息发送、路由管理和故障处理功能。该模块基于MVP设计理念，从最简实现开始，逐步增强功能，现已支持同步、异步和事务消息等多种生产者模式。",
+    "architecture": {
+      "layers": [
+        {
+          "name": "应用层 (Application Layer)",
+          "components": [
+            {
+              "name": "Producer",
+              "description": "同步生产者",
+              "features": ["阻塞式发送", "简单易用"]
+            },
+            {
+              "name": "AsyncProducer",
+              "description": "异步生产者",
+              "features": ["基于asyncio", "高并发"]
+            },
+            {
+              "name": "TransactionProducer",
+              "description": "事务生产者",
+              "features": ["分布式事务支持"]
+            },
+            {
+              "name": "AsyncTransactionProducer",
+              "description": "异步事务生产者",
+              "features": ["异步分布式事务"]
+            }
+          ]
+        },
+        {
+          "name": "路由层 (Routing Layer)",
+          "components": [
+            {
+              "name": "MessageRouter",
+              "description": "消息路由器",
+              "features": ["智能队列选择"]
+            },
+            {
+              "name": "TopicBrokerMapping",
+              "description": "路由管理",
+              "features": ["Topic-Broker映射"]
+            },
+            {
+              "name": "QueueSelector",
+              "description": "队列选择策略",
+              "features": ["轮询/随机/哈希"]
+            }
+          ]
+        },
+        {
+          "name": "传输层 (Transport Layer)",
+          "components": [
+            {
+              "name": "BrokerManager",
+              "description": "连接管理",
+              "features": ["Broker连接池"]
+            },
+            {
+              "name": "NameServerManager",
+              "description": "服务发现",
+              "features": ["路由发现"]
+            },
+            {
+              "name": "ConnectionPool",
+              "description": "连接池",
+              "features": ["连接复用"]
+            }
+          ]
+        },
+        {
+          "name": "基础层 (Foundation Layer)",
+          "components": [
+            {
+              "name": "ProducerConfig",
+              "description": "配置管理",
+              "features": ["参数配置"]
+            },
+            {
+              "name": "错误处理体系",
+              "description": "分层异常",
+              "features": ["异常定义"]
+            },
+            {
+              "name": "工具类",
+              "description": "工具函数",
+              "features": ["验证/工具函数"]
+            }
+          ]
+        }
+      ]
+    },
+    "core_features": [
+      {
+        "feature": "多编程范式支持",
+        "description": "同时提供同步和异步两种编程模型"
+      },
+      {
+        "feature": "简化状态管理",
+        "description": "使用布尔标志替代复杂状态机，提升性能和可维护性"
+      },
+      {
+        "feature": "智能路由",
+        "description": "支持多种路由策略（轮询、随机、消息哈希）"
+      },
+      {
+        "feature": "故障感知",
+        "description": "自动检测和规避故障Broker，支持故障转移"
+      },
+      {
+        "feature": "心跳机制",
+        "description": "定期向所有Broker发送心跳，维持连接活跃状态"
+      },
+      {
+        "feature": "灵活配置",
+        "description": "支持多种环境配置模板和便捷创建函数"
+      },
+      {
+        "feature": "性能监控",
+        "description": "实时统计发送成功/失败率和基础指标"
+      },
+      {
+        "feature": "批量发送",
+        "description": "支持消息批量压缩发送，提高吞吐量"
+      },
+      {
+        "feature": "单向发送",
+        "description": "支持不等待响应的高吞吐发送模式"
+      },
+      {
+        "feature": "事务消息",
+        "description": "完整的事务消息支持，保证分布式事务一致性"
+      },
+      {
+        "feature": "连接池管理",
+        "description": "高效的连接复用，减少连接开销"
+      }
+    ]
+  },
+  "module_structure": {
+    "directory": "producer/",
+    "files": [
+      {
+        "name": "producer.py",
+        "description": "核心Producer实现 (MVP)"
+      },
+      {
+        "name": "async_producer.py",
+        "description": "异步Producer实现"
+      },
+      {
+        "name": "transactional_producer.py",
+        "description": "事务消息Producer实现"
+      },
+      {
+        "name": "transaction.py",
+        "description": "事务消息核心数据结构"
+      },
+      {
+        "name": "config.py",
+        "description": "配置管理"
+      },
+      {
+        "name": "topic_broker_mapping.py",
+        "description": "Topic-Broker映射管理 + 队列选择"
+      },
+      {
+        "name": "queue_selectors.py",
+        "description": "队列选择策略"
+      },
+      {
+        "name": "router.py",
+        "description": "消息路由器 (简化版)"
+      },
+      {
+        "name": "utils.py",
+        "description": "工具函数 (MVP)"
+      },
+      {
+        "name": "errors.py",
+        "description": "异常定义"
+      },
+      {
+        "name": "CLAUDE.md",
+        "description": "本文档"
+      }
+    ],
+    "optimization_achievements": [
+      "移除冗余组件: state_manager.py, router.py中的AsyncMessageRouter",
+      "功能整合: TopicBrokerMapping集成队列选择功能",
+      "简化状态管理: Producer使用`_running: bool`替代复杂状态机",
+      "代码量减少30%: 约300行冗余代码移除",
+      "性能提升: 减少不必要的抽象层次和状态检查"
+    ]
+  },
+  "core_data_structures": [
+    {
+      "name": "RouteInfo",
+      "description": "路由信息包装类，包含Topic路由数据和预构建的队列列表",
+      "class_definition": {
+        "type": "dataclass",
+        "fields": [
+          {
+            "name": "topic_route_data",
+            "type": "TopicRouteData"
+          },
+          {
+            "name": "last_update_time",
+            "type": "float"
+          },
+          {
+            "name": "available_queues",
+            "type": "list[tuple[MessageQueue, BrokerData]]",
+            "description": "预构建队列列表"
+          }
+        ]
+      },
+      "design_highlights": [
+        "预构建队列列表，避免每次路由时重新计算，提升性能",
+        "内置过期时间管理，支持路由信息自动刷新"
+      ]
+    },
+    {
+      "name": "BrokerHealthInfo",
+      "description": "Broker健康状态管理，记录每个Broker的性能指标和故障信息",
+      "class_definition": {
+        "type": "dataclass",
+        "fields": [
+          {
+            "name": "broker_data",
+            "type": "BrokerData"
+          },
+          {
+            "name": "status",
+            "type": "BrokerState"
+          },
+          {
+            "name": "success_count",
+            "type": "int"
+          },
+          {
+            "name": "failure_count",
+            "type": "int"
+          },
+          {
+            "name": "avg_latency",
+            "type": "float"
+          },
+          {
+            "name": "consecutive_failures",
+            "type": "int"
+          }
+        ]
+      },
+      "key_features": [
+        "自动故障检测：连续失败3次降级，5次标记不健康",
+        "自动恢复机制：连续成功5次恢复健康状态",
+        "性能监控：跟踪延迟、成功率等关键指标"
+      ]
+    },
+    {
+      "name": "SendMessageResult",
+      "description": "消息发送结果，包含完整的发送响应信息",
+      "class_definition": {
+        "type": "dataclass",
+        "fields": [
+          {
+            "name": "success",
+            "type": "bool"
+          },
+          {
+            "name": "message_id",
+            "type": "str | None",
+            "default": "None"
+          },
+          {
+            "name": "topic",
+            "type": "str | None",
+            "default": "None"
+          },
+          {
+            "name": "broker_name",
+            "type": "str | None",
+            "default": "None"
+          },
+          {
+            "name": "queue_id",
+            "type": "int | None",
+            "default": "None"
+          },
+          {
+            "name": "error",
+            "type": "Exception | None",
+            "default": "None"
+          },
+          {
+            "name": "send_timestamp",
+            "type": "float | None",
+            "default": "None"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoutingResult",
+      "description": "路由决策结果，包含选中的队列、Broker地址等信息",
+      "class_definition": {
+        "type": "dataclass",
+        "fields": [
+          {
+            "name": "success",
+            "type": "bool"
+          },
+          {
+            "name": "message_queue",
+            "type": "MessageQueue | None",
+            "default": "None"
+          },
+          {
+            "name": "broker_data",
+            "type": "BrokerData | None",
+            "default": "None"
+          },
+          {
+            "name": "broker_address",
+            "type": "str | None",
+            "default": "None"
+          },
+          {
+            "name": "error",
+            "type": "Exception | None",
+            "default": "None"
+          },
+          {
+            "name": "routing_strategy",
+            "type": "RoutingStrategy | None",
+            "default": "None"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TransactionSendResult",
+      "description": "事务消息发送结果，继承自SendMessageResult，包含事务相关状态信息",
+      "class_definition": {
+        "type": "dataclass",
+        "inheritance": "SendMessageResult",
+        "fields": [
+          {
+            "name": "transaction_id",
+            "type": "str",
+            "description": "事务ID"
+          },
+          {
+            "name": "local_transaction_state",
+            "type": "LocalTransactionState",
+            "description": "本地事务状态"
+          },
+          {
+            "name": "check_times",
+            "type": "int",
+            "default": "0",
+            "description": "事务回查次数"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LocalTransactionState",
+      "description": "本地事务执行状态枚举",
+      "type": "Enum",
+      "values": [
+        {
+          "name": "COMMIT_MESSAGE_STATE",
+          "value": "COMMIT_MESSAGE",
+          "description": "提交事务"
+        },
+        {
+          "name": "ROLLBACK_MESSAGE_STATE",
+          "value": "ROLLBACK_MESSAGE",
+          "description": "回滚事务"
+        },
+        {
+          "name": "UNKNOW",
+          "value": "UNKNOW",
+          "description": "未知状态，需要回查"
+        }
+      ]
+    },
+    {
+      "name": "TransactionListener",
+      "description": "事务监听器接口，定义本地事务执行和状态回查逻辑",
+      "type": "Abstract Base Class",
+      "methods": [
+        {
+          "name": "execute_local_transaction",
+          "signature": "(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState",
+          "description": "执行本地事务"
+        },
+        {
+          "name": "check_local_transaction",
+          "signature": "(self, message: Message, transaction_id: str) -> LocalTransactionState",
+          "description": "检查本地事务状态"
+        }
+      ]
+    },
+    {
+      "name": "TransactionMetadata",
+      "description": "事务元数据管理，跟踪事务状态和超时信息",
+      "class_definition": {
+        "type": "dataclass",
+        "fields": [
+          {
+            "name": "transaction_id",
+            "type": "str"
+          },
+          {
+            "name": "message",
+            "type": "Message"
+          },
+          {
+            "name": "local_state",
+            "type": "LocalTransactionState"
+          },
+          {
+            "name": "create_time",
+            "type": "float"
+          },
+          {
+            "name": "timeout",
+            "type": "float",
+            "default": "60000.0",
+            "description": "默认60秒超时"
+          },
+          {
+            "name": "check_times",
+            "type": "int",
+            "default": "0"
+          },
+          {
+            "name": "max_check_times",
+            "type": "int",
+            "default": "15"
+          }
+        ]
+      }
+    }
+  ],
+  "core_components": [
+    {
+      "name": "Producer (同步生产者)",
+      "description": "RocketMQ同步Producer的核心实现，采用MVP设计理念，专注于可靠的消息发送",
+      "core_features": [
+        "同步阻塞模型: 简单易用的阻塞式发送，适合批处理和简单应用",
+        "简化状态管理: 使用`_running: bool`替代复杂状态机，专注核心功能",
+        "生命周期管理: `start()`/`shutdown()`幂等操作，支持重复调用",
+        "完整发送模式: 支持同步发送、批量发送、单向发送和单向批量发送",
+        "智能路由集成: 内置MessageRouter进行智能路由选择，支持多种策略",
+        "后台任务管理: 自动处理路由更新和心跳发送",
+        "统计信息: 基础的发送成功/失败统计和性能指标"
+      ],
+      "scenarios": [
+        "新手入门和学习RocketMQ",
+        "简单的消息发送应用",
+        "批处理任务",
+        "对延迟不敏感的场景"
+      ],
+      "comparison_with_async": {
+        "headers": ["特性", "Producer (同步)", "AsyncProducer (异步)"],
+        "rows": [
+          ["编程模型", "同步阻塞", "async/await"],
+          ["并发性能", "单线程顺序处理", "高并发处理"],
+          ["使用复杂度", "简单易用", "需要异步编程知识"],
+          ["资源占用", "较高连接开销", "更低连接开销"],
+          ["适用场景", "简单应用、批处理", "高并发、低延迟应用"]
+        ]
+      },
+      "methods": [
+        {
+          "name": "start",
+          "signature": "() -> None",
+          "description": "启动生产者（幂等操作）"
+        },
+        {
+          "name": "shutdown",
+          "signature": "() -> None",
+          "description": "关闭生产者（幂等操作）"
+        },
+        {
+          "name": "send",
+          "signature": "(message: Message) -> SendMessageResult",
+          "description": "同步发送消息"
+        },
+        {
+          "name": "send_batch",
+          "signature": "(*messages: Message) -> SendMessageResult",
+          "description": "批量发送消息（自动编码）"
+        },
+        {
+          "name": "oneway",
+          "signature": "(message: Message) -> None",
+          "description": "单向发送消息（不等待响应）"
+        },
+        {
+          "name": "oneway_batch",
+          "signature": "(*messages: Message) -> None",
+          "description": "单向批量发送消息"
+        },
+        {
+          "name": "update_route_info",
+          "signature": "(topic: str) -> bool",
+          "description": "手动更新路由信息"
+        },
+        {
+          "name": "get_stats",
+          "signature": "() -> dict",
+          "description": "获取统计信息"
+        },
+        {
+          "name": "is_running",
+          "signature": "() -> bool",
+          "description": "检查运行状态"
+        }
+      ],
+      "internal_methods": [
+        "_send_message_to_broker",
+        "_batch_send_message_to_broker",
+        "_send_message_to_broker_oneway",
+        "_batch_send_message_to_broker_oneway",
+        "_background_task_loop",
+        "_refresh_all_routes",
+        "_send_heartbeat_to_all_broker"
+      ],
+      "helper_function": {
+        "name": "create_producer",
+        "signature": "(producer_group: str = \"DEFAULT_PRODUCER\", namesrv_addr: str = \"localhost:9876\", **kwargs) -> Producer"
+      },
+      "mvp_highlights": [
+        "避免过度抽象，专注核心消息发送功能",
+        "使用简单布尔状态管理，易于理解和调试",
+        "自动路由更新和心跳机制，降低使用复杂度",
+        "完整的批量消息支持，提升发送效率"
+      ]
+    },
+    {
+      "name": "TopicBrokerMapping (功能增强)",
+      "description": "Topic-Broker映射管理器，现在集成队列选择功能",
+      "responsibilities": [
+        "缓存Topic路由信息，避免频繁查询NameServer",
+        "队列选择功能: 支持轮询、随机、消息哈希策略",
+        "预构建队列列表，提升路由性能",
+        "路由信息过期管理和自动清理"
+      ],
+      "key_methods": [
+        {
+          "name": "get_available_queues",
+          "signature": "(topic: str) -> list[tuple[MessageQueue, BrokerData]]"
+        },
+        {
+          "name": "update_route_info",
+          "signature": "(topic: str, topic_route_data: TopicRouteData) -> bool"
+        },
+        {
+          "name": "clear_expired_routes",
+          "signature": "(timeout: float | None = None) -> int"
+        },
+        {
+          "name": "select_queue",
+          "signature": "(topic: str, message: Message | None, selector: QueueSelector | None) -> SelectionResult",
+          "description": "新增队列选择"
+        }
+      ]
+    },
+    {
+      "name": "MessageRouter (智能路由系统)",
+      "description": "高级消息路由器，提供智能路由决策、故障感知和性能监控功能",
+      "strategies": [
+        {
+          "name": "ROUND_ROBIN",
+          "description": "轮询策略，默认选择，保证负载均衡"
+        },
+        {
+          "name": "RANDOM",
+          "description": "随机策略，适合无状态负载均衡"
+        },
+        {
+          "name": "MESSAGE_HASH",
+          "description": "消息哈希策略，基于`SHARDING_KEY`确保消息顺序性"
+        }
+      ],
+      "intelligent_features": [
+        "故障感知: 实时监控Broker健康状态，自动规避故障节点",
+        "性能监控: 跟踪延迟、成功率等指标，支持延迟感知优化",
+        "健康检查: 自动检测Broker状态，支持故障恢复机制",
+        "预创建选择器: 在初始化时预创建所有队列选择器，提升性能"
+      ],
+      "failure_handling": {
+        "连续失败3次": "DEGRADED（降级状态）",
+        "连续失败5次": "UNHEALTHY（不健康状态）",
+        "连续成功5次": "HEALTHY（恢复健康）"
+      },
+      "core_methods": [
+        {
+          "name": "route_message",
+          "signature": "(topic: str, message: Message | None = None, strategy: RoutingStrategy | None = None) -> RoutingResult"
+        },
+        {
+          "name": "report_routing_result",
+          "signature": "(result: RoutingResult, latency_ms: float | None = None)"
+        },
+        {
+          "name": "report_routing_failure",
+          "signature": "(broker_name: str, error: Exception, broker_data: BrokerData | None = None)"
+        },
+        {
+          "name": "get_routing_stats",
+          "signature": "() -> dict[str, Any]",
+          "description": "获取路由统计信息"
+        },
+        {
+          "name": "reset_stats",
+          "signature": "() -> None",
+          "description": "重置统计信息"
+        },
+        {
+          "name": "update_broker_health_info",
+          "signature": "(broker_name: str, broker_data: BrokerData) -> None"
+        },
+        {
+          "name": "force_broker_recovery",
+          "signature": "(broker_name: str) -> bool",
+          "description": "强制恢复Broker状态"
+        },
+        {
+          "name": "get_available_brokers",
+          "signature": "() -> list[str]",
+          "description": "获取可用Broker列表"
+        },
+        {
+          "name": "select_broker_address",
+          "signature": "(broker_data: BrokerData) -> str | None"
+        }
+      ],
+      "internal_optimizations": [
+        "预创建队列选择器池，避免运行时创建开销",
+        "使用RLock保证线程安全的并发访问",
+        "分离统计信息和健康信息的锁管理，提升性能"
+      ]
+    },
+    {
+      "name": "QueueSelector族",
+      "description": "队列选择器策略模式实现，专注于同步版本",
+      "implementations": [
+        {
+          "name": "RoundRobinSelector",
+          "description": "维护每个Topic的计数器，实现轮询"
+        },
+        {
+          "name": "RandomSelector",
+          "description": "使用`random.choice()`随机选择"
+        },
+        {
+          "name": "MessageHashSelector",
+          "description": "优先使用`SHARDING_KEY`，其次使用`KEYS`的第一个值"
+        }
+      ],
+      "property_priority": [
+        "SHARDING_KEY: 分片键，用于顺序性保证",
+        "KEYS: 消息键，多个键用空格分隔",
+        "随机选择：当都没有时回退到随机选择"
+      ]
+    },
+    {
+      "name": "AsyncProducer (异步生产者)",
+      "description": "基于asyncio的高性能异步Producer实现，专为高并发场景设计",
+      "core_features": [
+        "异步架构: 完全基于asyncio实现，支持高并发消息发送",
+        "非阻塞操作: 所有网络操作都是异步的，不阻塞事件循环",
+        "完整异步功能: 异步发送、异步批量发送、异步单向发送等",
+        "高并发支持: 内置信号量控制并发数量，避免系统压力过大",
+        "异步后台任务: 使用asyncio.Task管理路由更新和心跳发送",
+        "优雅关闭: 支持异步资源清理和任务取消"
+      ],
+      "methods": [
+        {
+          "name": "start",
+          "signature": "async () -> None",
+          "description": "异步启动生产者"
+        },
+        {
+          "name": "shutdown",
+          "signature": "async () -> None",
+          "description": "异步关闭生产者"
+        },
+        {
+          "name": "send",
+          "signature": "async (message: Message) -> SendMessageResult",
+          "description": "异步发送消息"
+        },
+        {
+          "name": "send_batch",
+          "signature": "async (*messages: Message) -> SendMessageResult",
+          "description": "异步批量发送消息"
+        },
+        {
+          "name": "oneway",
+          "signature": "async (message: Message) -> None",
+          "description": "异步单向发送消息"
+        },
+        {
+          "name": "oneway_batch",
+          "signature": "async (*messages: Message) -> None",
+          "description": "异步单向批量发送消息"
+        },
+        {
+          "name": "update_route_info",
+          "signature": "async (topic: str) -> bool",
+          "description": "异步更新路由信息"
+        },
+        {
+          "name": "get_stats",
+          "signature": "() -> dict",
+          "description": "获取统计信息（同步方法）"
+        },
+        {
+          "name": "is_running",
+          "signature": "() -> bool",
+          "description": "检查运行状态（同步方法）"
+        }
+      ],
+      "internal_async_methods": [
+        "_init_nameserver_connections",
+        "_background_task_loop",
+        "_refresh_all_routes",
+        "_send_heartbeat_to_all_broker_async",
+        "_stop_background_tasks",
+        "_close_nameserver_connections"
+      ],
+      "helper_function": {
+        "name": "create_async_producer",
+        "signature": "(producer_group: str = \"DEFAULT_PRODUCER\", namesrv_addr: str = \"localhost:9876\", **kwargs) -> AsyncProducer"
+      },
+      "async_advantages": [
+        "高并发处理能力，单实例可处理数万QPS",
+        "更低的资源消耗，连接池复用效率更高",
+        "适合I/O密集型场景，如微服务架构",
+        "与现代异步框架（FastAPI、aiohttp等）完美集成"
+      ],
+      "scenarios": [
+        "高并发消息发送场景",
+        "异步Web应用集成",
+        "实时数据流处理",
+        "微服务间通信"
+      ]
+    },
+    {
+      "name": "TransactionProducer (事务消息Producer)",
+      "description": "RocketMQ事务消息Producer实现，提供完整的分布式事务消息支持",
+      "core_features": [
+        "两阶段提交: 支持事务消息的两阶段提交流程",
+        "本地事务集成: 通过TransactionListener接口集成业务本地事务",
+        "事务状态回查: 自动处理Broker的事务状态回查请求",
+        "事务超时管理: 支持事务超时检测和自动清理",
+        "异常处理: 完整的事务异常处理和错误恢复机制"
+      ],
+      "methods": [
+        {
+          "name": "start",
+          "signature": "() -> None",
+          "description": "启动事务Producer"
+        },
+        {
+          "name": "send_message_in_transaction",
+          "signature": "(message: Message, arg: Any = None) -> TransactionSendResult",
+          "description": "发送事务消息"
+        }
+      ],
+      "internal_methods": [
+        "_execute_local_transaction",
+        "_send_transaction_confirmation",
+        "_handle_transaction_check",
+        "set_transaction_timeout",
+        "set_max_check_times",
+        "get_stats"
+      ],
+      "helper_function": {
+        "name": "create_transactional_producer",
+        "signature": "(producer_group: str, namesrv_addr: str, transaction_listener: TransactionListener, **kwargs) -> TransactionProducer"
+      }
+    },
+    {
+      "name": "AsyncTransactionProducer (异步事务消息Producer)",
+      "description": "基于asyncio的异步事务消息Producer，结合异步架构和分布式事务功能",
+      "core_features": [
+        "异步事务处理: 支持异步本地事务执行和状态回查",
+        "两阶段提交: 异步版本的事务消息两阶段提交流程",
+        "异步本地事务集成: 通过AsyncTransactionListener接口集成异步业务逻辑",
+        "异步状态回查: 异步处理Broker的事务状态回查请求",
+        "高并发事务: 支持高并发的分布式事务处理",
+        "完整异步功能: 继承AsyncProducer的所有异步特性"
+      ],
+      "methods": [
+        {
+          "name": "start",
+          "signature": "async () -> None",
+          "description": "异步启动事务Producer"
+        },
+        {
+          "name": "shutdown",
+          "signature": "async () -> None",
+          "description": "异步关闭事务Producer"
+        },
+        {
+          "name": "send_message_in_transaction",
+          "signature": "async (message: Message, arg: Any = None) -> TransactionSendResult",
+          "description": "异步发送事务消息"
+        }
+      ],
+      "internal_async_methods": [
+        "_execute_local_transaction_async",
+        "_send_transaction_confirmation_async",
+        "_handle_transaction_check_async"
+      ],
+      "async_transaction_listener_interface": {
+        "name": "AsyncTransactionListener",
+        "type": "Abstract Base Class",
+        "methods": [
+          {
+            "name": "execute_local_transaction",
+            "signature": "async (self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState",
+            "description": "异步执行本地事务"
+          },
+          {
+            "name": "check_local_transaction",
+            "signature": "async (self, message: Message, transaction_id: str) -> LocalTransactionState",
+            "description": "异步检查本地事务状态"
+          }
+        ]
+      },
+      "helper_function": {
+        "name": "create_async_transaction_producer",
+        "signature": "(producer_group: str, namesrv_addr: str, transaction_listener: AsyncTransactionListener, **kwargs) -> AsyncTransactionProducer"
+      },
+      "scenarios": [
+        "高并发分布式事务处理",
+        "异步微服务架构中的事务一致性",
+        "实时交易系统中的事务保证",
+        "异步数据库操作与消息发送的一致性"
+      ]
+    },
+    {
+      "name": "ProducerConfig",
+      "description": "完整的Producer配置管理，支持环境变量和预定义模板",
+      "configuration_categories": [
+        {
+          "name": "基础配置",
+          "parameters": ["producer_group", "client_id", "namesrv_addr"]
+        },
+        {
+          "name": "消息配置",
+          "parameters": [
+            "send_msg_timeout",
+            "retry_times",
+            "max_message_size",
+            "compress_msg_body_over_howmuch"
+          ]
+        },
+        {
+          "name": "路由配置",
+          "parameters": [
+            "poll_name_server_interval",
+            "update_topic_route_info_interval",
+            "routing_strategy"
+          ]
+        },
+        {
+          "name": "心跳配置",
+          "parameters": ["heartbeat_broker_interval"],
+          "description": "向Broker发送心跳的间隔时间"
+        },
+        {
+          "name": "性能配置",
+          "parameters": [
+            "batch_size",
+            "async_send_semaphore",
+            "send_latency_enable"
+          ]
+        },
+        {
+          "name": "批量配置",
+          "parameters": ["batch_split_type", "compress_msg_body_over_howmuch"]
+        },
+        {
+          "name": "调试配置",
+          "parameters": ["trace_message", "debug_enabled"]
+        }
+      ],
+      "key_parameters": [
+        {
+          "name": "producer_group",
+          "type": "str",
+          "default": "DEFAULT_PRODUCER",
+          "description": "生产者组名"
+        },
+        {
+          "name": "namesrv_addr",
+          "type": "str",
+          "default": "localhost:9876",
+          "description": "NameServer地址列表"
+        },
+        {
+          "name": "send_msg_timeout",
+          "type": "float",
+          "default": "3000.0",
+          "description": "消息发送超时时间(ms)"
+        },
+        {
+          "name": "retry_times",
+          "type": "int",
+          "default": "2",
+          "description": "重试次数"
+        },
+        {
+          "name": "max_message_size",
+          "type": "int",
+          "default": "4*1024*1024",
+          "description": "最大消息大小(4MB)"
+        },
+        {
+          "name": "routing_strategy",
+          "type": "str",
+          "default": "round_robin",
+          "description": "路由策略"
+        },
+        {
+          "name": "async_send_semaphore",
+          "type": "int",
+          "default": "10000",
+          "description": "异步发送信号量大小"
+        },
+        {
+          "name": "batch_size",
+          "type": "int",
+          "default": "32",
+          "description": "批量发送默认数量"
+        }
+      ],
+      "predefined_templates": [
+        "DEFAULT_CONFIG: 默认配置，适合一般场景",
+        "DEVELOPMENT_CONFIG: 开发环境：启用调试和跟踪，更长超时",
+        "PRODUCTION_CONFIG: 生产环境：注重性能和稳定性，更多重试",
+        "ORDER_SEQUENCED_CONFIG: 顺序消息配置：消息哈希策略，单条批量",
+        "HIGH_PERFORMANCE_CONFIG: 高性能配置：优化吞吐量和并发",
+        "TESTING_CONFIG: 测试环境：简化配置，便于调试"
+      ],
+      "creation_methods": [
+        "使用预定义配置: config = get_config(\"production\")",
+        "自定义配置: config = create_custom_config(...)",
+        "从环境变量加载: config = ProducerConfig.from_env()",
+        "链式配置: config = ProducerConfig().with_producer_group(\"my_group\").with_timeout(5000.0).with_retry(3)"
+      ]
+    }
+  ],
+  "core_flows": [
+    {
+      "name": "消息发送完整流程",
+      "description": "从消息发送到返回结果的完整流程",
+      "flow_steps": [
+        {
+          "step": "Producer.send",
+          "type": "entry_point"
+        },
+        {
+          "step": "验证消息",
+          "type": "validation",
+          "failure_action": "抛出异常"
+        },
+        {
+          "step": "检查路由缓存",
+          "type": "cache_check",
+          "actions": {
+            "命中": "选择队列",
+            "未命中": "查询NameServer → 更新路由缓存 → 选择队列"
+          }
+        },
+        {
+          "step": "建立Broker连接",
+          "type": "connection"
+        },
+        {
+          "step": "发送消息",
+          "type": "send"
+        },
+        {
+          "step": "发送成功?",
+          "type": "check",
+          "actions": {
+            "是": "更新统计 → 返回SendResult",
+            "否": "重试次数未超限? → 是: 选择其他Broker → 重试; 否: 返回失败结果"
+          }
+        }
+      ],
+      "flow_description": [
+        "消息验证: 检查消息大小、Topic格式等",
+        "路由查询: 优先使用缓存，缓存失效时查询NameServer",
+        "队列选择: 根据配置策略选择合适的消息队列",
+        "连接管理: 使用连接池复用，减少连接开销",
+        "重试机制: 支持配置重试次数和故障转移",
+        "统计更新: 实时更新成功/失败统计"
+      ]
+    },
+    {
+      "name": "路由发现与管理",
+      "description": "Producer启动后的路由信息发现和管理流程",
+      "flow_steps": [
+        "Producer启动 → 连接NameServer → 获取Topic路由 → 缓存路由信息 → 预构建队列列表 → 后台定时刷新 → 路由是否过期? → 是: 重新获取 → 更新缓存; 否: 继续使用"
+      ],
+      "key_features": [
+        "智能缓存: TTL过期机制，平衡性能和实时性",
+        "预构建: 提前计算队列列表，减少运行时开销",
+        "自动刷新: 后台任务定期更新路由信息",
+        "故障恢复: 自动清理过期路由，发现新Broker"
+      ]
+    },
+    {
+      "name": "故障检测与处理",
+      "description": "Broker健康状态管理和故障处理机制",
+      "state_transitions": {
+        "HEALTHY": {
+          "连续失败3次": "DEGRADED",
+          "description": "正常使用，优先选择"
+        },
+        "DEGRADED": {
+          "连续失败2次": "UNHEALTHY",
+          "连续成功5次": "HEALTHY",
+          "description": "谨慎使用，降低权重"
+        },
+        "UNHEALTHY": {
+          "连续成功5次": "HEALTHY",
+          "description": "避免使用，仅作备选"
+        }
+      },
+      "handling_strategies": [
+        "降级处理: 优先选择健康Broker，降级Broker作为备选",
+        "自动恢复: 连续成功后自动恢复健康状态",
+        "权重调整: 根据健康状态动态调整选择权重",
+        "故障转移: 快速切换到可用Broker"
+      ]
+    },
+    {
+      "name": "心跳机制",
+      "description": "Producer与Broker之间的心跳维持机制",
+      "sequence": [
+        {
+          "loop": "每30秒",
+          "steps": [
+            "Producer → NameServer: 获取所有Broker列表",
+            "Producer → Broker: 发送心跳(单向)",
+            "Note: 不等待响应",
+            "Producer → Producer: 更新心跳统计"
+          ]
+        },
+        {
+          "conditional": {
+            "心跳失败": "Producer → Producer: 标记Broker为DEGRADED",
+            "心跳成功": "Producer → Producer: 保持Broker为HEALTHY"
+          }
+        }
+      ],
+      "features": [
+        "智能发现: 从路由信息中自动发现所有Broker",
+        "单向发送: 使用oneway模式，不阻塞后台任务",
+        "容错处理: 单个Broker失败不影响整体",
+        "统计报告: 记录成功率，便于监控"
+      ]
+    },
+    {
+      "name": "批量消息处理",
+      "description": "批量消息的编码、发送和解压流程",
+      "flow_steps": [
+        "send_batch调用 → 验证所有消息 → Topic相同? → 否: 抛出异常; 是: 压缩消息体 → 编码批量消息 → 单条发送逻辑 → Broker接收 → Broker解压 → 投递多条消息 → 返回批量结果"
+      ],
+      "advantages": [
+        "减少网络开销: 一次请求发送多条消息",
+        "提高吞吐量: 显著提升消息发送效率",
+        "自动压缩: 大消息自动压缩，节省带宽",
+        "原子操作: 批量消息作为单一事务处理"
+      ]
+    }
+  ],
+  "design_patterns": [
+    {
+      "name": "策略模式 (Strategy Pattern)",
+      "description": "不同场景选择不同的消息队列分配策略",
+      "example": {
+        "title": "队列选择策略示例",
+        "code": [
+          "# 轮询策略 - 负载均衡",
+          "selector = RoundRobinQueueSelector()",
+          "queue = selector.select(topic, queues, message)",
+          "",
+          "# 哈希策略 - 保证消息顺序",
+          "selector = HashQueueSelector()",
+          "# 使用 SHARDING KEY 保证相���订单的消息总是进入同一个队列",
+          "message.set_property(\"SHARDING_KEY\", order_id)",
+          "queue = selector.select(topic, queues, message)",
+          "",
+          "# 运行时切换策略",
+          "router.set_strategy(RoutingStrategy.ROUND_ROBIN)"
+        ]
+      },
+      "application_scenarios": [
+        "轮询：普通消息，追求负载均衡",
+        "随机：无状态消息，简单分布",
+        "哈希：顺序消息，需要保证消息顺序性"
+      ]
+    },
+    {
+      "name": "工厂模式 (Factory Pattern)",
+      "description": "简化Producer实例创建过程",
+      "example": {
+        "title": "便捷创建函数示例",
+        "code": [
+          "# 同步Producer工厂",
+          "def create_producer(group=\"DEFAULT\", namesrv=\"localhost:9876\", **kwargs):",
+          "    config = ProducerConfig(producer_group=group, namesrv_addr=namesrv, **kwargs)",
+          "    return Producer(config)",
+          "",
+          "# 异步Producer工厂",
+          "def create_async_producer(group=\"DEFAULT\", namesrv=\"localhost:9876\", **kwargs):",
+          "    config = ProducerConfig(producer_group=group, namesrv_addr=namesrv, **kwargs)",
+          "    return AsyncProducer(config)",
+          "",
+          "# 事务Producer工厂",
+          "def create_transaction_producer(listener, group=\"DEFAULT\", namesrv=\"localhost:9876\"):",
+          "    return TransactionProducer(listener, producer_group=group, namesrv_addr=namesrv)"
+        ]
+      },
+      "advantages": ["封装配置复杂性", "提供快速上手的创建方式"]
+    },
+    {
+      "name": "观察者模式 (Observer Pattern)",
+      "description": "在事务消息的生命周期中回调业务逻辑",
+      "example": {
+        "title": "事务监听器示例",
+        "code": [
+          "class OrderTransactionListener(TransactionListener):",
+          "    def execute_local_transaction(self, msg, transaction_id):",
+          "        # 执行本地事务（如创建订单）",
+          "        order_id = json.loads(msg.body)['order_id']",
+          "        success = create_order_in_database(order_id)",
+          "        ",
+          "        # 返回事务状态",
+          "        return LocalTransactionState.COMMIT if success else LocalTransactionState.ROLLBACK",
+          "    ",
+          "    def check_local_transaction(self, msg, transaction_id):",
+          "        # 回查本地事务状态",
+          "        if order_exists(msg.transaction_id):",
+          "            return LocalTransactionState.COMMIT",
+          "        return LocalTransactionState.ROLLBACK"
+        ]
+      }
+    },
+    {
+      "name": "代理模式 (Proxy Pattern)",
+      "description": "封装与Broker的通信细节",
+      "example": {
+        "title": "Broker客户端代理示例",
+        "code": [
+          "class BrokerClient:",
+          "    def sync_send_message(self, group, body, queue, properties):",
+          "        # 1. 构建请求协议",
+          "        request = self._build_request(group, body, queue, properties)",
+          "        ",
+          "        # 2. 发送并等待响应",
+          "        response = self.remote.invoke_sync(request)",
+          "        ",
+          "        # 3. 解析响应",
+          "        return self._parse_response(response)",
+          "    ",
+          "    def oneway_send_message(self, group, body, queue, properties):",
+          "        # 单向发送，不等待响应",
+          "        request = self._build_request(group, body, queue, properties)",
+          "        self.remote.invoke_oneway(request)"
+        ]
+      }
+    },
+    {
+      "name": "状态模式 (State Pattern)",
+      "description": "根据通信结果动态调整Broker状态",
+      "state_transitions": {
+        "HEALTHY": "连续失败3次 → DEGRADED",
+        "DEGRADED": {
+          "failure": "连续失败5次 → UNHEALTHY",
+          "recovery": "连续成功5次 → HEALTHY"
+        },
+        "UNHEALTHY": "连续成功5次 → HEALTHY"
+      },
+      "example": {
+        "title": "Broker健康状态管理示例",
+        "code": [
+          "class BrokerHealthInfo:",
+          "    def update_status(self, success: bool):",
+          "        if success:",
+          "            self.consecutive_failures = 0",
+          "            self.consecutive_successes += 1",
+          "            if self.consecutive_successes >= 5:",
+          "                self.status = BrokerStatus.HEALTHY",
+          "        else:",
+          "            self.consecutive_failures += 1",
+          "            if self.consecutive_failures >= 5:",
+          "                self.status = BrokerStatus.UNHEALTHY",
+          "            elif self.consecutive_failures >= 3:",
+          "                self.status = BrokerStatus.DEGRADED"
+        ]
+      }
+    },
+    {
+      "name": "缓存模式 (Cache Pattern)",
+      "description": "减少对NameServer的查询频率",
+      "features": ["TTL过期机制", "预构建队列列表", "自动刷新和清理"],
+      "example": {
+        "title": "路由信息缓存示例",
+        "code": [
+          "class TopicBrokerMapping:",
+          "    def get_route_info(self, topic: str):",
+          "        route_info = self._cache.get(topic)",
+          "        ",
+          "        # 检查是否过期",
+          "        if route_info and time.time() - route_info.last_update_time < self._ttl:",
+          "            return route_info",
+          "            ",
+          "        # 缓存未命中或已过期，触发更新",
+          "        return self._refresh_route(topic)"
+        ]
+      }
+    }
+  ],
+  "performance_optimization": [
+    {
+      "name": "预构建队列列表",
+      "description": "`TopicBrokerMapping`在路由更新时预先构建所有可用队列列表，避免每次路由时重新计算"
+    },
+    {
+      "name": "线程安全设计",
+      "features": [
+        "使用`threading.RLock()`保证并发安全",
+        "细粒度锁减少锁竞争",
+        "统计信息独立锁管理"
+      ]
+    },
+    {
+      "name": "内存管理",
+      "features": [
+        "路由信息自动过期清理",
+        "延迟记录只保留最近100次",
+        "统计信息定期重置支持"
+      ]
+    }
+  ],
+  "error_handling": {
+    "exception_hierarchy": {
+      "base": "ProducerError (基类)",
+      "subclasses": [
+        {
+          "name": "ProducerStartError",
+          "description": "启动异常"
+        },
+        {
+          "name": "ProducerStateError",
+          "description": "状态异常"
+        },
+        {
+          "name": "MessageSendError",
+          "description": "发送异常"
+        },
+        {
+          "name": "RouteNotFoundError",
+          "description": "路由未找到"
+        },
+        {
+          "name": "BrokerNotAvailableError",
+          "description": "Broker不可用"
+        },
+        {
+          "name": "QueueNotAvailableError",
+          "description": "队列不可用"
+        },
+        {
+          "name": "TimeoutError",
+          "description": "超时异常"
+        }
+      ]
+    },
+    "fault_recovery": [
+      "自动故障检测和状态转换",
+      "强制恢复API支持手动干预",
+      "详细的健康状态监控"
+    ]
+  },
+  "usage_examples": [
+    {
+      "name": "基本使用",
+      "description": "MessageRouter和TopicBrokerMapping的基本使用",
+      "code": [
+        "from pyrocketmq.producer import TopicBrokerMapping, MessageRouter",
+        "",
+        "# 创建映射管理器",
+        "mapping = TopicBrokerMapping()",
+        "",
+        "# 创建路由器",
+        "router = MessageRouter(mapping)",
+        "",
+        "# 路由消息",
+        "result = router.route_message(\"test_topic\", message)",
+        "if result.success:",
+        "    print(f\"Selected queue: {result.message_queue.full_name}\")",
+        "    print(f\"Broker address: {result.broker_address}\")"
+      ]
+    },
+    {
+      "name": "使用不同策略",
+      "description": "使用消息哈希策略确保消息顺序性",
+      "code": [
+        "from pyrocketmq.producer.queue_selectors import MessageHashSelector",
+        "from pyrocketmq.producer.router import RoutingStrategy",
+        "",
+        "# 使用消息哈希策略",
+        "result = router.route_message(",
+        "    \"order_topic\",",
+        "    order_message,",
+        "    RoutingStrategy.MESSAGE_HASH",
+        ")",
+        "",
+        "# 确保相同订单ID的消息到同一队列",
+        "order_message.set_property(\"SHARDING_KEY\", order_id)"
+      ]
+    },
+    {
+      "name": "配置管理",
+      "description": "使用预定义和自定义配置",
+      "code": [
+        "from pyrocketmq.producer.config import get_config, create_custom_config",
+        "",
+        "# 使用预定义配置",
+        "config = get_config(\"production\")",
+        "",
+        "# 自定义配置",
+        "config = create_custom_config(",
+        "    producer_group=\"order_producer\",",
+        "    namesrv_addr=\"192.168.1.100:9876\",",
+        "    retry_times=3",
+        ")"
+      ]
+    }
+  ],
+  "monitoring_and_stats": {
+    "routing_stats": {
+      "description": "路由统计信息",
+      "code": [
+        "stats = router.get_routing_stats()",
+        "print(f\"总路由次数: {stats['total_routing']}\")",
+        "print(f\"成功路由次数: {stats['successful_routing']}\")",
+        "print(f\"策略使用情况: {stats['strategy_usage']}\")"
+      ]
+    },
+    "broker_health_stats": {
+      "description": "Broker健康状态监控",
+      "code": [
+        "stats = router.get_routing_stats()",
+        "for broker, health in stats['broker_health'].items():",
+        "    print(f\"Broker {broker}: {health['status']}, \"",
+        "          f\"成功率: {health['success_rate']:.2%}, \"",
+        "          f\"平均延迟: {health['avg_latency']:.2f}ms\")"
+      ]
+    }
+  },
+  "best_practices": {
+    "producer_selection_guide": {
+      "description": "根据场景选择合适的Producer类型",
+      "comparison_table": [
+        ["场景类型", "推荐Producer", "理由"],
+        ["新手学习", "Producer", "学习曲线平缓，易于调试"],
+        ["简单应用", "Producer", "代码直观，维护简单"],
+        ["批处理任务", "Producer", "同步模型更自然"],
+        ["高并发Web服务", "AsyncProducer", "更高吞吐，更低延迟"],
+        ["微服务架构", "AsyncProducer", "与异步框架完美集成"],
+        ["分布式事务", "TransactionProducer", "保证事务一致性"],
+        ["实时数据流", "AsyncProducer + oneway", "极致性能，低延迟"]
+      ]
+    },
+    "configuration_optimization": {
+      "development_config": {
+        "code": [
+          "config = ProducerConfig(",
+          "    producer_group=\"DEV_PRODUCER\",",
+          "    namesrv_addr=\"localhost:9876\",",
+          "    send_msg_timeout=5000,     # 5秒超时，便于调试",
+          "    retry_times=1,            # 减少重试，快速失败",
+          "    compress_msg_body_over_howmuch=1024,  # 1KB压缩，测试压缩",
+          "    max_message_size=2*1024*1024,  # 2MB限制",
+          ")"
+        ]
+      },
+      "production_config": {
+        "code": [
+          "config = ProducerConfig(",
+          "    producer_group=f\"{APP_NAME}_PRODUCER\",  # 使用应用名",
+          "    namesrv_addr=\"ns1:9876;ns2:9876;ns3:9876\",  # 多NameServer",
+          "    send_msg_timeout=10000,    # 10秒超时，应对网络抖动",
+          "    retry_times=5,            # 更多重试，提高可靠性",
+          "    retry_another_broker_when_not_store_ok=True,  # 故障转移",
+          "    compress_msg_body_over_howmuch=4096,  # 4KB压缩阈值",
+          "    max_message_size=8*1024*1024,  # 8MB最大消息",
+          "    heartbeat_broker_interval=30000,  # 30秒心跳",
+          "    update_topic_route_info_interval=60000,  # 1分钟路由刷新",
+          ")"
+        ]
+      }
+    },
+    "message_design_guidelines": {
+      "body_design": {
+        "recommended": [
+          "JSON格式，结构化数据",
+          "设置合理的消息属性",
+          "避免超大消息体（超过1MB）"
+        ],
+        "code": [
+          "# ✅ 推荐：JSON格式，结构化数据",
+          "message = Message(",
+          "    topic=\"order_event\",",
+          "    body=json.dumps({",
+          "        \"order_id\": \"ORD-2024-001\",",
+          "        \"user_id\": \"user_123\",",
+          "        \"amount\": 99.99,",
+          "        \"timestamp\": int(time.time() * 1000),",
+          "        \"items\": [...]",
+          "    }).encode()",
+          ")",
+          "",
+          "# ✅ 推荐：设置合理的消息属性",
+          "message.set_property(\"SOURCE\", \"order_service\")",
+          "message.set_property(\"VERSION\", \"1.0\")",
+          "message.set_keys(\"order_id\")  # 用于消息查询",
+          "",
+          "# ❌ 避免：超大消息体（超过1MB）",
+          "# 应该使用外部存储，消息中只存引用"
+        ]
+      },
+      "topic_naming_conventions": {
+        "recommended": [
+          "order_created: 订单创建",
+          "order_paid: 订单支付",
+          "inventory_updated: 库存更新",
+          "user_registered: 用户注册"
+        ],
+        "avoid": ["events", "data", "messages"]
+      }
+    },
+    "performance_optimization_techniques": {
+      "batch_send_optimization": {
+        "description": "批量发送提高吞吐",
+        "code": [
+          "# ✅ 推荐：批量发送提高吞吐",
+          "batch_size = 32  # 适中的批量大小",
+          "messages = [create_message(i) for i in range(batch_size)]",
+          "result = producer.send_batch(*messages)",
+          "",
+          "# 批量发送最佳实践：",
+          "# 1. 同一Topic的消息一起批处理",
+          "# 2. 批量大小控制在32-128之间",
+          "# 3. 消息体大小平均，避免单条过大"
+        ]
+      },
+      "async_send_optimization": {
+        "description": "使用AsyncProducer处理高并发",
+        "code": [
+          "# ✅ 推荐：使用AsyncProducer处理高并发",
+          "async def handle_requests(requests):",
+          "    producer = create_async_producer(",
+          "        async_send_semaphore=1000  # 控制并发数",
+          "    )",
+          "    await producer.start()",
+          "    ",
+          "    # 使用gather并发发送",
+          "    tasks = [producer.send(req.to_message()) for req in requests]",
+          "    results = await asyncio.gather(*tasks, return_exceptions=True)",
+          "    ",
+          "    await producer.shutdown()"
+        ]
+      },
+      "connection_pool_optimization": {
+        "description": "生产环境连接池配置",
+        "code": [
+          "# 生产环境连接池配置",
+          "remote_config = RemoteConfig(",
+          "    core_pool_size=10,      # 核心连接数",
+          "    maximum_pool_size=100,  # 最大连接数",
+          "    keep_alive_time=60000,  # 连接保活时间",
+          ")"
+        ]
+      }
+    },
+    "error_handling_best_practices": {
+      "layered_error_handling": {
+        "description": "分层错误处理",
+        "code": [
+          "try:",
+          "    result = producer.send(message)",
+          "except RouteNotFoundError:",
+          "    # Topic未创建，联系管理员",
+          "    logger.error(f\"Topic {message.topic} not found\")",
+          "    raise BusinessException(\"Topic not configured\")",
+          "    ",
+          "except BrokerNotAvailableError:",
+          "    # Broker不可用，可以重试或降级",
+          "    logger.warning(\"All brokers unavailable, retrying...\")",
+          "    time.sleep(1)  # 简单退避",
+          "    return send_with_retry(message)",
+          "    ",
+          "except MessageSendError as e:",
+          "    # 发送失败，记录详细错误",
+          "    logger.error(f\"Send failed: {e}\", exc_info=True)",
+          "    raise",
+          "    ",
+          "except Exception as e:",
+          "    # 未预期错误",
+          "    logger.critical(f\"Unexpected error: {e}\", exc_info=True)",
+          "    raise"
+        ]
+      },
+      "retry_strategy": {
+        "description": "指数退避重试",
+        "code": [
+          "def send_with_retry(producer, message, max_retries=3):",
+          "    for attempt in range(max_retries):",
+          "        try:",
+          "            return producer.send(message)",
+          "        except MessageSendError as e:",
+          "            if attempt == max_retries - 1:",
+          "                raise",
+          "            ",
+          "            # 指数退避",
+          "            delay = (2 ** attempt) * 0.1",
+          "            time.sleep(delay)",
+          "            logger.warning(f\"Retry {attempt + 1} after {delay}s\")"
+        ]
+      }
+    },
+    "monitoring_and_alerting": {
+      "key_metrics_monitoring": {
+        "description": "关键指标监控",
+        "code": [
+          "# 定期检查Producer状态",
+          "def monitor_producer(producer):",
+          "    stats = producer.get_stats()",
+          "    ",
+          "    # 发送成功率告警",
+          "    success_rate = float(stats['success_rate'].rstrip('%'))",
+          "    if success_rate < 95:",
+          "        send_alert(f\"Producer success rate: {success_rate}%\")",
+          "    ",
+          "    # 消息积压告警",
+          "    if stats['total_failed'] > 1000:",
+          "        send_alert(f\"Too many failed messages: {stats['total_failed']}\")"
+        ]
+      },
+      "logging_standards": {
+        "description": "结构化日志，便于分析",
+        "code": [
+          "# 结构化日志，便于分析",
+          "logger.info(",
+          "    \"Message sent\",",
+          "    extra={",
+          "        \"topic\": message.topic,",
+          "        \"msg_id\": result.msg_id,",
+          "        \"queue_id\": result.queue_id,",
+          "        \"broker\": result.broker_name,",
+          "        \"size\": len(message.body),",
+          "        \"duration_ms\": duration",
+          "    }",
+          ")"
+        ]
+      }
+    },
+    "mvp_design_principles": {
+      "principles": [
+        "从简开始：优先实现核心功能，避免过度设计",
+        "渐进增强：在稳定基础上逐步添加高级特性",
+        "保持简洁：减少不必要的抽象层次",
+        "性能优先：优化关键路径，减少运行时开销",
+        "易于维护：清晰的代码结构，完善的文档",
+        "生产就绪：完善的错误处理和监控机制"
+      ]
+    }
+  },
+  "usage_examples_mvp": [
+    {
+      "name": "基本Producer使用",
+      "code": [
+        "from pyrocketmq.producer import Producer, create_producer",
+        "",
+        "# 方式1: 使用默认配置",
+        "producer = Producer()",
+        "producer.start()",
+        "",
+        "# 方式2: 便捷创建",
+        "producer = create_producer(",
+        "    producer_group=\"my_producer\",",
+        "    namesrv_addr=\"localhost:9876\"",
+        ")",
+        "producer.start()",
+        "",
+        "# 发送消息",
+        "message = Message(topic=\"test_topic\", body=b\"Hello RocketMQ\")",
+        "",
+        "# 1. 同步发送消息",
+        "result = producer.send(message)",
+        "print(f\"Send result: {result.success}\")",
+        "",
+        "# 2. 批量发送消息",
+        "msg1 = Message(topic=\"test_topic\", body=b\"Batch message 1\")",
+        "msg2 = Message(topic=\"test_topic\", body=b\"Batch message 2\")",
+        "batch_result = producer.send_batch(msg1, msg2)",
+        "print(f\"Batch send result: {batch_result.success}\")",
+        "",
+        "# 3. 单向发送消息（高性能，不等待响应）",
+        "producer.oneway(Message(topic=\"test_topic\", body=b\"Oneway message\"))",
+        "",
+        "# 4. 单向批量发送消息（超高性能，不等待响应）",
+        "producer.oneway_batch(msg1, msg2)",
+        "",
+        "# 关闭Producer",
+        "producer.shutdown()"
+      ]
+    },
+    {
+      "name": "消息属性和路由策略",
+      "code": [
+        "from pyrocketmq.producer.queue_selectors import MessageHashSelector",
+        "from pyrocketmq.producer.router import RoutingStrategy",
+        "",
+        "# 创建带顺序性的消息",
+        "order_message = Message(topic=\"order_topic\", body=b\"order_data\")",
+        "order_message.set_property(\"SHARDING_KEY\", \"user_123\")",
+        "",
+        "# Producer会自动使用消息哈希路由确保顺序性",
+        "result = producer.send(order_message)"
+      ]
+    },
+    {
+      "name": "配置管理",
+      "code": [
+        "from pyrocketmq.producer.config import get_config, create_custom_config",
+        "from pyrocketmq.producer import Producer",
+        "",
+        "# 使用预定义配置",
+        "config = get_config(\"production\")",
+        "producer = Producer(config)",
+        "",
+        "# 自定义配置",
+        "config = create_custom_config(",
+        "    producer_group=\"order_producer\",",
+        "    retry_times=3,",
+        "    send_msg_timeout=5000.0,",
+        "    heartbeat_broker_interval=15000  # 心跳间隔15秒",
+        ")"
+      ]
+    },
+    {
+      "name": "统计信息查看",
+      "code": [
+        "# 获取Producer统计信息",
+        "stats = producer.get_stats()",
+        "print(f\"运行状态: {stats['running']}\")",
+        "print(f\"发送成功: {stats['total_sent']}\")",
+        "print(f\"发送失败: {stats['total_failed']}\")",
+        "print(f\"成功率: {stats['success_rate']}\")",
+        "",
+        "# 获取路由统计信息",
+        "router_stats = producer._message_router.get_routing_stats()",
+        "print(f\"总路由次数: {router_stats['total_routing']}\")"
+      ]
+    },
+    {
+      "name": "消息发送模式对比",
+      "code": [
+        "from pyrocketmq.producer import create_producer",
+        "from pyrocketmq.model.message import Message",
+        "",
+        "producer = create_producer(\"GID_TEST\", \"nameserver:9876\")",
+        "producer.start()",
+        "",
+        "# 准备测试消息",
+        "msg = Message(topic=\"test\", body=b\"test message\")",
+        "batch_msgs = [",
+        "    Message(topic=\"test\", body=b\"batch_msg_1\"),",
+        "    Message(topic=\"test\", body=b\"batch_msg_2\"),",
+        "    Message(topic=\"test\", body=b\"batch_msg_3\")",
+        "]",
+        "",
+        "# 1. 同步发送 - 高可靠性，等待Broker确认",
+        "result = producer.send(msg)",
+        "print(f\"同步发送: 消息ID={result.message_id}, 成功={result.success}\")",
+        "",
+        "# 2. 批量发送 - 高效率，一次发送多个消息",
+        "batch_result = producer.send_batch(*batch_msgs)",
+        "print(f\"批量发送: 消息ID={batch_result.message_id}, 成功={batch_result.success}\")",
+        "",
+        "# 3. 单向发送 - 高性能，不等待Broker确认",
+        "producer.oneway(msg)  # 适用于日志收集、指标上报等场景",
+        "",
+        "# 4. 单向批量发送 - 超高性能，兼具批量和单向优势",
+        "producer.oneway_batch(*batch_msgs)  # 适用于高吞吐量场景",
+        "",
+        "producer.shutdown()"
+      ],
+      "send_mode_comparison": {
+        "headers": ["发送模式", "返回类型", "可靠性", "性能", "适用场景"],
+        "rows": [
+          [
+            "send()",
+            "SendMessageResult",
+            "高",
+            "中等",
+            "重要业务消息、事务消息"
+          ],
+          [
+            "send_batch()",
+            "SendMessageResult",
+            "高",
+            "较高",
+            "批量业务消息、数据同步"
+          ],
+          ["oneway()", "None", "低", "高", "日志收集、指标上报"],
+          ["oneway_batch()", "None", "低", "超高", "大数据量日志、实时事件流"]
+        ]
+      },
+      "oneway_send_scenarios": {
+        "code_examples": [
+          "# 1. 日志收集 - 允许少量丢失，追求高吞吐量",
+          "def send_application_logs(logs):",
+          "    producer = create_producer(\"log_producer\", \"nameserver:9876\")",
+          "    producer.start()",
+          "    ",
+          "    log_messages = [",
+          "        Message(topic=\"app_logs\", body=log.encode())",
+          "        for log in logs",
+          "    ]",
+          "    ",
+          "    # 使用单向批量发送提升性能",
+          "    producer.oneway_batch(*log_messages)",
+          "",
+          "# 2. 监控指标上报 - 实时性要求高",
+          "def report_metrics(metric_name, value):",
+          "    producer = create_producer(\"metrics_producer\", \"nameserver:9876\")",
+          "    producer.start()",
+          "    ",
+          "    metric_data = f\"{metric_name}:{value}:{time.time()}\"",
+          "    producer.oneway(Message(topic=\"metrics\", body=metric_data.encode()))",
+          "",
+          "# 3. 事件流处理 - 高频事件数据",
+          "def process_events(events):",
+          "    producer = create_producer(\"event_producer\", \"nameserver:9876\")",
+          "    producer.start()",
+          "    ",
+          "    event_messages = [",
+          "        Message(topic=\"events\", body=event.to_json().encode())",
+          "        for event in events",
+          "    ]",
+          "    ",
+          "    # 批量+单向的超高性能组合",
+          "    producer.oneway_batch(*event_messages)"
+        ]
+      }
+    }
+  ],
+  "mvp_status": {
+    "completed_features": [
+      "Producer核心: 生命周期管理、消息发送、基础统计",
+      "AsyncProducer: 完整的异步消息发送能力，支持高并发场景",
+      "路由管理: 多种路由策略、故障感知、性能监控",
+      "心跳机制: 定期向所有Broker发送心跳，维持连接活跃状态",
+      "批量消息: 支持同步/异步批量发送，提升发送效率",
+      "事务消息: 完整的分布式事务消息支持，包含两阶段提交和状态回查",
+      "配置管理: 灵活配置、环境变量支持、预定义模板",
+      "工具函数: 消息验证、大小计算、客户端ID生成",
+      "异常处理: 完整的异常体系和错误处理"
+    ],
+    "test_coverage": [
+      "Producer生命周期管理测试",
+      "消息验证功能测试",
+      "配置管理功能测试",
+      "Topic-Broker映射功能测试",
+      "基础错误处理测试"
+    ],
+    "architecture_optimization_results": [
+      "代码量减少30%: 移除约300行冗余代码",
+      "性能提升: 简化状态管理，减少运行时开销",
+      "可维护性提升: 清晰的组件职责和简洁的架构",
+      "学习成本降低: 更少的抽象层次，更容易理解"
+    ],
+    "future_expansion_plans": [
+      "✅ 批量消息发送: 提升发送效率 (已完成)",
+      "✅ 事务消息支持: 保证消息一致性 (已完成)",
+      "✅ 异步Producer: 支持高并发场景 (已完成)",
+      "更多监控指标: 增强运维能力",
+      "连接池优化: 提升网络性能",
+      "消息压缩: 支持消息压缩减少网络传输",
+      "延迟消息: 支持定时和延迟消息发送",
+      "顺序消息: 增强顺序消息保证机制"
+    ]
+  },
+  "async_producer_advanced_features": {
+    "async_producer_features": {
+      "description": "AsyncProducer提供了完整的异步消息发送能力，支持高并发场景",
+      "code": [
+        "from pyrocketmq.producer import create_async_producer",
+        "from pyrocketmq.model.message import Message",
+        "import asyncio",
+        "",
+        "async def async_producer_example():",
+        "    # 创建异步Producer",
+        "    producer = await create_async_producer(\"GID_ASYNC\", \"nameserver:9876\")",
+        "    await producer.start()",
+        "    ",
+        "    # 准备消息",
+        "    msg = Message(topic=\"async_test\", body=b\"async message\")",
+        "    batch_msgs = [",
+        "        Message(topic=\"async_test\", body=f\"async_batch_{i}\".encode())",
+        "        for i in range(3)",
+        "    ]",
+        "    ",
+        "    # 1. 异步同步发送",
+        "    result = await producer.send(msg)",
+        "    print(f\"异步发送: {result.success}\")",
+        "    ",
+        "    # 2. 异步批量发送",
+        "    batch_result = await producer.send_batch(*batch_msgs)",
+        "    print(f\"异步批量发送: {batch_result.success}\")",
+        "    ",
+        "    # 3. 异步单向发送",
+        "    await producer.oneway(msg)",
+        "    ",
+        "    # 4. 异步单向批量发送",
+        "    await producer.oneway_batch(*batch_msgs)",
+        "    ",
+        "    await producer.shutdown()",
+        "",
+        "# 运行异步示例",
+        "asyncio.run(async_producer_example())"
+      ]
+    },
+    "async_send_mode_comparison": {
+      "headers": ["异步方法", "返回类型", "可靠性", "性能", "适用场景"],
+      "rows": [
+        ["send()", "SendMessageResult", "高", "中等", "重要异步业务消息"],
+        ["send_batch()", "SendMessageResult", "高", "较高", "异步批量业务消息"],
+        ["oneway()", "None", "低", "高", "异步日志收集、指标上报"],
+        ["oneway_batch()", "None", "低", "超高", "异步高吞吐量场景"]
+      ]
+    }
+  },
+  "transaction_message_advanced_features": {
+    "transaction_producer_features": {
+      "description": "TransactionProducer提供了完整的分布式事务消息支持，保证消息一致性和可靠性",
+      "code": [
+        "from pyrocketmq.producer.transactional_producer import create_transactional_producer",
+        "from pyrocketmq.producer.transaction import TransactionListener, LocalTransactionState",
+        "from pyrocketmq.model.message import Message",
+        "import json",
+        "",
+        "# 自定义事务监听器",
+        "class OrderTransactionListener(TransactionListener):",
+        "    def execute_local_transaction(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState:",
+        "        \"\"\"执行本地事务\"\"\"",
+        "        try:",
+        "            # 解析订单数据",
+        "            order_data = json.loads(message.body.decode())",
+        "",
+        "            # 执行本地数据库操作（创建订单）",
+        "            create_order_in_database(order_data)",
+        "",
+        "            # 扣减库存",
+        "            deduct_inventory(order_data['product_id'], order_data['quantity'])",
+        "",
+        "            print(f\"本地事务执行成功: transactionId={transaction_id}\")",
+        "            return LocalTransactionState.COMMIT_MESSAGE_STATE",
+        "",
+        "        except Exception as e:",
+        "            print(f\"本地事务执行失败: transactionId={transaction_id}, error={e}\")",
+        "            return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+        "",
+        "    def check_local_transaction(self, message: Message, transaction_id: str) -> LocalTransactionState:",
+        "        \"\"\"检查本地事务状态\"\"\"",
+        "        try:",
+        "            order_id = message.get_property(\"order_id\")",
+        "            if not order_id:",
+        "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+        "",
+        "            # 查询本地数据库中的订单状态",
+        "            if order_exists_in_database(order_id):",
+        "                print(f\"事务状态检查成功: transactionId={transaction_id}, order_id={order_id}\")",
+        "                return LocalTransactionState.COMMIT_MESSAGE_STATE",
+        "            else:",
+        "                print(f\"事务状态检查失败: transactionId={transaction_id}, order_id={order_id}\")",
+        "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+        "",
+        "        except Exception as e:",
+        "            print(f\"事务状态检查异常: transactionId={transaction_id}, error={e}\")",
+        "            return LocalTransactionState.UNKNOW",
+        "",
+        "def create_transactional_order_example():",
+        "    \"\"\"事务消息发送示例\"\"\"",
+        "    # 创建事务监听器",
+        "    transaction_listener = OrderTransactionListener()",
+        "",
+        "    # 创建事务Producer",
+        "    producer = create_transactional_producer(",
+        "        producer_group=\"GID_ORDER_TRANSACTIONAL\",",
+        "        namesrv_addr=\"localhost:9876\",",
+        "        transaction_listener=transaction_listener,",
+        "        transaction_timeout=60000.0,  # 60秒超时",
+        "        max_check_times=15          # 最大回查15次",
+        "    )",
+        "",
+        "    producer.start()",
+        "",
+        "    try:",
+        "        # 创建订单消息",
+        "        order_data = {",
+        "            \"order_id\": \"ORDER_12345\",",
+        "            \"user_id\": \"USER_67890\",",
+        "            \"product_id\": \"PROD_ABC\",",
+        "            \"quantity\": 2,",
+        "            \"amount\": 299.00,",
+        "            \"timestamp\": \"2024-01-20T10:30:00Z\"",
+        "        }",
+        "",
+        "        message = Message(",
+        "            topic=\"order_topic\",",
+        "            body=json.dumps(order_data).encode()",
+        "        )",
+        "",
+        "        # 设置消息属性",
+        "        message.set_property(\"order_id\", order_data[\"order_id\"])",
+        "        message.set_property(\"user_id\", order_data[\"user_id\"])",
+        "        message.set_keys(order_data[\"order_id\"])",
+        "",
+        "        # 发送事务消息",
+        "        result = producer.send_message_in_transaction(message, arg=order_data)",
+        "",
+        "        print(f\"事务消息发送结果:\")",
+        "        print(f\"  消息ID: {result.message_id}\")",
+        "        print(f\"  事务ID: {result.transaction_id}\")",
+        "        print(f\"  本地事务状态: {result.local_transaction_state}\")",
+        "        print(f\"  发送状态: {'成功' if result.success else '失败'}\")",
+        "",
+        "        # 检查事务最终状态",
+        "        if result.is_commit:",
+        "            print(f\"✅ 事务 {result.transaction_id} 已提交\")",
+        "        elif result.is_rollback:",
+        "            print(f\"❌ 事务 {result.transaction_id} 已回滚\")",
+        "        else:",
+        "            print(f\"⏳ 事务 {result.transaction_id} 状态未知，等待回查\")",
+        "",
+        "    finally:",
+        "        producer.shutdown()",
+        "",
+        "# 辅助函数（实际实现中需要连接真实数据库）",
+        "def create_order_in_database(order_data):",
+        "    \"\"\"模拟创建订单的数据库操作\"\"\"",
+        "    print(f\"创建订单: {order_data['order_id']}\")",
+        "    # 这里应该是实际的数据库插入操作",
+        "",
+        "def deduct_inventory(product_id, quantity):",
+        "    \"\"\"模拟扣减库存操作\"\"\"",
+        "    print(f\"扣减库存: product_id={product_id}, quantity={quantity}\")",
+        "    # 这里应该是实际的库存扣减操作",
+        "",
+        "def order_exists_in_database(order_id):",
+        "    \"\"\"模拟查询订单是否存在\"\"\"",
+        "    # 这里应该是实际的数据库查询操作",
+        "    return True  # 简化示例，返回True",
+        "",
+        "# 运行事务消息示例",
+        "if __name__ == \"__main__\":",
+        "    create_transactional_order_example()"
+      ]
+    },
+    "transaction_flow_explanation": {
+      "description": "事务消息采用两阶段提交流程",
+      "phases": [
+        {
+          "phase": "第一阶段（发送半消息）",
+          "steps": [
+            "Producer发送消息到Broker，消息标记为事务状态",
+            "Broker保存消息但不对外可见，返回发送结果",
+            "Producer执行本地事务"
+          ]
+        },
+        {
+          "phase": "本地事务执行",
+          "steps": [
+            "根据业务逻辑执行数据库操作",
+            "返回COMMIT、ROLLBACK或UNKNOW状态"
+          ]
+        },
+        {
+          "phase": "第二阶段（提交/回滚）",
+          "steps": [
+            "根据本地事务结果向Broker发送COMMIT或ROLLBACK",
+            "Broker根据确认结果提交或删除消息"
+          ]
+        },
+        {
+          "phase": "事务回查机制",
+          "steps": [
+            "如果Producer长时间未发送确认，Broker会发起回查",
+            "Producer通过TransactionListener.check_local_transaction()查询本地状态",
+            "支持多次回查直到获得明确状态"
+          ]
+        }
+      ]
+    },
+    "transaction_configuration_best_practices": {
+      "configuration": {
+        "code": [
+          "# 事务Producer配置",
+          "producer = create_transactional_producer(",
+          "    producer_group=\"GID_TRANSACTIONAL\",",
+          "    namesrv_addr=\"localhost:9876\",",
+          "    transaction_listener=custom_listener,",
+          "",
+          "    # 事务相关配置",
+          "    transaction_timeout=60000.0,    # 事务超时时间（毫秒）",
+          "    max_check_times=15,            # 最大回查次数",
+          "",
+          "    # 生产者通用配置",
+          "    send_msg_timeout=10000.0,      # 发送超时",
+          "    retry_times=3,                 # 重试次数",
+          "    heartbeat_broker_interval=30000.0  # 心跳间隔",
+          ")",
+          "",
+          "# 动态调整配置",
+          "producer.set_transaction_timeout(120000.0)  # 调整事务超时为2分钟",
+          "producer.set_max_check_times(20)            # 调整最大回查次数为20次",
+          "",
+          "# 获取事务统计信息",
+          "stats = producer.get_stats()",
+          "print(f\"事务统计:\")",
+          "print(f\"  总事务数: {stats['total_transactions']}\")",
+          "print(f\"  提交事务数: {stats['committed_transactions']}\")",
+          "print(f\"  回滚事务数: {stats['rolled_back_transactions']}\")",
+          "print(f\"  未知状态事务数: {stats['unknown_transactions']}\")",
+          "print(f\"  平均回查次数: {stats['avg_check_times']}\")"
+        ]
+      }
+    },
+    "transaction_error_handling": {
+      "robust_transaction_listener": {
+        "code": [
+          "class RobustTransactionListener(TransactionListener):",
+          "    \"\"\"健壮的事务监听器实现\"\"\"",
+          "",
+          "    def execute_local_transaction(self, message: Message, transaction_id: str, arg: Any = None) -> LocalTransactionState:",
+          "        try:",
+          "            # 执行业务逻辑",
+          "            result = self._execute_business_logic(message, arg)",
+          "",
+          "            if result.success:",
+          "                return LocalTransactionState.COMMIT_MESSAGE_STATE",
+          "            else:",
+          "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+          "",
+          "        except DatabaseConnectionError as e:",
+          "            # 数据库连接错误，返回UNKNOWN让系统重试",
+          "            self._logger.error(f\"数据库连接失败: {e}\")",
+          "            return LocalTransactionState.UNKNOW",
+          "",
+          "        except ValidationError as e:",
+          "            # 数据验证错误，直接回滚",
+          "            self._logger.error(f\"数据验证失败: {e}\")",
+          "            return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+          "",
+          "        except Exception as e:",
+          "            # 其他未知错误，返回UNKNOWN",
+          "            self._logger.error(f\"未知错误: {e}\")",
+          "            return LocalTransactionState.UNKNOW",
+          "",
+          "    def check_local_transaction(self, message: Message, transaction_id: str) -> LocalTransactionState:",
+          "        try:",
+          "            order_id = message.get_property(\"order_id\")",
+          "            if not order_id:",
+          "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+          "",
+          "            # 检查本地事务状态",
+          "            status = self._query_transaction_status(transaction_id, order_id)",
+          "",
+          "            if status == \"COMPLETED\":",
+          "                return LocalTransactionState.COMMIT_MESSAGE_STATE",
+          "            elif status == \"FAILED\":",
+          "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+          "            elif status == \"PROCESSING\":",
+          "                return LocalTransactionState.UNKNOW",
+          "            else:",
+          "                return LocalTransactionState.ROLLBACK_MESSAGE_STATE",
+          "",
+          "        except Exception as e:",
+          "            self._logger.error(f\"事务状态查询失败: {e}\")",
+          "            return LocalTransactionState.UNKNOW"
+        ]
+      }
+    },
+    "transaction_usage_scenarios": [
+      "订单处理: 订单创建和库存扣减的原子性保证",
+      "支付处理: 支付成功和账户更新的数据一致性",
+      "积分系统: 消费积分和积分账户的同步更新",
+      "数据同步: 跨系统数据同步的事务保证",
+      "业务流程: 复杂业务流程中的状态一致性"
+    ],
+    "high_concurrency_usage": {
+      "code": [
+        "# 高并发日志收集",
+        "async def collect_logs_concurrently(log_streams):",
+        "    producer = await create_async_producer(\"log_collector\", \"nameserver:9876\")",
+        "    await producer.start()",
+        "    ",
+        "    # 并发处理多个日志流",
+        "    tasks = []",
+        "    for stream_id, logs in log_streams.items():",
+        "        task = process_log_stream(producer, stream_id, logs)",
+        "        tasks.append(task)",
+        "    ",
+        "    # 并发执行所有日志流处理",
+        "    await asyncio.gather(*tasks)",
+        "    await producer.shutdown()",
+        "",
+        "async def process_log_stream(producer, stream_id, logs):",
+        "    for log in logs:",
+        "        message = Message(topic=\"logs\", body=log.encode())",
+        "        message.set_property(\"stream_id\", stream_id)",
+        "        await producer.oneway(message)  # 高性能单向发送",
+        "",
+        "# 实时指标批量上报",
+        "async def report_metrics_batch(metrics):",
+        "    producer = await create_async_producer(\"metrics_reporter\", \"nameserver:9876\")",
+        "    await producer.start()",
+        "    ",
+        "    # 批量收集指标并异步上报",
+        "    metric_messages = [",
+        "        Message(topic=\"metrics\", body=json.dumps(metric).encode())",
+        "        for metric in metrics",
+        "    ]",
+        "    ",
+        "    # 使用异步单向批量发送",
+        "    await producer.oneway_batch(*metric_messages)",
+        "    await producer.shutdown()"
+      ]
+    }
+  },
+  "relationship_with_main_project": {
+    "main_project_overview": {
+      "location": "主项目文档 overview",
+      "content": "整体pyrocketmq项目的技术概览，包含项目架构、核心模块、开发模式、协议规范"
+    },
+    "this_module_positioning": {
+      "location": "主项目文档 第4章",
+      "content": "Producer模块的核心功能概述和使用示例"
+    },
+    "this_module_documentation": {
+      "description": "Producer模块的详细技术文档",
+      "content": "深入的技术实现、API详解、设计模式、最佳实践",
+      "target_readers": ["Producer模块的开发者", "维护者", "深度用户"]
+    },
+    "documentation_hierarchy": {
+      "levels": [
+        "主项目 CLAUDE.md (项目概览)",
+        "├── Producer模块概览 (第4章)",
+        "    └── 本模块 CLAUDE.md (详细实现)",
+        "        ├── 核心组件详解",
+        "        ├── API接口文档",
+        "        ├── 设计模式分析",
+        "        ├── 性能优化指南",
+        "        ├── 最佳实践指导",
+        "        └── 完整示例代码"
+      ]
+    },
+    "usage_recommendations": [
+      "初学者: 先阅读主项目文档了解整体架构，再参考本模块文档学习具体使用",
+      "开发者: 以本模块文档为主要参考资料，主项目文档作为架构背景",
+      "维护者: 需要熟悉两份文档，确保内容一致性"
+    ]
+  },
+  "summary": {
+    "module_capabilities": [
+      "多种发送模式: 同步/异步 × 普通/批量 × 可靠/单向 × 事务消息",
+      "丰富的功能特性: 路由策略、故障感知、心跳机制、批量发送、事务支持",
+      "高性能架构: 简化设计、预构建队列列表、连接池管理",
+      "完善的监控: 统计信息、健康状态、事务状态追踪",
+      "企业级特性: 配置管理、异常处理、错误恢复、最佳实践指导"
+    ],
+    "value_proposition": "通过架构优化和功能扩展，Producer模块显著提升了性能、可维护性和适用性，能够满足从高可靠性事务处理到超高性能日志收集等各种应用场景需求。事务消息功能的加入使其具备了完整的分布式事务支持能力，为企业级应用提供了可靠的消息一致性保证。"
+  }
+}
