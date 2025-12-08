@@ -1421,6 +1421,9 @@ class BaseConsumer:
             此方法主要用于运维管理，通过Netty的命令处理机制触发，
             用于监控和诊断消费者的运行状态。
         """
+        print("!!!!" * 10)
+        print("GET_CONSUMER_RUNNING_INFO")
+        print("!!!!" * 10)
         header: GetConsumerRunningInfoHeader = GetConsumerRunningInfoHeader.decode(
             command.ext_fields
         )

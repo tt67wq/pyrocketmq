@@ -47,6 +47,7 @@ from pyrocketmq.model import (
     ConsumerData,
     ConsumeResult,
     ConsumerRunningInfo,
+    GetConsumerRunningInfoHeader,
     HeartbeatData,
     MessageExt,
     MessageModel,
@@ -54,6 +55,9 @@ from pyrocketmq.model import (
     MessageQueue,
     MessageSelector,
     ProcessQueueInfo,
+    RemotingCommand,
+    RemotingCommandBuilder,
+    ResponseCode,
     TopicRouteData,
 )
 from pyrocketmq.nameserver.async_manager import (
@@ -1673,6 +1677,52 @@ class AsyncBaseConsumer:
         )
 
         return running_info
+
+    async def _on_notify_get_consumer_running_info(
+        self, command: RemotingCommand, _addr: tuple[str, int]
+    ) -> RemotingCommand:
+        """
+        异步处理获取消费者运行信息的通知请求。
+
+        当Broker或管理工具请求获取消费者的运行状态信息时，此方法会被调用。
+        它会验证请求的client_id是否匹配当前消费者，只有在匹配的情况下才会返回
+        运行信息，否则返回错误响应。
+
+        Args:
+            command (RemotingCommand): 包含获取消费者运行信息请求的命令对象
+                - 包含GetConsumerRunningInfoHeader，其中含有client_id
+            _addr (tuple[str, int]): 请求来源的地址信息（IP地址和端口）
+                - 参数名使用下划线前缀表示该参数在当前实现中未被使用
+
+        Returns:
+            RemotingCommand: 包含运行信息的响应命令对象
+                - 如果client_id匹配：返回SUCCESS状态码，包含ConsumerRunningInfo的编码数据
+                - 如果client_id不匹配：返回ERROR状态码，包含"Invalid client ID"错误信息
+
+        Note:
+            此方法主要用于运维管理，通过Netty的命令处理机制触发，
+            用于监控和诊断消费者的运行状态。
+            该方法采用异步实现，不会阻塞消费者正常运行。
+        """
+        print("!!!!" * 10)
+        print("GET_CONSUMER_RUNNING_INFO")
+        print("!!!!" * 10)
+        header: GetConsumerRunningInfoHeader = GetConsumerRunningInfoHeader.decode(
+            command.ext_fields
+        )
+        if header.client_id == self._config.client_id:
+            running_info: ConsumerRunningInfo = await self.get_consumer_info()
+            return (
+                RemotingCommandBuilder(ResponseCode.SUCCESS)
+                .with_body(running_info.encode())
+                .build()
+            )
+        else:
+            return (
+                RemotingCommandBuilder(ResponseCode.ERROR)
+                .with_remark("Invalid client ID")
+                .build()
+            )
 
     # ==================== 7. 资源清理和工具模块 ====================
     #
