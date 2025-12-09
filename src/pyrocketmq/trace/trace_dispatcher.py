@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Deque
 
 from pyrocketmq.broker import BrokerManager, TopicBrokerMapping
-from pyrocketmq.model import TraceContext
+from pyrocketmq.model import CONTENT_SPLITTER, TraceContext, TraceTransferBean
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 from pyrocketmq.queue_helper import MessageRouter
 from pyrocketmq.remote import RemoteConfig
@@ -17,6 +17,7 @@ from pyrocketmq.transport import TransportConfig
 RmqSysTraceTopic = "RMQ_SYS_TRACE_TOPIC"
 TraceTopicPrefix = "rmq_sys_TRACE_DATA_"
 TraceGroupName = "_INNER_TRACE_PRODUCER"
+contentSplitter = CONTENT_SPLITTER  # 内容分隔符，对应Go版本的分隔符
 
 
 class TraceDispatcher:
@@ -115,18 +116,100 @@ class TraceDispatcher:
             self._flush_event.clear()
 
             # 执行刷新操作
-            self._flush()
+            self._commit()
 
-    def _flush(self):
+    def _commit(self):
         """刷新队列中的跟踪数据到远程"""
-        # TODO: 实现刷新逻辑，将队列中的批量数据发送到远程
-        # 暂时只清空队列
         with self._lock:
             # 获取当前队列中的所有数据
             batch_ctx_list: list[TraceContext] = list(self._queue)
             # 清空队列
             self._queue.clear()
 
-            # TODO: 发送 batch_ctx_list 到远程 broker
-            # 这里需要将 TraceContext 转换为 Message 对象并发送
-            pass
+        # 预处理：按topic和regionID分组
+        keyed_ctx: dict[str, list[TraceTransferBean]] = {}
+        for ctx in batch_ctx_list:
+            # 跳过没有trace beans的上下文
+            if not ctx.trace_beans:
+                continue
+
+            # 获取topic和region ID
+            topic = ctx.trace_beans[0].topic
+            region_id = getattr(ctx, "region_id", "")
+
+            # 构建key
+            key: str = topic
+            if region_id:
+                key = f"{topic}{contentSplitter}{region_id}"
+
+            # 将上下文转换为bean并添加到对应分组
+            keyed_ctx.setdefault(key, []).append(ctx.marshal2bean())
+
+        # 发送分组后的数据到远程 broker
+        # 每个key对应一个独立的消息
+        for key, ctx_list in keyed_ctx.items():
+            arr: list[str] = key.split(contentSplitter)
+            topic: str = key
+            regionID: str = ""
+            if len(arr) > 1:
+                topic = arr[0]
+                regionID = arr[1]
+
+            self._flush(topic, regionID, ctx_list)
+
+    def _flush(self, topic: str, regionID: str, data: list[TraceTransferBean]) -> None:
+        """批量刷新跟踪数据到MQ
+
+        Args:
+            topic: 主题名称
+            regionID: 区域ID
+            data: 要发送的跟踪数据列表
+        """
+        if not data:
+            return
+
+        # 使用set来存储所有传输键（对应Go版本的Keyset）
+        keyset: set[str] = set()
+        # 使用list来拼接字符串（Python中list拼接比+=更高效）
+        builder: list[str] = []
+        # 维护当前字符串总长度，避免重复计算
+        current_size = 0
+        flushed = True
+
+        for bean in data:
+            # 将所有传输键添加到keyset
+            for key in bean.trans_key:
+                keyset.add(key)
+
+            # 计算新数据的大小
+            new_data_size = len(bean.trans_data)
+
+            # 如果添加新数据会超过限制，先发送已有数据
+            if current_size + new_data_size > self._config.max_msg_size and not flushed:
+                # 发送数据
+                self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
+                # 重置
+                builder = []
+                keyset = set()
+                current_size = 0
+                flushed = True
+
+            # 将传输数据追加到builder
+            builder.append(bean.trans_data)
+            current_size += new_data_size
+            flushed = False
+
+        # 如果还有未发送的数据，发送它
+        if not flushed:
+            self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
+
+    def _send_trace_data_by_mq(self, keyset: set[str], region_id: str, data: str):
+        """通过MQ发送跟踪数据
+
+        Args:
+            keyset: 传输键集合
+            region_id: 区域ID
+            data: 要发送的数据
+        """
+        # TODO: 实现通过MQ发送跟踪数据的逻辑
+        pass
