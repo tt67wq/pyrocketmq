@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
 
 
 class AccessChannel(Enum):
@@ -19,7 +18,7 @@ class TraceConfig:
     trace_topic: str
     group_name: str
     access: AccessChannel
-    namesrv_addrs: List[str]
+    namesrv_addr: str
     max_batch_size: int = 20  # Default max batch size for trace messages
     max_msg_size: int = 4 * 1024 * 1024  # Default max message size (4MB)
 
@@ -29,8 +28,8 @@ class TraceConfig:
             raise ValueError("trace_topic cannot be empty")
         if not self.group_name:
             raise ValueError("group_name cannot be empty")
-        if not self.namesrv_addrs:
-            raise ValueError("namesrv_addrs cannot be empty")
+        if not self.namesrv_addr:
+            raise ValueError("namesrv_addr cannot be empty")
         if self.max_batch_size <= 0:
             raise ValueError("max_batch_size must be greater than 0")
         if self.max_msg_size <= 0:
@@ -41,7 +40,7 @@ class TraceConfig:
         cls,
         trace_topic: str,
         group_name: str,
-        namesrv_addrs: List[str],
+        namesrv_addr: str,
         max_batch_size: int = 20,
         max_msg_size: int = 4 * 1024 * 1024,
     ) -> "TraceConfig":
@@ -50,7 +49,7 @@ class TraceConfig:
             trace_topic=trace_topic,
             group_name=group_name,
             access=AccessChannel.LOCAL,
-            namesrv_addrs=namesrv_addrs,
+            namesrv_addr=namesrv_addr,
             max_batch_size=max_batch_size,
             max_msg_size=max_msg_size,
         )
@@ -60,7 +59,7 @@ class TraceConfig:
         cls,
         trace_topic: str,
         group_name: str,
-        namesrv_addrs: List[str],
+        namesrv_addr: str,
         max_batch_size: int = 20,
         max_msg_size: int = 4 * 1024 * 1024,
     ) -> "TraceConfig":
@@ -69,7 +68,7 @@ class TraceConfig:
             trace_topic=trace_topic,
             group_name=group_name,
             access=AccessChannel.CLOUD,
-            namesrv_addrs=namesrv_addrs,
+            namesrv_addr=namesrv_addr,
             max_batch_size=max_batch_size,
             max_msg_size=max_msg_size,
         )
