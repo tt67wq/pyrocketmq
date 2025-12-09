@@ -43,17 +43,20 @@ from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 # Local imports - producer
 from pyrocketmq.producer.config import ProducerConfig
 from pyrocketmq.producer.errors import (
-    BrokerNotAvailableError,
     MessageSendError,
     ProducerError,
     ProducerShutdownError,
     ProducerStartError,
     ProducerStateError,
+)
+from pyrocketmq.producer.utils import validate_message
+from pyrocketmq.queue_helper import (
+    BrokerNotAvailableError,
+    MessageRouter,
     QueueNotAvailableError,
     RouteNotFoundError,
+    RoutingStrategy,
 )
-from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
-from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
 from pyrocketmq.remote.config import RemoteConfig

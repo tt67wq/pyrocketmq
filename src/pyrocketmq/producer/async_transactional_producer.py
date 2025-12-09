@@ -33,7 +33,7 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.producer.router import RoutingResult
+from pyrocketmq.queue_helper import RoutingResult
 from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.async_remote import AsyncRemote
 

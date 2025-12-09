@@ -59,8 +59,8 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.producer.router import AsyncMessageRouter, RoutingStrategy
 from pyrocketmq.producer.utils import validate_message
+from pyrocketmq.queue_helper import AsyncMessageRouter, RoutingStrategy
 
 # Local imports - remote
 from pyrocketmq.remote import AsyncConnectionPool
