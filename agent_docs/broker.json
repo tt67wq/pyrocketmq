@@ -1,6 +1,6 @@
 {
   "module_name": "broker",
-  "purpose": "提供与 RocketMQ Broker 通信的完整功能，包括消息发送、拉取、偏移量管理、心跳机制和连接池管理。支持同步和异步两种编程模式，为 Producer 和 Consumer 提供稳定高效的底层通信支持。",
+  "purpose": "提供与 RocketMQ Broker 通信的完整功能，包括消息发送、拉取、偏移量管理、心跳机制和连接池管理。支持同步和异步两种编程模式，为 Producer 和 Consumer 提供稳定高效的底层通信支持。同时提供 Topic-Broker 路由映射管理功能，为 MessageRouter 提供基础路由数据支持。",
 
   "functions": [
     {
@@ -166,6 +166,129 @@
       },
       "return_value": "AsyncBrokerClient - 异步Broker客户端实例",
       "description": "便利函数，创建异步Broker客户端"
+    },
+    {
+      "name": "RouteInfo",
+      "parameters": {
+        "topic_route_data": "TopicRouteData - 主题路由数据",
+        "last_update_time": "float - 最后更新时间，默认为当前时间",
+        "available_queues": "list[tuple[MessageQueue, BrokerData]] - 预构建的写队列列表",
+        "subscribe_message_queues": "list[tuple[MessageQueue, BrokerData]] - 预构建的订阅队列列表"
+      },
+      "return_value": "RouteInfo实例",
+      "description": "路由信息包装类，缓存主题路由数据和预构建的队列列表以提升性能"
+    },
+    {
+      "name": "AsyncRouteInfo",
+      "parameters": {
+        "topic_route_data": "TopicRouteData - 主题路由数据",
+        "last_update_time": "float - 最后更新时间，默认为当前时间",
+        "available_queues": "list[tuple[MessageQueue, BrokerData]] - 预构建的写队列列表",
+        "subscribe_message_queues": "list[tuple[MessageQueue, BrokerData]] - 预构建的订阅队列列表"
+      },
+      "return_value": "AsyncRouteInfo实例",
+      "description": "异步版本的路由信息包装类"
+    },
+    {
+      "name": "TopicBrokerMapping",
+      "parameters": {
+        "route_timeout": "int - 路由超时时间（毫秒），默认30000"
+      },
+      "return_value": "TopicBrokerMapping实例",
+      "description": "主题-Broker映射管理类，负责管理Topic到Broker的路由信息缓存"
+    },
+    {
+      "name": "AsyncTopicBrokerMapping",
+      "parameters": {
+        "route_timeout": "int - 路由超时时间（毫秒），默认30000"
+      },
+      "return_value": "AsyncTopicBrokerMapping实例",
+      "description": "异步版本的主题-Broker映射管理类"
+    },
+    {
+      "name": "TopicBrokerMapping.update_route_info",
+      "parameters": {
+        "topic": "str - 主题名称",
+        "topic_route_data": "TopicRouteData - 主题路由数据"
+      },
+      "return_value": "None",
+      "description": "更新指定主题的路由信息"
+    },
+    {
+      "name": "TopicBrokerMapping.get_route_info",
+      "parameters": {
+        "topic": "str - 主题名称"
+      },
+      "return_value": "RouteInfo | None - 路由信息对象",
+      "description": "获取指定主题的路由信息，如果不存在或过期则返回None"
+    },
+    {
+      "name": "TopicBrokerMapping.remove_route_info",
+      "parameters": {
+        "topic": "str - 主题名称"
+      },
+      "return_value": "bool - 是否成功移除",
+      "description": "移除指定主题的路由信息"
+    },
+    {
+      "name": "TopicBrokerMapping.get_available_queues",
+      "parameters": {
+        "topic": "str - 主题名称"
+      },
+      "return_value": "list[tuple[MessageQueue, BrokerData]] - 可用队列列表",
+      "description": "获取指定主题的可用写队列列表"
+    },
+    {
+      "name": "TopicBrokerMapping.get_subscribe_queues",
+      "parameters": {
+        "topic": "str - 主题名称"
+      },
+      "return_value": "list[tuple[MessageQueue, BrokerData]] - 订阅队列列表",
+      "description": "获取指定主题的订阅队列列表"
+    },
+    {
+      "name": "TopicBrokerMapping.get_available_brokers",
+      "parameters": {
+        "topic": "str - 主题名称"
+      },
+      "return_value": "list[BrokerData] - 可用Broker列表",
+      "description": "获取指定主题的可用Broker列表"
+    },
+    {
+      "name": "TopicBrokerMapping.clear_expired_routes",
+      "parameters": {},
+      "return_value": "list[str] - 已清理的主题列表",
+      "description": "清理所有过期的路由信息"
+    },
+    {
+      "name": "TopicBrokerMapping.get_cache_stats",
+      "parameters": {},
+      "return_value": "dict - 缓存统计信息",
+      "description": "获取缓存统计信息，包括主题数量、过期数量等"
+    },
+    {
+      "name": "create_topic_broker_mapping",
+      "parameters": {
+        "route_timeout": "int - 路由超时时间（毫秒），默认30000"
+      },
+      "return_value": "TopicBrokerMapping实例",
+      "description": "工厂函数，创建同步TopicBrokerMapping实例"
+    },
+    {
+      "name": "create_async_topic_broker_mapping",
+      "parameters": {
+        "route_timeout": "int - 路由超时时间（毫秒），默认30000"
+      },
+      "return_value": "AsyncTopicBrokerMapping实例",
+      "description": "工厂函数，创建异步TopicBrokerMapping实例"
+    },
+    {
+      "name": "async_create_topic_broker_mapping",
+      "parameters": {
+        "route_timeout": "int - 路由超时时间（毫秒），默认30000"
+      },
+      "return_value": "AsyncTopicBrokerMapping实例",
+      "description": "异步工厂函数，创建AsyncTopicBrokerMapping实例"
     }
   ],
 
@@ -245,6 +368,29 @@
       "3. 连接池复用TCP连接，提高性能",
       "4. 使用 ReadWriteLock 保证线程安全",
       "5. shutdown() 时清理所有连接池"
+    ],
+    "route_cache_management": {
+      "sync": [
+        "1. TopicBrokerMapping 使用字典存储路由信息：_route_info_map",
+        "2. RouteInfo 缓存 TopicRouteData 和预构建的队列列表",
+        "3. 首次访问时懒加载创建路由信息",
+        "4. 定期检查并清理过期路由",
+        "5. 使用线程安全的读写锁保护缓存操作"
+      ],
+      "async": [
+        "1. AsyncTopicBrokerMapping 使用 asyncio.Lock 保护缓存",
+        "2. 异步版本的缓存操作方法",
+        "3. 支持并发路由更新和查询",
+        "4. 异步清理过期路由"
+      ]
+    },
+    "route_update_flow": [
+      "1. 从 NameServer 获取最新的 TopicRouteData",
+      "2. 创建 RouteInfo 实例，包含 TopicRouteData",
+      "3. 预构建可用队列列表（写队列和订阅队列）",
+      "4. 更新路由信息的最后更新时间",
+      "5. 存储到 TopicBrokerMapping 的缓存中",
+      "6. 通知相关的 MessageRouter 更新路由"
     ]
   },
 
