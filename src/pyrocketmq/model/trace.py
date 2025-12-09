@@ -2,23 +2,22 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar
 
 
 class MessageType(Enum):
     """Message type enumeration."""
 
-    NORMAL: ClassVar[int] = 0
-    TRANSACT: ClassVar[int] = 1
-    DELAY: ClassVar[int] = 2
+    NORMAL = 0
+    TRANSACT = 1
+    DELAY = 2
 
 
 class TraceType(Enum):
     """Trace type enumeration."""
 
-    PUB: ClassVar[str] = "Pub"
-    SUB_BEFORE: ClassVar[str] = "SubBefore"
-    SUB_AFTER: ClassVar[str] = "SubAfter"
+    PUB = "Pub"
+    SUB_BEFORE = "SubBefore"
+    SUB_AFTER = "SubAfter"
 
 
 # Constants for trace data
@@ -65,3 +64,80 @@ class TraceContext:
     request_id: str
     context_code: int
     trace_beans: list[TraceBean]
+
+    def marshal2bean(self) -> TraceTransferBean:
+        """Marshal trace context to trace transfer bean."""
+        buffer: list[str] = []
+
+        if self.trace_type == TraceType.PUB:
+            bean = self.trace_beans[0]
+            buffer.append(str(self.trace_type.value))
+            buffer.append(str(self.timestamp))
+            buffer.append(self.region_id or "")
+
+            # Handle group name with % separator
+            if "%" in self.group_name:
+                buffer.append(self.group_name.split("%")[1])
+            else:
+                buffer.append(self.group_name)
+
+            # Handle topic with % separator
+            if "%" in bean.topic:
+                buffer.append(bean.topic.split("%")[1])
+            else:
+                buffer.append(bean.topic)
+
+            buffer.append(bean.msg_id)
+            buffer.append(bean.tags or "")
+            buffer.append(bean.keys or "")
+            buffer.append(bean.store_host or "")
+            buffer.append(str(bean.body_length))
+            buffer.append(str(self.cost_time))
+            buffer.append(str(bean.msg_type.value))
+            buffer.append(bean.offset_msg_id or "")
+            buffer.append(str(self.is_success).lower())
+            buffer.append(bean.client_host or "")
+
+        elif self.trace_type == TraceType.SUB_BEFORE:
+            for bean in self.trace_beans:
+                buffer.append(str(self.trace_type.value))
+                buffer.append(str(self.timestamp))
+                buffer.append(self.region_id or "")
+
+                # Handle group name with % separator
+                if "%" in self.group_name:
+                    buffer.append(self.group_name.split("%")[1])
+                else:
+                    buffer.append(self.group_name)
+
+                buffer.append(self.request_id or "")
+                buffer.append(bean.msg_id)
+                buffer.append(str(bean.retry_times))
+                buffer.append(bean.keys or "")
+                buffer.append(bean.client_host or "")
+
+        elif self.trace_type == TraceType.SUB_AFTER:
+            for bean in self.trace_beans:
+                buffer.append(str(self.trace_type.value))
+                buffer.append(self.request_id or "")
+                buffer.append(bean.msg_id)
+                buffer.append(str(self.cost_time))
+                buffer.append(str(self.is_success).lower())
+                buffer.append(bean.keys or "")
+                buffer.append(str(self.context_code))
+                buffer.append(str(self.timestamp))
+                buffer.append(self.group_name)
+
+        # Create transfer bean
+        trans_data = CONTENT_SPLITTER.join(buffer)
+
+        # Collect trans keys (unique)
+        trans_keys: list[str] = []
+        for bean in self.trace_beans:
+            trans_keys.append(bean.msg_id)
+            if bean.keys:
+                trans_keys.append(bean.keys)
+
+        return TraceTransferBean(
+            trans_data=trans_data + FIELD_SPLITTER, trans_key=trans_keys
+        )
