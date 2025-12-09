@@ -34,7 +34,7 @@ from pyrocketmq.consumer.async_offset_store import (
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
 from pyrocketmq.nameserver import AsyncNameServerManager
-from pyrocketmq.producer.router import MessageRouter
+from pyrocketmq.queue_helper import MessageRouter
 from pyrocketmq.remote import AsyncConnectionPool
 
 logger = get_logger(__name__)

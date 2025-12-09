@@ -27,7 +27,7 @@ from pyrocketmq.consumer.offset_store import (
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
 from pyrocketmq.nameserver import NameServerManager
-from pyrocketmq.producer.router import MessageRouter
+from pyrocketmq.queue_helper import MessageRouter
 from pyrocketmq.remote import ConnectionPool
 
 logger = get_logger(__name__)
