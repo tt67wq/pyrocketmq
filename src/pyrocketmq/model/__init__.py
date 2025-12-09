@@ -117,6 +117,15 @@ from .subscription import (
     SubscriptionConflict,
     SubscriptionEntry,
 )
+from .trace import (
+    CONTENT_SPLITTER,
+    FIELD_SPLITTER,
+    MessageType,
+    TraceBean,
+    TraceContext,
+    TraceTransferBean,
+    TraceType,
+)
 from .utils import (
     command_to_dict,
     commands_to_json,
@@ -160,6 +169,14 @@ __all__ = [
     "SendMessageResult",
     "PullMessageResult",
     "OffsetResult",
+    # Trace 相关数据结构
+    "TraceBean",
+    "TraceContext",
+    "TraceTransferBean",
+    "TraceType",
+    "MessageType",
+    "CONTENT_SPLITTER",
+    "FIELD_SPLITTER",
     # Header数据结构
     "SendMessageRequestHeader",
     "SendMessageRequestV2Header",
