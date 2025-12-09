@@ -6,11 +6,24 @@ from collections import deque
 from threading import Lock
 from typing import Deque
 
-from pyrocketmq.broker import BrokerManager, TopicBrokerMapping
-from pyrocketmq.model import CONTENT_SPLITTER, TraceContext, TraceTransferBean
+from pyrocketmq.broker import BrokerClient, BrokerManager, TopicBrokerMapping
+from pyrocketmq.logging import get_logger
+from pyrocketmq.model import (
+    CONTENT_SPLITTER,
+    Message,
+    MessageQueue,
+    SendMessageResult,
+    TraceContext,
+    TraceTransferBean,
+)
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
-from pyrocketmq.queue_helper import MessageRouter
-from pyrocketmq.remote import RemoteConfig
+from pyrocketmq.queue_helper import (
+    BrokerNotAvailableError,
+    MessageRouter,
+    QueueNotAvailableError,
+    RouteNotFoundError,
+)
+from pyrocketmq.remote import ConnectionPool, RemoteConfig
 from pyrocketmq.trace import TraceConfig
 from pyrocketmq.transport import TransportConfig
 
@@ -18,6 +31,8 @@ RmqSysTraceTopic = "RMQ_SYS_TRACE_TOPIC"
 TraceTopicPrefix = "rmq_sys_TRACE_DATA_"
 TraceGroupName = "_INNER_TRACE_PRODUCER"
 contentSplitter = CONTENT_SPLITTER  # 内容分隔符，对应Go版本的分隔符
+
+logger = get_logger(__name__)
 
 
 class TraceDispatcher:
@@ -65,6 +80,7 @@ class TraceDispatcher:
         """启动跟踪分发器"""
         if not self._running:
             self._running = True
+
             self._stop_event.clear()
             # 启动刷新线程
             self._flush_thread = threading.Thread(
@@ -187,7 +203,7 @@ class TraceDispatcher:
             # 如果添加新数据会超过限制，先发送已有数据
             if current_size + new_data_size > self._config.max_msg_size and not flushed:
                 # 发送数据
-                self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
+                self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
                 # 重置
                 builder = []
                 keyset = set()
@@ -201,9 +217,11 @@ class TraceDispatcher:
 
         # 如果还有未发送的数据，发送它
         if not flushed:
-            self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
+            self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
 
-    def _send_trace_data_by_mq(self, keyset: set[str], region_id: str, data: str):
+    def _send_trace_data_by_mq(
+        self, topic: str, keyset: set[str], region_id: str, data: str
+    ):
         """通过MQ发送跟踪数据
 
         Args:
@@ -211,5 +229,122 @@ class TraceDispatcher:
             region_id: 区域ID
             data: 要发送的数据
         """
-        # TODO: 实现通过MQ发送跟踪数据的逻辑
-        pass
+        message: Message = Message(topic=topic, body=data.encode())
+        message.set_keys("".join(list(keyset)))
+
+        if message.topic not in self._topic_mapping.get_all_topics():
+            _ = self.update_route_info(message.topic)
+
+        routing_result = self._message_router.route_message(message.topic, message)
+        if not routing_result.success:
+            raise RouteNotFoundError(
+                f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+            )
+
+        message_queue = routing_result.message_queue
+        broker_data = routing_result.broker_data
+
+        if not message_queue:
+            raise QueueNotAvailableError(
+                f"No available queue for topic: {message.topic}"
+            )
+        if not broker_data:
+            raise BrokerNotAvailableError(
+                f"No available broker data for topic: {message.topic}"
+            )
+
+        target_broker_addr = routing_result.broker_address
+        if not target_broker_addr:
+            raise BrokerNotAvailableError(
+                f"No available broker address for topic: {message.topic}"
+            )
+        logger.debug(
+            "Sending trace message to broker",
+            extra={
+                "broker_address": target_broker_addr,
+                "queue": message_queue.full_name,
+                "topic": message.topic,
+            },
+        )
+
+        send_result: SendMessageResult = self._send_message_to_broker(
+            message, target_broker_addr, message_queue
+        )
+        if not send_result.is_success:
+            logger.error(
+                "Failed to send trace message",
+                extra={
+                    "broker_address": target_broker_addr,
+                    "queue": message_queue.full_name,
+                    "topic": message.topic,
+                },
+            )
+
+    def update_route_info(self, topic: str) -> bool:
+        topic_route_data = self._nameserver_manager.get_topic_route(topic)
+        if not topic_route_data:
+            logger.error(
+                "Failed to get topic route data",
+                extra={"topic": topic},
+            )
+            return False
+
+        # 维护broker连接
+        for broker_data in topic_route_data.broker_data_list:
+            for idx, broker_addr in broker_data.broker_addresses.items():
+                logger.info(
+                    "Adding broker",
+                    extra={
+                        "broker_id": idx,
+                        "broker_address": broker_addr,
+                        "broker_name": broker_data.broker_name,
+                    },
+                )
+                self._broker_manager.add_broker(
+                    broker_addr,
+                    broker_data.broker_name,
+                )
+
+        # 更新本地缓存
+        success = self._topic_mapping.update_route_info(topic, topic_route_data)
+        if success:
+            logger.info(
+                "Route info updated for topic",
+                extra={
+                    "topic": topic,
+                    "brokers_count": len(topic_route_data.broker_data_list),
+                },
+            )
+            return True
+        else:
+            logger.warning(
+                "Failed to update route cache for topic",
+                extra={"topic": topic},
+            )
+
+        # 如果所有NameServer都失败，强制刷新缓存
+        return self._topic_mapping.force_refresh(topic)
+
+    def _send_message_to_broker(
+        self, message: Message, broker_addr: str, message_queue: MessageQueue
+    ) -> SendMessageResult:
+        """发送消息到Broker
+
+        Args:
+            message: 消息对象
+            broker_addr: Broker地址
+            message_queue: 消息队列
+
+        Returns:
+            SendResult: 发送结果
+        """
+
+        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
+        with pool.get_connection() as broker_remote:
+            return BrokerClient(broker_remote).sync_send_message(
+                TraceGroupName,
+                message.body,
+                message_queue,
+                message.properties,
+                flag=message.flag,
+            )
