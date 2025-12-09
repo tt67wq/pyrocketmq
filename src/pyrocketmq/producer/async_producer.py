@@ -25,6 +25,8 @@ import asyncio
 import time
 from typing import Any
 
+from pyrocketmq.broker import AsyncTopicBrokerMapping
+
 # Local imports - broker
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.broker.async_client import AsyncBrokerClient
@@ -58,7 +60,6 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
 )
 from pyrocketmq.producer.router import AsyncMessageRouter, RoutingStrategy
-from pyrocketmq.producer.topic_broker_mapping import AsyncTopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote

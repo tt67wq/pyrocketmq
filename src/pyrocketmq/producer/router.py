@@ -22,6 +22,10 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+from pyrocketmq.broker import (
+    AsyncTopicBrokerMapping,
+    TopicBrokerMapping,
+)
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model.message import Message
 from pyrocketmq.model.message_queue import MessageQueue
@@ -34,10 +38,6 @@ from pyrocketmq.producer.errors import (
 from pyrocketmq.producer.queue_selectors import (
     AsyncQueueSelector,
     QueueSelector,
-)
-from pyrocketmq.producer.topic_broker_mapping import (
-    AsyncTopicBrokerMapping,
-    TopicBrokerMapping,
 )
 
 logger = get_logger(__name__)

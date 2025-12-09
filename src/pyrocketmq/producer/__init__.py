@@ -51,7 +51,6 @@ from pyrocketmq.producer.queue_selectors import (
     RoundRobinSelector,
 )
 from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
-from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.transaction import (
     HalfMessageSendError,
     SimpleTransactionListener,
@@ -98,7 +97,6 @@ __all__ = [
     "get_config",
     "create_custom_config",
     # Core Classes
-    "TopicBrokerMapping",
     "MessageRouter",
     # Queue Selectors
     "RoundRobinSelector",

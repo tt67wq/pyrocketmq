@@ -25,6 +25,8 @@ import threading
 import time
 from typing import Any
 
+from pyrocketmq.broker import TopicBrokerMapping
+
 # Local imports - broker
 from pyrocketmq.broker.broker_manager import BrokerManager
 from pyrocketmq.broker.client import BrokerClient
@@ -51,7 +53,6 @@ from pyrocketmq.producer.errors import (
     RouteNotFoundError,
 )
 from pyrocketmq.producer.router import MessageRouter, RoutingStrategy
-from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.producer.utils import validate_message
 
 # Local imports - remote
