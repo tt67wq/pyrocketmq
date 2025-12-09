@@ -160,7 +160,7 @@ import threading
 import time
 
 # pyrocketmq导入
-from pyrocketmq.broker import BrokerClient, BrokerManager
+from pyrocketmq.broker import BrokerClient, BrokerManager, TopicBrokerMapping
 from pyrocketmq.consumer.allocate_queue_strategy import (
     AllocateQueueStrategyBase,
     AllocateQueueStrategyFactory,
@@ -169,7 +169,6 @@ from pyrocketmq.consumer.consume_from_where_manager import ConsumeFromWhereManag
 from pyrocketmq.consumer.offset_store import OffsetStore, ReadOffsetType
 from pyrocketmq.consumer.offset_store_factory import OffsetStoreFactory
 from pyrocketmq.consumer.process_queue import ProcessQueue
-from pyrocketmq.consumer.topic_broker_mapping import ConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
@@ -273,9 +272,7 @@ class BaseConsumer:
         self._subscription_manager: SubscriptionManager = SubscriptionManager()
         # 改为支持多个listener，每个topic对应一个listener
         self._message_listeners: dict[str, MessageListener] = {}
-        self._topic_broker_mapping: ConsumerTopicBrokerMapping = (
-            ConsumerTopicBrokerMapping()
-        )
+        self._topic_broker_mapping: TopicBrokerMapping = TopicBrokerMapping()
 
         # 初始化核心组件
         self._name_server_manager: NameServerManager = create_nameserver_manager(

@@ -194,12 +194,6 @@ from .subscription_manager import (
     SubscriptionManager,
 )
 
-# Topic-Broker映射
-from .topic_broker_mapping import (
-    ConsumerTopicBrokerMapping,
-    TopicBrokerMapping,  # 别名
-)
-
 # 向后兼容别名
 create_async_consumer = create_async_consumer_deprecated
 
@@ -288,9 +282,6 @@ __all__ = [
     # 消费起始位置管理
     "ConsumeFromWhereManager",
     "AsyncConsumeFromWhereManager",
-    # Topic-Broker映射
-    "ConsumerTopicBrokerMapping",
-    "TopicBrokerMapping",
     # 异常类 - 核心异常
     "ConsumerError",
     "ConsumerStartError",

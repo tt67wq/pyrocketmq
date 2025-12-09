@@ -25,7 +25,7 @@ from collections import defaultdict
 from types import CoroutineType
 from typing import Any
 
-from pyrocketmq.broker import AsyncBrokerClient, AsyncBrokerManager
+from pyrocketmq.broker import AsyncBrokerClient, AsyncBrokerManager, TopicBrokerMapping
 from pyrocketmq.consumer.async_offset_store import (
     AsyncOffsetStore,
     AsyncOffsetStoreMetrics,
@@ -35,7 +35,6 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
 from pyrocketmq.nameserver import AsyncNameServerManager
 from pyrocketmq.producer.router import MessageRouter
-from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.remote import AsyncConnectionPool
 
 logger = get_logger(__name__)

@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from typing import Any
 
-from pyrocketmq.broker import BrokerClient, BrokerManager
+from pyrocketmq.broker import BrokerClient, BrokerManager, TopicBrokerMapping
 from pyrocketmq.consumer.offset_store import (
     OffsetStore,
     OffsetStoreMetrics,
@@ -28,7 +28,6 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import MessageQueue
 from pyrocketmq.nameserver import NameServerManager
 from pyrocketmq.producer.router import MessageRouter
-from pyrocketmq.producer.topic_broker_mapping import TopicBrokerMapping
 from pyrocketmq.remote import ConnectionPool
 
 logger = get_logger(__name__)

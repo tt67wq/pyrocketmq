@@ -14,6 +14,8 @@ import asyncio
 import time
 from typing import Any
 
+from pyrocketmq.broker import AsyncTopicBrokerMapping
+
 # pyrocketmq导入
 from pyrocketmq.broker.async_broker_manager import AsyncBrokerManager
 from pyrocketmq.broker.async_client import AsyncBrokerClient
@@ -40,7 +42,6 @@ from pyrocketmq.consumer.errors import (
 from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.stats_manager import StatsManager
 from pyrocketmq.consumer.subscription_manager import AsyncSubscriptionManager
-from pyrocketmq.consumer.topic_broker_mapping import AsyncConsumerTopicBrokerMapping
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
@@ -262,9 +263,7 @@ class AsyncBaseConsumer:
     def _initialize_routing_and_stats(self) -> None:
         """初始化路由映射和统计信息"""
         # 路由映射
-        self._topic_broker_mapping: AsyncConsumerTopicBrokerMapping = (
-            AsyncConsumerTopicBrokerMapping()
-        )
+        self._topic_broker_mapping: AsyncTopicBrokerMapping = AsyncTopicBrokerMapping()
 
         # 统计管理器
         self._stats_manager: StatsManager = StatsManager()
