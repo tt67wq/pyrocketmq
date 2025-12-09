@@ -36,7 +36,19 @@ logger = get_logger(__name__)
 
 
 class TraceDispatcher:
+    # ========================================================================
+    # LIFECYCLE MANAGEMENT MODULE
+    # 功能：管理 TraceDispatcher 的生命周期，包括初始化、启动和停止分发器及其后台线程
+    # 包含函数：__init__, start, stop
+    # ========================================================================
+
     def __init__(self, config: TraceConfig):
+        """初始化跟踪分发器 (TraceDispatcher)。
+
+        Args:
+            config (TraceConfig): 跟踪配置对象，包含跟踪相关的配置参数
+                如 NameServer 地址、批量大小、消息大小限制等
+        """
         # 配置管理
         self._config: TraceConfig = config
 
@@ -77,7 +89,14 @@ class TraceDispatcher:
         self._flush_event = threading.Event()  # 刷新触发事件
 
     def start(self):
-        """启动跟踪分发器"""
+        """启动跟踪分发器。
+
+        启动后台刷新线程，开始处理跟踪数据的分发。如果分发器已经在运行，
+        则不会重复启动。刷新线程将以守护进程方式运行。
+
+        Raises:
+            RuntimeError: 当启动线程失败时可能抛出
+        """
         if not self._running:
             self._running = True
 
@@ -91,7 +110,14 @@ class TraceDispatcher:
             self._flush_thread.start()
 
     def stop(self):
-        """停止跟踪分发器"""
+        """停止跟踪分发器。
+
+        停止后台刷新线程并清理资源。调用此方法后，分发器将不再处理
+        新的跟踪数据。会等待刷新线程完成当前任务，最多等待5秒。
+
+        Raises:
+            RuntimeError: 当停止线程失败时可能抛出
+        """
         if self._running:
             self._running = False
             # 设置停止事件
@@ -103,11 +129,24 @@ class TraceDispatcher:
             if self._flush_thread and self._flush_thread.is_alive():
                 self._flush_thread.join(timeout=5.0)  # 最多等待5秒
 
+    # ========================================================================
+    # DATA PROCESSING MODULE
+    # 功能：处理核心数据逻辑，包括队列管理、批处理和提交跟踪数据
+    # 数据流：dispatch -> 队列 -> _flush_worker -> _commit -> 消息路由模块
+    # 包含函数：dispatch, _flush_worker, _commit
+    # ========================================================================
+
     def dispatch(self, ctx: TraceContext):
-        """分发跟踪上下文到队列
+        """分发跟踪上下文到队列 (Queue)。
+
+        将跟踪上下文添加到内部队列中等待处理。当队列中的数据量达到
+        配置的最大批量大小时，会自动触发刷新操作。
 
         Args:
-            ctx: 跟踪上下文对象
+            ctx (TraceContext): 跟踪上下文对象，包含需要分发的跟踪数据
+
+        Raises:
+            RuntimeError: 当队列操作失败时可能抛出
         """
         with self._lock:
             # 将跟踪上下文添加到队列
@@ -119,7 +158,15 @@ class TraceDispatcher:
                 self._flush_event.set()
 
     def _flush_worker(self):
-        """刷新工作线程，持续运行等待刷新事件"""
+        """刷新工作线程的主循环。
+
+        持续运行的工作线程，等待刷新事件或停止事件。当收到刷新事件时，
+        执行数据提交操作；当收到停止事件时，退出线程。
+        线程以守护进程模式运行。
+
+        Raises:
+            RuntimeError: 当线程操作异常时可能抛出
+        """
         while not self._stop_event.is_set():
             # 等待刷新事件或停止事件
             self._flush_event.wait()
@@ -135,7 +182,21 @@ class TraceDispatcher:
             self._commit()
 
     def _commit(self):
-        """刷新队列中的跟踪数据到远程"""
+        """提交队列中的所有跟踪数据。
+
+        从队列中取出所有待处理的跟踪上下文，按主题和区域ID进行分组，
+        然后将分组后的数据批量发送到对应的 Broker。此操作是线程安全的。
+
+        数据处理流程：
+        1. 从队列取出所有数据并清空队列
+        2. 按 topic 和 regionID 分组
+        3. 对每个分组调用 _flush 方法（委托给消息路由模块）
+
+        Raises:
+            RouteNotFoundError: 当找不到消息路由时抛出
+            QueueNotAvailableError: 当没有可用队列时抛出
+            BrokerNotAvailableError: 当没有可用 Broker 时抛出
+        """
         with self._lock:
             # 获取当前队列中的所有数据
             batch_ctx_list: list[TraceContext] = list(self._queue)
@@ -173,13 +234,35 @@ class TraceDispatcher:
 
             self._flush(topic, regionID, ctx_list)
 
+    # ========================================================================
+    # MESSAGE ROUTING & SENDING MODULE
+    # 功能：管理消息路由、Broker 选择和实际的消息传输
+    # 依赖关系：依赖数据处理模块的 _commit 调用
+    # 函数交互：_flush -> _send_trace_data_by_mq -> _send_message_to_broker
+    #           update_route_info 被调用以维护路由信息
+    # 包含函数：_flush, _send_trace_data_by_mq, _send_message_to_broker, update_route_info
+    # ========================================================================
+
     def _flush(self, topic: str, regionID: str, data: list[TraceTransferBean]) -> None:
-        """批量刷新跟踪数据到MQ
+        """批量刷新跟踪数据到消息队列 (Message Queue)。
+
+        将批量跟踪数据按照消息大小限制进行分割，确保每个消息不超过
+        配置的最大消息大小。将分割后的数据发送到指定的主题和区域。
+
+        处理流程：
+        1. 遍历所有数据，收集传输键并拼接消息内容
+        2. 当消息大小超过限制时分批发送
+        3. 将最终的数据委托给 _send_trace_data_by_mq 处理
 
         Args:
-            topic: 主题名称
-            regionID: 区域ID
-            data: 要发送的跟踪数据列表
+            topic (str): 目标主题名称
+            regionID (str): 区域标识符，可为空字符串
+            data (list[TraceTransferBean]): 要发送的跟踪数据传输对象列表
+
+        Raises:
+            RouteNotFoundError: 当找不到消息路由时抛出
+            QueueNotAvailableError: 当没有可用队列时抛出
+            BrokerNotAvailableError: 当没有可用 Broker 时抛出
         """
         if not data:
             return
@@ -222,12 +305,31 @@ class TraceDispatcher:
     def _send_trace_data_by_mq(
         self, topic: str, keyset: set[str], region_id: str, data: str
     ):
-        """通过MQ发送跟踪数据
+        """通过消息队列 (MQ) 发送跟踪数据。
+
+        构造消息对象并设置传输键，通过路由器选择目标队列和 Broker，
+        然后将跟踪数据发送到选定的 Broker。
+
+        处理流程：
+        1. 构造 Message 对象并设置传输键
+        2. 确保路由信息是最新的（调用 update_route_info）
+        3. 通过消息路由器选择目标队列
+        4. 委托给 _send_message_to_broker 实际发送消息
 
         Args:
-            keyset: 传输键集合
-            region_id: 区域ID
-            data: 要发送的数据
+            topic (str): 消息主题名称
+            keyset (set[str]): 传输键集合，用于消息索引和检索
+            region_id (str): 区域标识符，可为空字符串
+            data (str): 要发送的跟踪数据内容
+
+        Returns:
+            None: 此方法不返回值，发送结果通过日志记录
+
+        Raises:
+            RouteNotFoundError: 当找不到消息路由时抛出
+            QueueNotAvailableError: 当没有可用队列时抛出
+            BrokerNotAvailableError: 当没有可用 Broker 地址时抛出
+            ConnectionError: 当与 Broker 连接失败时抛出
         """
         message: Message = Message(topic=topic, body=data.encode())
         message.set_keys("".join(list(keyset)))
@@ -281,6 +383,24 @@ class TraceDispatcher:
             )
 
     def update_route_info(self, topic: str) -> bool:
+        """更新指定主题的路由信息。
+
+        从 NameServer 获取主题的路由数据，更新 Broker 连接池，
+        并刷新本地路由缓存。如果更新失败，会尝试强制刷新缓存。
+
+        此方法被 _send_trace_data_by_mq 调用以确保路由信息是最新的。
+
+        Args:
+            topic (str): 需要更新路由信息的主题名称
+
+        Returns:
+            bool: 路由信息更新是否成功
+                - True: 更新成功或强制刷新成功
+                - False: 更新失败且强制刷新也失败
+
+        Raises:
+            ConnectionError: 当无法连接到 NameServer 时抛出
+        """
         topic_route_data = self._nameserver_manager.get_topic_route(topic)
         if not topic_route_data:
             logger.error(
@@ -328,15 +448,25 @@ class TraceDispatcher:
     def _send_message_to_broker(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
     ) -> SendMessageResult:
-        """发送消息到Broker
+        """发送消息到指定的 Broker。
+
+        使用连接池获取与目标 Broker 的连接，通过 BrokerClient
+        同步发送消息到指定的队列。
+
+        此方法是实际的网络传输层，被 _send_trace_data_by_mq 调用。
 
         Args:
-            message: 消息对象
-            broker_addr: Broker地址
-            message_queue: 消息队列
+            message (Message): 要发送的消息对象，包含主题、内容和属性
+            broker_addr (str): 目标 Broker 的网络地址
+            message_queue (MessageQueue): 目标消息队列信息
 
         Returns:
-            SendResult: 发送结果
+            SendMessageResult: 消息发送结果对象，包含发送状态和相关信息
+
+        Raises:
+            ConnectionError: 当无法连接到 Broker 时抛出
+            TimeoutError: 当发送消息超时时抛出
+            BrokerNotAvailableError: 当 Broker 不可用时抛出
         """
 
         pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
