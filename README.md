@@ -13,6 +13,8 @@
 
 pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ TCP协议规范。项目提供了完整的协议模型层、网络传输层、远程通信层以及NameServer和Broker客户端实现，同时包含完整的生产者和消费者功能。
 
+**版本**: 0.1.0（开发版本，1.0版本即将发布）
+
 ## ✨ 核心特性
 
 ### 🎯 完整的客户端实现
@@ -21,6 +23,8 @@ pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ
 - **协议兼容性**: 完全兼容RocketMQ Go语言实现的TCP协议格式
 - **类型安全**: 基于Python 3.11+的完整类型注解
 - **高性能**: 基于asyncio的异步网络通信
+- **消费监控**: 支持获取消费者运行信息，实时监控消费状态
+- **请求处理器**: 支持注册自定义请求处理器，扩展通信能力
 
 ### 🏗️ 分层架构设计
 - **协议模型层**: 完整的RemotingCommand数据结构和序列化
@@ -46,9 +50,18 @@ git clone https://github.com/tt67wq/pyrocketmq.git
 cd pyrocketmq
 pip install -e .
 
+# 或使用uv（更快的包管理器）
+uv sync
+
 # 1.0版本发布后支持pip安装
 # pip install pyrocketmq
 ```
+
+### 环境要求
+
+- Python 3.11+
+- RocketMQ 4.x+
+- Linux/macOS/Windows
 
 ### 消息生产者使用
 
@@ -217,7 +230,7 @@ src/pyrocketmq/
 │   ├── message.py      # 消息数据结构
 │   ├── message_ext.py  # 扩展消息数据结构
 │   ├── message_queue.py # 消息队列数据结构
-│   ├── factory.py      # 请求工厂和构建器
+│   ├── factory.py      # 请求工厂和构建器（支持GET_CONSUMER_RUNNING_INFO等）
 │   └── ...             # 其他模型组件
 ├── transport/          # 网络传输层 ✅
 │   ├── tcp.py          # TCP连接实现（状态机驱动）
@@ -226,7 +239,7 @@ src/pyrocketmq/
 ├── remote/             # 远程通信层 ✅
 │   ├── async_remote.py # 异步远程通信实现
 │   ├── sync_remote.py  # 同步远程通信实现
-│   ├── pool.py         # 连接池管理
+│   ├── pool.py         # 连接池管理（支持请求处理器注册）
 │   └── ...             # 远程通信组件
 ├── nameserver/         # NameServer客户端 ✅
 │   ├── manager.py      # NameServer管理器
@@ -234,19 +247,23 @@ src/pyrocketmq/
 │   └── ...             # NameServer客户端组件
 ├── broker/             # Broker客户端 ✅
 │   ├── client.py       # Broker客户端
-│   ├── manager.py      # Broker管理器
+│   ├── manager.py      # Broker管理器（支持消费者运行信息查询）
 │   └── ...             # Broker客户端组件
 ├── producer/           # 消息生产者 ✅
 │   ├── producer.py     # 同步生产者实现
 │   ├── async_producer.py # 异步生产者实现
 │   ├── transactional_producer.py # 事务生产者
+│   ├── async_transactional_producer.py # 异步事务生产者
 │   ├── config.py       # 生产者配置管理
 │   ├── router.py       # 消息路由管理
 │   └── ...             # 生产者相关组件
 ├── consumer/           # 消息消费者 ✅
+│   ├── base_consumer.py # 基础消费者（重构后的模块化核心）
 │   ├── concurrent_consumer.py # 并发消费者
 │   ├── async_concurrent_consumer.py # 异步并发消费者
-│   ├── oredrly_consumer.py # 顺序消费者
+│   ├── orderly_consumer.py # 顺序消费者
+│   ├── async_orderly_consumer.py # 异步顺序消费者
+│   ├── async_base_consumer.py # 异步基础消费者
 │   ├── config.py       # 消费者配置管理
 │   ├── listener.py     # 消息监听器
 │   ├── async_listener.py # 异步消息监听器
@@ -364,16 +381,19 @@ config = ConsumerConfig(
 ```bash
 # 基础生产者
 export PYTHONPATH=/path/to/pyrocketmq/src
-python examples/producers/basic_producer.py
+python examples/producers/producer.py
 
 # 异步生产者
-python examples/producers/basic_async_producer.py
+python examples/producers/async_producer.py
 
 # 事务生产者
 python examples/producers/transactional_producer.py
 
 # 异步事务生产者
 python examples/producers/async_transactional_producer.py
+
+# 使用配置文件的生产者
+python examples/producers/config_loader.py
 ```
 
 ### 消费者示例
@@ -389,7 +409,25 @@ python examples/consumers/cluster_orderly_consumer.py
 
 # 异步并发消费者
 python examples/consumers/async_concurrent_consumer.py
+
+# 异步顺序消费者
+python examples/consumers/async_orderly_consumer.py
+
+# 使用配置文件的消费者
+python examples/consumers/config_loader.py
 ```
+
+### 示例说明
+
+每个示例都包含完整的错误处理和资源清理，展示了不同场景下的最佳实践：
+
+- **producer.py**: 展示同步消息发送和批量发送
+- **async_producer.py**: 展示异步消息发送，提高并发性能
+- **transactional_producer.py**: 展示事务消息的使用，保证数据一致性
+- **cluster_concurrent_consumer.py**: 展示集群模式下的并发消费
+- **broadcast_concurrent_consumer.py**: 展示广播模式，所有消费者都收到消息
+- **orderly_consumer.py**: 展示顺序消息消费，保证消息顺序性
+- **async_*.py**: 所有异步示例都展示了如何使用async/await模式
 
 ## 🧪 运行测试
 
@@ -474,6 +512,16 @@ print(f"发送成功率: {producer_stats.success_rate}")
 # 消费者指标
 consumer_stats = consumer.get_stats()
 print(f"消费TPS: {consumer_stats.consume_tps}")
+
+# 获取消费者运行信息（新功能）
+from pyrocketmq.broker.manager import BrokerManager
+
+broker_manager = BrokerManager("localhost:10911")
+running_info = broker_manager.get_consumer_running_info(
+    consumer_group="test_consumer_group",
+    client_id="consumer_client_id"
+)
+print(f"消费者运行信息: {running_info}")
 ```
 
 ## 🛠️ 开发环境
@@ -589,3 +637,10 @@ producer = create_producer_from_config(config)
 **🚀 pyrocketmq**: 为Python开发者提供功能完整、性能优异的RocketMQ客户端解决方案！
 
 **当前状态**: ✅ 生产就绪，完整的Producer和Consumer功能实现
+
+**最新更新**:
+- ✨ 支持获取消费者运行信息（GET_CONSUMER_RUNNING_INFO）
+- ✨ 支持注册自定义请求处理器，扩展通信能力
+- 🏗️ 重构base_consumer.py为模块化组件，提高代码可维护性
+- ✨ 完善异步事务生产者实现
+- 🔧 优化连接池管理，支持连接生命周期管理
