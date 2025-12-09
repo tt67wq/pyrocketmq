@@ -1,0 +1,808 @@
+{
+  "module": "queue_helper",
+  "description": "Queue helper module for pyrocketmq. Provides message routing and queue selection functionality for RocketMQ clients. Includes both synchronous and asynchronous implementations.",
+  "files": [
+    {
+      "name": "__init__.py",
+      "description": "Module initialization file with exports",
+      "imports": [
+        {
+          "from": ".errors",
+          "items": [
+            "BrokerNotAvailableError",
+            "QueueHelperError",
+            "QueueNotAvailableError",
+            "RouteNotFoundError"
+          ]
+        },
+        {
+          "from": ".queue_selectors",
+          "items": [
+            "AsyncMessageHashSelector",
+            "AsyncQueueSelector",
+            "AsyncRandomSelector",
+            "AsyncRoundRobinSelector",
+            "MessageHashSelector",
+            "QueueSelector",
+            "RandomSelector",
+            "RoundRobinSelector"
+          ]
+        },
+        {
+          "from": ".router",
+          "items": [
+            "MASTER_BROKER_ID",
+            "AsyncMessageRouter",
+            "MessageRouter",
+            "RoutingResult",
+            "RoutingStrategy"
+          ]
+        }
+      ],
+      "exports": [
+        "QueueHelperError",
+        "RouteNotFoundError",
+        "BrokerNotAvailableError",
+        "QueueNotAvailableError",
+        "QueueSelector",
+        "RoundRobinSelector",
+        "RandomSelector",
+        "MessageHashSelector",
+        "AsyncQueueSelector",
+        "AsyncRoundRobinSelector",
+        "AsyncRandomSelector",
+        "AsyncMessageHashSelector",
+        "MessageRouter",
+        "AsyncMessageRouter",
+        "RoutingStrategy",
+        "MASTER_BROKER_ID",
+        "RoutingResult"
+      ]
+    },
+    {
+      "name": "errors.py",
+      "description": "Queue helper module exceptions. Defines exceptions related to queue selection and message routing functionality.",
+      "classes": [
+        {
+          "name": "QueueHelperError",
+          "type": "class",
+          "base_class": "Exception",
+          "description": "Queue helper基础异常类，所有queue helper相关异常的基类，提供统一的错误处理接口。",
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "message",
+                  "type": "str",
+                  "description": "错误消息"
+                },
+                {
+                  "name": "error_code",
+                  "type": "int | None",
+                  "default": "None",
+                  "description": "错误代码（可选）"
+                },
+                {
+                  "name": "cause",
+                  "type": "Exception | None",
+                  "default": "None",
+                  "description": "原因异常（可选）"
+                }
+              ],
+              "description": "初始化QueueHelper异常"
+            },
+            {
+              "name": "__str__",
+              "return_type": "str",
+              "description": "字符串表示"
+            }
+          ]
+        },
+        {
+          "name": "RouteNotFoundError",
+          "type": "class",
+          "base_class": "QueueHelperError",
+          "description": "路由未找到异常，当无法找到Topic的路由信息时抛出。",
+          "error_code": 3001,
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "message",
+                  "type": "str",
+                  "default": "\"Route not found\"",
+                  "description": "错误消息"
+                },
+                {
+                  "name": "topic",
+                  "type": "str | None",
+                  "default": "None",
+                  "description": "主题名称"
+                }
+              ],
+              "description": "初始化路由未找到异常"
+            }
+          ],
+          "attributes": [
+            {
+              "name": "topic",
+              "type": "str | None",
+              "description": "主题名称"
+            }
+          ]
+        },
+        {
+          "name": "BrokerNotAvailableError",
+          "type": "class",
+          "base_class": "QueueHelperError",
+          "description": "Broker不可用异常，当目标Broker不可用时抛出。",
+          "error_code": 3002,
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "message",
+                  "type": "str",
+                  "default": "\"Broker is not available\"",
+                  "description": "错误消息"
+                },
+                {
+                  "name": "broker_name",
+                  "type": "str | None",
+                  "default": "None",
+                  "description": "Broker名称"
+                },
+                {
+                  "name": "broker_addr",
+                  "type": "str | None",
+                  "default": "None",
+                  "description": "Broker地址"
+                }
+              ],
+              "description": "初始化Broker不可用异常"
+            }
+          ],
+          "attributes": [
+            {
+              "name": "broker_name",
+              "type": "str | None",
+              "description": "Broker名称"
+            },
+            {
+              "name": "broker_addr",
+              "type": "str | None",
+              "description": "Broker地址"
+            }
+          ]
+        },
+        {
+          "name": "QueueNotAvailableError",
+          "type": "class",
+          "base_class": "QueueHelperError",
+          "description": "队列不可用异常，当目标队列不可用时抛出。",
+          "error_code": 3003,
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "message",
+                  "type": "str",
+                  "default": "\"Queue is not available\"",
+                  "description": "错误消息"
+                },
+                {
+                  "name": "topic",
+                  "type": "str | None",
+                  "default": "None",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "broker_name",
+                  "type": "str | None",
+                  "default": "None",
+                  "description": "Broker名称"
+                },
+                {
+                  "name": "queue_id",
+                  "type": "int | None",
+                  "default": "None",
+                  "description": "队列ID"
+                }
+              ],
+              "description": "初始化队列不可用异常"
+            }
+          ],
+          "attributes": [
+            {
+              "name": "topic",
+              "type": "str | None",
+              "description": "主题名称"
+            },
+            {
+              "name": "broker_name",
+              "type": "str | None",
+              "description": "Broker名称"
+            },
+            {
+              "name": "queue_id",
+              "type": "int | None",
+              "description": "队列ID"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "queue_selectors.py",
+      "description": "队列选择器模块。提供各种队列选择策略，用于MessageRouter中的路由决策。包含同步和异步版本的队列选择器，以适配不同类型的生产者。",
+      "classes": [
+        {
+          "name": "QueueSelector",
+          "type": "abstract_class",
+          "base_class": "abc.ABC",
+          "description": "队列选择器抽象基类",
+          "methods": [
+            {
+              "name": "select",
+              "type": "abstract_method",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "从可用队列中选择一个队列"
+            }
+          ]
+        },
+        {
+          "name": "AsyncQueueSelector",
+          "type": "abstract_class",
+          "base_class": "abc.ABC",
+          "description": "异步队列选择器抽象基类",
+          "methods": [
+            {
+              "name": "aselect",
+              "type": "abstract_method",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "异步从可用队列中选择一个队列"
+            }
+          ]
+        },
+        {
+          "name": "RoundRobinSelector",
+          "type": "class",
+          "base_class": "QueueSelector",
+          "description": "轮询队列选择器。按顺序轮流选择队列，确保消息均匀分布到所有可用队列中。使用线程安全的计数器保证并发环境下的正确性。",
+          "features": [
+            "负载均衡：消息均匀分布到所有队列",
+            "线程安全：支持多线程并发调用",
+            "状态管理：每个主题维护独立的计数器"
+          ],
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化轮询选择器"
+            },
+            {
+              "name": "select",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "选择队列"
+            },
+            {
+              "name": "reset_counter",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                }
+              ],
+              "return_type": "None",
+              "description": "重置指定主题的计数器"
+            },
+            {
+              "name": "reset_all_counters",
+              "return_type": "None",
+              "description": "重置所有计数器"
+            }
+          ],
+          "attributes": [
+            {
+              "name": "_counters",
+              "type": "dict[str, int]",
+              "description": "每个主题的计数器"
+            },
+            {
+              "name": "_lock",
+              "type": "threading.RLock",
+              "description": "线程锁"
+            }
+          ]
+        },
+        {
+          "name": "RandomSelector",
+          "type": "class",
+          "base_class": "QueueSelector",
+          "description": "随机队列选择器。随机选择可用队列，适合需要随机分布的场景。",
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化随机选择器"
+            },
+            {
+              "name": "select",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "随机选择队列"
+            }
+          ]
+        },
+        {
+          "name": "AsyncRoundRobinSelector",
+          "type": "class",
+          "base_class": "AsyncQueueSelector",
+          "description": "异步轮询队列选择器。异步版本的轮询选择器，使用异步锁保证并发安全。",
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化异步轮询选择器"
+            },
+            {
+              "name": "aselect",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "异步选择队列"
+            },
+            {
+              "name": "reset_counter",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                }
+              ],
+              "return_type": "None",
+              "description": "异步重置指定主题的计数器"
+            },
+            {
+              "name": "reset_all_counters",
+              "is_async": true,
+              "return_type": "None",
+              "description": "异步重置所有计数器"
+            }
+          ]
+        },
+        {
+          "name": "AsyncRandomSelector",
+          "type": "class",
+          "base_class": "AsyncQueueSelector",
+          "description": "异步随机队列选择器。异步版本的随机选择器。",
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化异步随机选择器"
+            },
+            {
+              "name": "aselect",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "异步随机选择队列"
+            }
+          ]
+        },
+        {
+          "name": "MessageHashSelector",
+          "type": "class",
+          "base_class": "QueueSelector",
+          "description": "消息哈希队列选择器。基于消息内容的哈希值选择队列，保证相同消息总是路由到同一队列。",
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化消息哈希选择器"
+            },
+            {
+              "name": "select",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "基于消息哈希选择队列"
+            }
+          ]
+        },
+        {
+          "name": "AsyncMessageHashSelector",
+          "type": "class",
+          "base_class": "AsyncQueueSelector",
+          "description": "异步消息哈希队列选择器。异步版本的消息哈希选择器。",
+          "methods": [
+            {
+              "name": "__init__",
+              "description": "初始化异步消息哈希选择器"
+            },
+            {
+              "name": "aselect",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "available_queues",
+                  "type": "list[tuple[MessageQueue, BrokerData]]",
+                  "description": "可用队列列表"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                }
+              ],
+              "return_type": "tuple[MessageQueue, BrokerData] | None",
+              "description": "异步基于消息哈希选择队列"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "router.py",
+      "description": "消息路由器模块。负责高级的消息路由决策，包括路由策略选择、队列选择算法、故障规避机制和路由信息更新。这是Producer模块的核心组件，为消息发送提供智能路由功能。包含同步和异步版本，以适配不同类型的生产者。",
+      "features": [
+        "路由策略选择和执行",
+        "智能故障规避机制",
+        "路由信息更新和状态管理",
+        "与TopicBrokerMapping的深度集成",
+        "异步版本支持"
+      ],
+      "constants": [
+        {
+          "name": "MASTER_BROKER_ID",
+          "type": "int",
+          "value": 0,
+          "description": "RocketMQ 中 Master Broker 的 ID，按照惯例 Master 的 ID 为 0"
+        }
+      ],
+      "classes": [
+        {
+          "name": "RoutingStrategy",
+          "type": "enum",
+          "base_class": "Enum",
+          "description": "路由策略枚举",
+          "values": [
+            {
+              "name": "ROUND_ROBIN",
+              "value": "round_robin",
+              "description": "轮询策略"
+            },
+            {
+              "name": "RANDOM",
+              "value": "random",
+              "description": "随机策略"
+            },
+            {
+              "name": "MESSAGE_HASH",
+              "value": "message_hash",
+              "description": "消息哈希策略"
+            }
+          ]
+        },
+        {
+          "name": "RoutingResult",
+          "type": "dataclass",
+          "description": "路由结果",
+          "fields": [
+            {
+              "name": "success",
+              "type": "bool",
+              "description": "路由是否成功"
+            },
+            {
+              "name": "message_queue",
+              "type": "MessageQueue | None",
+              "default": "None",
+              "description": "选中的消息队列"
+            },
+            {
+              "name": "broker_data",
+              "type": "BrokerData | None",
+              "default": "None",
+              "description": "选中的Broker数据"
+            },
+            {
+              "name": "broker_address",
+              "type": "str | None",
+              "default": "None",
+              "description": "Broker地址"
+            },
+            {
+              "name": "error",
+              "type": "Exception | None",
+              "default": "None",
+              "description": "错误信息"
+            },
+            {
+              "name": "retry_count",
+              "type": "int",
+              "default": 0,
+              "description": "重试次数"
+            },
+            {
+              "name": "routing_strategy",
+              "type": "RoutingStrategy | None",
+              "default": "None",
+              "description": "使用的路由策略"
+            }
+          ],
+          "methods": [
+            {
+              "name": "__post_init__",
+              "return_type": "None",
+              "description": "验证成功的路由必须包含message_queue和broker_data"
+            },
+            {
+              "name": "get_broker_name",
+              "return_type": "str | None",
+              "description": "获取Broker名称"
+            }
+          ]
+        },
+        {
+          "name": "MessageRouter",
+          "type": "class",
+          "description": "消息路由器。提供高级的消息路由决策功能，包括: 1. 多种路由策略支持 2. 故障感知和规避 3. 延迟感知优化 4. 自动路由更新",
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "topic_mapping",
+                  "type": "TopicBrokerMapping",
+                  "description": "Topic-Broker映射"
+                },
+                {
+                  "name": "default_strategy",
+                  "type": "RoutingStrategy",
+                  "default": "RoutingStrategy.ROUND_ROBIN",
+                  "description": "默认路由策略"
+                }
+              ],
+              "description": "初始化消息路由器"
+            },
+            {
+              "name": "select_queue",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                },
+                {
+                  "name": "strategy",
+                  "type": "RoutingStrategy | None",
+                  "default": "None",
+                  "description": "路由策略"
+                }
+              ],
+              "return_type": "RoutingResult",
+              "description": "选择消息队列"
+            },
+            {
+              "name": "update_topic_route",
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                }
+              ],
+              "return_type": "None",
+              "description": "更新主题路由信息"
+            }
+          ]
+        },
+        {
+          "name": "AsyncMessageRouter",
+          "type": "class",
+          "description": "异步消息路由器。异步版本的消息路由器，提供与MessageRouter相同的功能但使用异步接口。",
+          "methods": [
+            {
+              "name": "__init__",
+              "parameters": [
+                {
+                  "name": "topic_mapping",
+                  "type": "AsyncTopicBrokerMapping",
+                  "description": "异步Topic-Broker映射"
+                },
+                {
+                  "name": "default_strategy",
+                  "type": "RoutingStrategy",
+                  "default": "RoutingStrategy.ROUND_ROBIN",
+                  "description": "默认路由策略"
+                }
+              ],
+              "description": "初始化异步消息路由器"
+            },
+            {
+              "name": "aselect_queue",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                },
+                {
+                  "name": "message",
+                  "type": "Message | None",
+                  "default": "None",
+                  "description": "消息对象"
+                },
+                {
+                  "name": "strategy",
+                  "type": "RoutingStrategy | None",
+                  "default": "None",
+                  "description": "路由策略"
+                }
+              ],
+              "return_type": "RoutingResult",
+              "description": "异步选择消息队列"
+            },
+            {
+              "name": "update_topic_route",
+              "is_async": true,
+              "parameters": [
+                {
+                  "name": "topic",
+                  "type": "str",
+                  "description": "主题名称"
+                }
+              ],
+              "return_type": "None",
+              "description": "异步更新主题路由信息"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "author": "pyrocketmq团队",
+    "version": "MVP 1.0",
+    "last_updated": "2025-12-09"
+  }
+}
