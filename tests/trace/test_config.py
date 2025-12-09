@@ -35,6 +35,7 @@ class TestTraceConfig(unittest.TestCase):
         self.assertEqual(config.group_name, "trace_producer_group")
         self.assertEqual(config.access, AccessChannel.LOCAL)
         self.assertEqual(config.namesrv_addrs, ["127.0.0.1:9876"])
+        self.assertEqual(config.max_batch_size, 20)  # Default value
 
     def test_create_trace_config_with_cloud_access(self):
         """Test creating TraceConfig with cloud access."""
