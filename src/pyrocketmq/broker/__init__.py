@@ -28,6 +28,15 @@ from .errors import (
     MessagePullError,
     OffsetError,
 )
+from .topic_broker_mapping import (
+    AsyncRouteInfo,
+    AsyncTopicBrokerMapping,
+    RouteInfo,
+    TopicBrokerMapping,
+    async_create_topic_broker_mapping,
+    create_async_topic_broker_mapping,
+    create_topic_broker_mapping,
+)
 
 __all__ = [
     # Sync Client
@@ -47,6 +56,14 @@ __all__ = [
     "AsyncReadWriteContext",
     "AsyncReaderPreferenceRWLock",
     "AsyncWriterPreferenceRWLock",
+    # Topic Broker Mapping
+    "RouteInfo",
+    "AsyncRouteInfo",
+    "TopicBrokerMapping",
+    "AsyncTopicBrokerMapping",
+    "create_topic_broker_mapping",
+    "create_async_topic_broker_mapping",
+    "async_create_topic_broker_mapping",
     # Exceptions
     "BrokerError",
     "BrokerConnectionError",
