@@ -91,14 +91,21 @@ class TraceDispatcher:
     def start(self):
         """启动跟踪分发器。
 
-        启动后台刷新线程，开始处理跟踪数据的分发。如果分发器已经在运行，
-        则不会重复启动。刷新线程将以守护进程方式运行。
+        启动 NameServer 管理器和 Broker 管理器，然后启动后台刷新线程，
+        开始处理跟踪数据的分发。如果分发器已经在运行，则不会重复启动。
+        刷新线程将以守护进程方式运行。
 
         Raises:
-            RuntimeError: 当启动线程失败时可能抛出
+            RuntimeError: 当启动组件失败时可能抛出
         """
         if not self._running:
             self._running = True
+
+            # 启动 NameServer 管理器
+            self._nameserver_manager.start()
+
+            # 启动 Broker 管理器
+            self._broker_manager.start()
 
             self._stop_event.clear()
             # 启动刷新线程
@@ -110,13 +117,14 @@ class TraceDispatcher:
             self._flush_thread.start()
 
     def stop(self):
-        """停止跟踪分发器。
+        """停止跟踪分发器并回收资源。
 
-        停止后台刷新线程并清理资源。调用此方法后，分发器将不再处理
+        停止后台刷新线程、NameServer 管理器和 Broker 管理器，
+        并清理所有相关资源。调用此方法后，分发器将不再处理
         新的跟踪数据。会等待刷新线程完成当前任务，最多等待5秒。
 
         Raises:
-            RuntimeError: 当停止线程失败时可能抛出
+            RuntimeError: 当停止组件失败时可能抛出
         """
         if self._running:
             self._running = False
@@ -128,6 +136,19 @@ class TraceDispatcher:
             # 等待刷新线程完成
             if self._flush_thread and self._flush_thread.is_alive():
                 self._flush_thread.join(timeout=5.0)  # 最多等待5秒
+
+            # 清空队列中的剩余数据
+            with self._lock:
+                self._queue.clear()
+
+            # 停止 Broker 管理器并回收连接资源
+            self._broker_manager.shutdown()
+
+            # 停止 NameServer 管理器并回收连接资源
+            self._nameserver_manager.stop()
+
+            # 清空线程引用
+            self._flush_thread = None
 
     # ========================================================================
     # DATA PROCESSING MODULE
@@ -286,7 +307,12 @@ class TraceDispatcher:
             # 如果添加新数据会超过限制，先发送已有数据
             if current_size + new_data_size > self._config.max_msg_size and not flushed:
                 # 发送数据
-                self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
+                try:
+                    self._send_trace_data_by_mq(
+                        topic, keyset, regionID, "".join(builder)
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send trace data: {e}")
                 # 重置
                 builder = []
                 keyset = set()
@@ -300,7 +326,10 @@ class TraceDispatcher:
 
         # 如果还有未发送的数据，发送它
         if not flushed:
-            self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
+            try:
+                self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
+            except Exception as e:
+                logger.error(f"Failed to send trace data: {e}")
 
     def _send_trace_data_by_mq(
         self, topic: str, keyset: set[str], region_id: str, data: str
