@@ -2,7 +2,7 @@
   "module_info": {
     "name": "Producer模块",
     "version": "v2.0",
-    "last_updated": "2025-01-04",
+    "last_updated": "2025-01-09",
     "maintainers": ["pyrocketmq开发团队"],
     "review_status": "已完成代码验证和文档同步"
   },
@@ -167,10 +167,7 @@
         "name": "config.py",
         "description": "配置管理"
       },
-      {
-        "name": "topic_broker_mapping.py",
-        "description": "Topic-Broker映射管理 + 队列选择"
-      },
+
       {
         "name": "queue_selectors.py",
         "description": "队列选择策略"
@@ -197,36 +194,28 @@
       "功能整合: TopicBrokerMapping集成队列选择功能",
       "简化状态管理: Producer使用`_running: bool`替代复杂状态机",
       "代码量减少30%: 约300行冗余代码移除",
-      "性能提升: 减少不必要的抽象层次和状态检查"
-    ]
+      "性能提升: 减少不必要的抽象层次和状态检查",
+      "模块重构: TopicBrokerMapping 移至 broker 模块，提高代码复用性"
+    ],
+    "module_dependencies": {
+      "internal": [
+        "pyrocketmq.broker: 导入 TopicBrokerMapping, AsyncTopicBrokerMapping, RouteInfo, AsyncRouteInfo",
+        "pyrocketmq.model: 消息和路由数据模型",
+        "pyrocketmq.nameserver: NameServer 管理",
+        "pyrocketmq.remote: 远程通信",
+        "pyrocketmq.utils: 工具类"
+      ],
+      "external": [
+        "threading: 线程同步（同步版本）",
+        "asyncio: 异步编程（异步版本）",
+        "time: 时间相关函数",
+        "random: 随机数生成",
+        "typing: 类型注解支持",
+        "dataclasses: 数据类装饰器"
+      ]
+    }
   },
   "core_data_structures": [
-    {
-      "name": "RouteInfo",
-      "description": "路由信息包装类，包含Topic路由数据和预构建的队列列表",
-      "class_definition": {
-        "type": "dataclass",
-        "fields": [
-          {
-            "name": "topic_route_data",
-            "type": "TopicRouteData"
-          },
-          {
-            "name": "last_update_time",
-            "type": "float"
-          },
-          {
-            "name": "available_queues",
-            "type": "list[tuple[MessageQueue, BrokerData]]",
-            "description": "预构建队列列表"
-          }
-        ]
-      },
-      "design_highlights": [
-        "预构建队列列表，避免每次路由时重新计算，提升性能",
-        "内置过期时间管理，支持路由信息自动刷新"
-      ]
-    },
     {
       "name": "BrokerHealthInfo",
       "description": "Broker健康状态管理，记录每个Broker的性能指标和故障信息",
@@ -549,38 +538,10 @@
         "完整的批量消息支持，提升发送效率"
       ]
     },
-    {
-      "name": "TopicBrokerMapping (功能增强)",
-      "description": "Topic-Broker映射管理器，现在集成队列选择功能",
-      "responsibilities": [
-        "缓存Topic路由信息，避免频繁查询NameServer",
-        "队列选择功能: 支持轮询、随机、消息哈希策略",
-        "预构建队列列表，提升路由性能",
-        "路由信息过期管理和自动清理"
-      ],
-      "key_methods": [
-        {
-          "name": "get_available_queues",
-          "signature": "(topic: str) -> list[tuple[MessageQueue, BrokerData]]"
-        },
-        {
-          "name": "update_route_info",
-          "signature": "(topic: str, topic_route_data: TopicRouteData) -> bool"
-        },
-        {
-          "name": "clear_expired_routes",
-          "signature": "(timeout: float | None = None) -> int"
-        },
-        {
-          "name": "select_queue",
-          "signature": "(topic: str, message: Message | None, selector: QueueSelector | None) -> SelectionResult",
-          "description": "新增队列选择"
-        }
-      ]
-    },
+
     {
       "name": "MessageRouter (智能路由系统)",
-      "description": "高级消息路由器，提供智能路由决策、故障感知和性能监控功能",
+      "description": "高级消息路由器，基于 TopicBrokerMapping 提供智能路由决策、故障感知和性能监控功能",
       "strategies": [
         {
           "name": "ROUND_ROBIN",
@@ -1310,7 +1271,9 @@
       "name": "基本使用",
       "description": "MessageRouter和TopicBrokerMapping的基本使用",
       "code": [
-        "from pyrocketmq.producer import TopicBrokerMapping, MessageRouter",
+        "# TopicBrokerMapping 现在从 broker 模块导入",
+        "from pyrocketmq.broker import TopicBrokerMapping, AsyncTopicBrokerMapping",
+        "from pyrocketmq.producer import MessageRouter",
         "",
         "# 创建映射管理器",
         "mapping = TopicBrokerMapping()",
@@ -1322,7 +1285,13 @@
         "result = router.route_message(\"test_topic\", message)",
         "if result.success:",
         "    print(f\"Selected queue: {result.message_queue.full_name}\")",
-        "    print(f\"Broker address: {result.broker_address}\")"
+        "    print(f\"Broker address: {result.broker_address}\")",
+        "",
+        "# 异步版本",
+        "async def async_example():",
+        "    async_mapping = AsyncTopicBrokerMapping()",
+        "    queues = await async_mapping.aget_available_queues(\"test_topic\")",
+        "    print(f\"Available queues: {len(queues)}\")"
       ]
     },
     {
