@@ -95,6 +95,10 @@ class AsyncTraceDispatcher:
         self._stop_event = asyncio.Event()  # 停止事件
         self._flush_event = asyncio.Event()  # 刷新触发事件
 
+        # 路由刷新定时任务
+        self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
+        self._route_refresh_task: asyncio.Task[None] | None = None  # 路由刷新任务
+
     async def start(self):
         """启动异步跟踪分发器。
 
@@ -119,6 +123,12 @@ class AsyncTraceDispatcher:
             self._flush_task = asyncio.create_task(
                 self._flush_worker(),
                 name="trace-dispatcher-flush-worker",
+            )
+
+            # 启动路由刷新任务
+            self._route_refresh_task = asyncio.create_task(
+                self._route_refresh_loop(),
+                name="trace-dispatcher-route-refresh-loop",
             )
 
     async def stop(self):
@@ -149,6 +159,19 @@ class AsyncTraceDispatcher:
                     except asyncio.CancelledError:
                         pass
 
+            # 等待路由刷新任务完成
+            if self._route_refresh_task and not self._route_refresh_task.done():
+                try:
+                    await asyncio.wait_for(
+                        self._route_refresh_task, timeout=5.0
+                    )  # 最多等待5秒
+                except asyncio.TimeoutError:
+                    self._route_refresh_task.cancel()
+                    try:
+                        await self._route_refresh_task
+                    except asyncio.CancelledError:
+                        pass
+
             # 清空队列中的剩余数据
             async with self._queue_lock:
                 self._queue.clear()
@@ -161,6 +184,7 @@ class AsyncTraceDispatcher:
 
             # 清空任务引用
             self._flush_task = None
+            self._route_refresh_task = None
 
     # ========================================================================
     # DATA PROCESSING MODULE
@@ -391,15 +415,15 @@ class AsyncTraceDispatcher:
         message.set_keys("".join(list(keyset)))
 
         all_topics = await self._topic_mapping.aget_all_topics()
-        if message.topic not in all_topics:
-            _ = await self.update_route_info(message.topic)
+        if self._config.trace_topic not in all_topics:
+            _ = await self.update_route_info(self._config.trace_topic)
 
         routing_result = await self._message_router.aroute_message(
-            message.topic, message
+            self._config.trace_topic, message
         )
         if not routing_result.success:
             raise RouteNotFoundError(
-                f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                f"Route not found for topic: {self._config.trace_topic}, error: {routing_result.error}"
             )
 
         message_queue = routing_result.message_queue
@@ -407,24 +431,24 @@ class AsyncTraceDispatcher:
 
         if not message_queue:
             raise QueueNotAvailableError(
-                f"No available queue for topic: {message.topic}"
+                f"No available queue for topic: {self._config.trace_topic}"
             )
         if not broker_data:
             raise BrokerNotAvailableError(
-                f"No available broker data for topic: {message.topic}"
+                f"No available broker data for topic: {self._config.trace_topic}"
             )
 
         target_broker_addr = routing_result.broker_address
         if not target_broker_addr:
             raise BrokerNotAvailableError(
-                f"No available broker address for topic: {message.topic}"
+                f"No available broker address for topic: {self._config.trace_topic}"
             )
         logger.debug(
             "Sending trace message to broker",
             extra={
                 "broker_address": target_broker_addr,
                 "queue": message_queue.full_name,
-                "topic": message.topic,
+                "topic": self._config.trace_topic,
             },
         )
 
@@ -543,3 +567,77 @@ class AsyncTraceDispatcher:
                 message.properties,
                 flag=message.flag,
             )
+
+    async def _route_refresh_loop(self) -> None:
+        """异步路由刷新循环
+
+        定期刷新所有Topic的路由信息，确保跟踪数据能够正确发送到最新的Broker。
+        """
+        logger.info(
+            "Async trace route refresh loop started",
+            extra={
+                "refresh_interval": self._route_refresh_interval,
+            },
+        )
+
+        # 首次执行立即刷新一次
+        await self._refresh_all_routes()
+
+        while self._running:
+            try:
+                # 使用 asyncio.wait_for 实现可中断的等待
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=self._route_refresh_interval / 1000,
+                    )
+                    # 收到停止信号，退出循环
+                    break
+                except asyncio.TimeoutError:
+                    # 超时，继续执行路由刷新
+                    pass
+
+                # 检查是否仍在运行
+                if not self._running:
+                    break
+
+                # 执行路由刷新
+                await self._refresh_all_routes()
+
+            except Exception as e:
+                logger.error(
+                    "Error in async route refresh loop",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+                # 发生错误时等待较短时间后重试
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=5.0)
+                    break
+                except asyncio.TimeoutError:
+                    continue
+
+        logger.info("Async trace route refresh loop stopped")
+
+    async def _refresh_all_routes(self) -> None:
+        """异步刷新所有Topic的路由信息"""
+        topics = list(await self._topic_mapping.aget_all_topics())
+
+        for topic in topics:
+            try:
+                success = await self.update_route_info(topic)
+                if not success:
+                    logger.debug(
+                        "Failed to refresh route for topic",
+                        extra={"topic": topic},
+                    )
+            except Exception as e:
+                logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
