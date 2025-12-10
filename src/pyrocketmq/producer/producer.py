@@ -38,6 +38,7 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
+from pyrocketmq.model.trace import MessageType, TraceBean, TraceContext, TraceType
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 
 # Local imports - producer
@@ -61,6 +62,7 @@ from pyrocketmq.queue_helper import (
 # Local imports - remote
 from pyrocketmq.remote.config import RemoteConfig
 from pyrocketmq.remote.pool import ConnectionPool
+from pyrocketmq.trace import TraceConfig, TraceDispatcher
 from pyrocketmq.transport.config import TransportConfig
 
 logger = get_logger(__name__)
@@ -147,6 +149,19 @@ class Producer:
         self._background_thread: threading.Thread | None = None
         self._shutdown_event: threading.Event = threading.Event()
 
+        # Trace dispatcher for message tracing (optional)
+        self._trace_dispatcher: TraceDispatcher | None = None
+        if self._config.enable_trace:
+            trace_config = TraceConfig.create_local_config(
+                group_name=self._config.producer_group,
+                namesrv_addr=self._config.namesrv_addr,
+                trace_topic=self._config.trace_topic or "RMQ_SYS_TRACE_TOPIC",
+                max_batch_size=self._config.trace_batch_size or 20,
+                max_msg_size=self._config.trace_msg_size or 4 * 1024 * 1024,
+            )
+            self._trace_dispatcher = TraceDispatcher(trace_config)
+            logger.info("Trace dispatcher initialized")
+
         logger.info("Producer initialized")
 
     def start(self) -> None:
@@ -171,6 +186,11 @@ class Producer:
             # 3. 启动后台任务（路由更新等）
             self._start_background_tasks()
 
+            # 4. 启动 Trace dispatcher（如果启用）
+            if self._trace_dispatcher:
+                self._trace_dispatcher.start()
+                logger.info("Trace dispatcher started")
+
             # 设置运行状态
             self._running = True
 
@@ -193,10 +213,15 @@ class Producer:
             # 1. 停止后台任务
             self._stop_background_tasks()
 
-            # 2. 关闭Broker管理器
+            # 2. 停止 Trace dispatcher（如果启用）
+            if self._trace_dispatcher:
+                self._trace_dispatcher.stop()
+                logger.info("Trace dispatcher stopped")
+
+            # 3. 关闭Broker管理器
             self._broker_manager.shutdown()
 
-            # 3. 关闭NameServer连接
+            # 4. 关闭NameServer连接
             self._close_nameserver_connections()
 
         except Exception as e:
@@ -221,6 +246,23 @@ class Producer:
         message.set_property(
             MessageProperty.PRODUCER_GROUP, self._config.producer_group
         )
+
+        # Create trace context for tracking
+        start_time = time.time()
+        trace_context = None
+        if self._trace_dispatcher:
+            trace_context = TraceContext(
+                trace_type=TraceType.PUB,
+                timestamp=int(start_time * 1000),
+                region_id="",
+                region_name="",
+                group_name=self._config.producer_group,
+                cost_time=0,
+                is_success=True,
+                request_id="",
+                context_code=0,
+                trace_beans=[],
+            )
 
         try:
             # 1. 验证消息
@@ -270,13 +312,94 @@ class Producer:
 
             if send_result.is_success:
                 self._total_sent += 1
+
+                # Add trace information if enabled
+                if self._trace_dispatcher and trace_context:
+                    end_time = time.time()
+                    cost_time = int((end_time - start_time) * 1000)
+                    trace_context.cost_time = cost_time
+                    trace_context.is_success = True
+
+                    # Create trace bean
+                    trace_bean = TraceBean(
+                        topic=message.topic,
+                        msg_id=send_result.msg_id or "",
+                        offset_msg_id=send_result.msg_id or "",
+                        tags=message.get_tags() or "",
+                        keys=message.get_keys() or "",
+                        store_host=target_broker_addr or "",
+                        client_host="",
+                        store_time=int(end_time * 1000),
+                        retry_times=0,
+                        body_length=len(message.body),
+                        msg_type=MessageType.NORMAL,
+                    )
+                    trace_context.trace_beans = [trace_bean]
+
+                    # Dispatch trace context
+                    self._trace_dispatcher.dispatch(trace_context)
+
                 return send_result
             else:
                 self._total_failed += 1
+
+                # Add trace information for failed send
+                if self._trace_dispatcher and trace_context:
+                    end_time = time.time()
+                    cost_time = int((end_time - start_time) * 1000)
+                    trace_context.cost_time = cost_time
+                    trace_context.is_success = False
+
+                    # Create trace bean for failed send
+                    trace_bean = TraceBean(
+                        topic=message.topic,
+                        msg_id="",
+                        offset_msg_id="",
+                        tags=message.get_tags() or "",
+                        keys=message.get_keys() or "",
+                        store_host=target_broker_addr or "",
+                        client_host="",
+                        store_time=int(end_time * 1000),
+                        retry_times=0,
+                        body_length=len(message.body),
+                        msg_type=MessageType.NORMAL,
+                    )
+                    trace_context.trace_beans = [trace_bean]
+
+                    # Dispatch trace context
+                    self._trace_dispatcher.dispatch(trace_context)
+
                 return send_result
 
         except Exception as e:
             self._total_failed += 1
+
+            # Add trace information for exception
+            if self._trace_dispatcher and trace_context:
+                end_time = time.time()
+                cost_time = int((end_time - start_time) * 1000)
+                trace_context.cost_time = cost_time
+                trace_context.is_success = False
+
+                # Create trace bean for exception
+                trace_bean = TraceBean(
+                    topic=message.topic,
+                    msg_id="",
+                    offset_msg_id="",
+                    tags=message.get_tags() or "",
+                    keys=message.get_keys() or "",
+                    store_host="",
+                    client_host="",
+                    store_time=int(end_time * 1000),
+                    retry_times=0,
+                    body_length=len(message.body),
+                    msg_type=MessageType.NORMAL,
+                )
+                trace_context.trace_beans = [trace_bean]
+
+                # Dispatch trace context
+                self._trace_dispatcher.dispatch(trace_context)
+
             logger.error(
                 "Failed to send message",
                 extra={

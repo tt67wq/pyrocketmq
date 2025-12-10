@@ -276,6 +276,36 @@ class ProducerConfig:
     在问题排查和性能分析时很有用，但会增加一定的性能开销。
     """
 
+    enable_trace: bool = True
+    """是否启用 TraceDispatcher 进行消息跟踪
+
+    启用后会创建 TraceDispatcher 实例，用于收集和分发消息的跟踪信息。
+    与 trace_message 不同的是，此选项控制是否创建和使用跟踪分发器。
+    默认启用。
+    """
+
+    # ==================== 跟踪配置 ====================
+    trace_topic: str | None = None
+    """跟踪消息发送到的主题
+
+    指定用于发送跟踪数据的主题名称。如果为None，将使用默认的
+    "RMQ_SYS_TRACE_TOPIC"主题。
+    """
+
+    trace_batch_size: int | None = None
+    """跟踪消息批量发送的大小
+
+    控制跟踪消息批量发送时的批次大小。如果为None，将使用默认值20。
+    较大的批次可以提高吞吐量，但会增加延迟。
+    """
+
+    trace_msg_size: int | None = None
+    """单条跟踪消息的最大大小
+
+    控制单条跟踪消息的最大大小限制。如果为None，将使用默认值4MB。
+    超过此大小的跟踪消息将被分割。
+    """
+
     debug_enabled: bool = False
     """是否启用调试模式
 
