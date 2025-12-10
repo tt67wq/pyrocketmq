@@ -351,109 +351,116 @@ class Producer:
         if not messages:
             raise ValueError("至少需要提供一个消息进行批量发送")
 
-        try:
-            # 1. 验证所有消息
-            for i, message in enumerate(messages):
-                validate_message(message, self._config.max_message_size)
+        # 创建批量消息用于跟踪
+        batch_message = encode_batch(*messages)
+        batch_message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
-                # 检查所有消息的主题是否相同
-                if i > 0 and message.topic != messages[0].topic:
-                    raise ValueError(
-                        f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
-                    )
+        # Create trace context for tracking
+        with trace_message(
+            self._trace_dispatcher, self._config.producer_group, batch_message
+        ) as trace_context:
+            try:
+                # 1. 验证所有消息
+                for i, message in enumerate(messages):
+                    validate_message(message, self._config.max_message_size)
 
-            # 2. 将多个消息编码为批量消息
-            batch_message = encode_batch(*messages)
-            batch_message.set_property(
-                MessageProperty.PRODUCER_GROUP, self._config.producer_group
-            )
-            logger.debug(
-                "Encoded messages into batch message",
-                extra={
-                    "message_count": len(messages),
-                    "batch_size_bytes": len(batch_message.body),
-                    "topic": batch_message.topic,
-                },
-            )
-
-            # 3. 更新路由信息
-            if batch_message.topic not in self._topic_mapping.get_all_topics():
-                _ = self.update_route_info(batch_message.topic)
-
-            # 4. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                batch_message.topic, batch_message
-            )
-            if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {batch_message.topic}"
-                )
-
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
-
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {batch_message.topic}"
-                )
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {batch_message.topic}"
-                )
-
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for topic: {batch_message.topic}"
-                )
-            logger.debug(
-                "Sending batch message to broker",
-                extra={
-                    "message_count": len(messages),
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": batch_message.topic,
-                },
-            )
-
-            # 5. 发送批量消息到Broker
-            send_result = self._batch_send_message_to_broker(
-                batch_message, target_broker_addr, message_queue
-            )
-
-            if send_result.is_success:
-                self._total_sent += len(messages)
-                logger.info(
-                    "Batch send success",
+                    # 检查所有消息的主题是否相同
+                    if i > 0 and message.topic != messages[0].topic:
+                        raise ValueError(
+                            f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+                        )
+                logger.debug(
+                    "Encoded messages into batch message",
                     extra={
                         "message_count": len(messages),
+                        "batch_size_bytes": len(batch_message.body),
                         "topic": batch_message.topic,
-                        "queue_id": send_result.queue_id,
-                        "msg_id": send_result.msg_id,
                     },
                 )
-                return send_result
-            else:
+
+                # 3. 更新路由信息
+                if batch_message.topic not in self._topic_mapping.get_all_topics():
+                    _ = self.update_route_info(batch_message.topic)
+
+                # 4. 获取队列和Broker
+                routing_result = self._message_router.route_message(
+                    batch_message.topic, batch_message
+                )
+                if not routing_result.success:
+                    raise RouteNotFoundError(
+                        f"Route not found for topic: {batch_message.topic}"
+                    )
+
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
+
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {batch_message.topic}"
+                    )
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {batch_message.topic}"
+                    )
+
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for topic: {batch_message.topic}"
+                    )
+                logger.debug(
+                    "Sending batch message to broker",
+                    extra={
+                        "message_count": len(messages),
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": batch_message.topic,
+                    },
+                )
+
+                # 5. 发送批量消息到Broker
+                send_result = self._batch_send_message_to_broker(
+                    batch_message, target_broker_addr, message_queue
+                )
+
+                if send_result.is_success:
+                    self._total_sent += len(messages)
+                    trace_context.success()
+                    logger.info(
+                        "Batch send success",
+                        extra={
+                            "message_count": len(messages),
+                            "topic": batch_message.topic,
+                            "queue_id": send_result.queue_id,
+                            "msg_id": send_result.msg_id,
+                        },
+                    )
+                    return send_result
+                else:
+                    self._total_failed += len(messages)
+                    trace_context.failure()
+                    return send_result
+
+            except Exception as e:
                 self._total_failed += len(messages)
-                return send_result
+                trace_context.failure()
+                logger.error(
+                    "Failed to send batch messages",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": messages[0].topic if messages else "unknown",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
-        except Exception as e:
-            self._total_failed += len(messages)
-            logger.error(
-                "Failed to send batch messages",
-                extra={
-                    "message_count": len(messages),
-                    "topic": messages[0].topic if messages else "unknown",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
+                if isinstance(e, ProducerError):
+                    raise
 
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Batch message send failed: {e}") from e
+                raise MessageSendError(f"Batch message send failed: {e}") from e
 
     def oneway(self, message: Message) -> None:
         """单向发送消息
@@ -475,71 +482,81 @@ class Producer:
             MessageProperty.PRODUCER_GROUP, self._config.producer_group
         )
 
-        try:
-            # 1. 验证消息
-            validate_message(message, self._config.max_message_size)
+        # Create trace context for tracking
+        with trace_message(
+            self._trace_dispatcher, self._config.producer_group, message
+        ) as trace_context:
+            try:
+                # 1. 验证消息
+                validate_message(message, self._config.max_message_size)
 
-            # 2. 更新路由信息
-            if message.topic not in self._topic_mapping.get_all_topics():
-                _ = self.update_route_info(message.topic)
+                # 2. 更新路由信息
+                if message.topic not in self._topic_mapping.get_all_topics():
+                    _ = self.update_route_info(message.topic)
 
-            # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(message.topic, message)
-            if not routing_result.success:
-                raise RouteNotFoundError(f"Route not found for topic: {message.topic}")
+                # 3. 获取队列和Broker
+                routing_result = self._message_router.route_message(
+                    message.topic, message
+                )
+                if not routing_result.success:
+                    raise RouteNotFoundError(
+                        f"Route not found for topic: {message.topic}"
+                    )
 
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
 
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {message.topic}"
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {message.topic}"
+                    )
+
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {message.topic}"
+                    )
+
+                # 4. 获取Broker地址
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for: {broker_data.broker_name}"
+                    )
+
+                logger.debug(
+                    "Sending oneway message to broker",
+                    extra={
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": message.topic,
+                    },
                 )
 
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {message.topic}"
+                # 5. 发送消息到Broker
+                self._send_message_to_broker_oneway(
+                    message, target_broker_addr, message_queue
                 )
 
-            # 4. 获取Broker地址
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for: {broker_data.broker_name}"
+                # 更新统计（单向发送不计入成功/失败）
+                trace_context.success()
+                logger.debug("Oneway message sent successfully")
+
+            except Exception as e:
+                trace_context.failure()
+                logger.error(
+                    "Failed to send oneway message",
+                    extra={
+                        "topic": message.topic,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
                 )
 
-            logger.debug(
-                "Sending oneway message to broker",
-                extra={
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": message.topic,
-                },
-            )
+                if isinstance(e, ProducerError):
+                    raise
 
-            # 5. 发送消息到Broker
-            self._send_message_to_broker_oneway(
-                message, target_broker_addr, message_queue
-            )
-
-            # 更新统计（单向发送不计入成功/失败）
-            logger.debug("Oneway message sent successfully")
-
-        except Exception as e:
-            logger.error(
-                "Failed to send oneway message",
-                extra={
-                    "topic": message.topic,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
-
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Oneway message send failed: {e}") from e
+                raise MessageSendError(f"Oneway message send failed: {e}") from e
 
     def oneway_batch(self, *messages: Message) -> None:
         """单向批量发送消息
@@ -570,104 +587,110 @@ class Producer:
         if not messages:
             raise ValueError("至少需要提供一个消息进行批量发送")
 
-        try:
-            # 1. 验证所有消息
-            for i, message in enumerate(messages):
-                validate_message(message, self._config.max_message_size)
+        # 创建批量消息用于跟踪
+        batch_message = encode_batch(*messages)
+        batch_message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
-                # 检查所有消息的主题是否相同
-                if i > 0 and message.topic != messages[0].topic:
-                    raise ValueError(
-                        f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+        # Create trace context for tracking
+        with trace_message(
+            self._trace_dispatcher, self._config.producer_group, batch_message
+        ) as trace_context:
+            try:
+                # 1. 验证所有消息
+                for i, message in enumerate(messages):
+                    validate_message(message, self._config.max_message_size)
+
+                    # 检查所有消息的主题是否相同
+                    if i > 0 and message.topic != messages[0].topic:
+                        raise ValueError(
+                            f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+                        )
+                logger.debug(
+                    "Encoded messages into batch message for oneway batch",
+                    extra={
+                        "message_count": len(messages),
+                        "batch_size_bytes": len(batch_message.body),
+                        "topic": batch_message.topic,
+                    },
+                )
+
+                # 3. 更新路由信息
+                if batch_message.topic not in self._topic_mapping.get_all_topics():
+                    _ = self.update_route_info(batch_message.topic)
+
+                # 4. 获取队列和Broker
+                routing_result = self._message_router.route_message(
+                    batch_message.topic, batch_message
+                )
+                if not routing_result.success:
+                    raise RouteNotFoundError(
+                        f"Route not found for topic: {batch_message.topic}"
                     )
 
-            # 2. 将多个消息编码为批量消息
-            batch_message = encode_batch(*messages)
-            batch_message.set_property(
-                MessageProperty.PRODUCER_GROUP, self._config.producer_group
-            )
-            logger.debug(
-                "Encoded messages into batch message for oneway batch",
-                extra={
-                    "message_count": len(messages),
-                    "batch_size_bytes": len(batch_message.body),
-                    "topic": batch_message.topic,
-                },
-            )
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
 
-            # 3. 更新路由信息
-            if batch_message.topic not in self._topic_mapping.get_all_topics():
-                _ = self.update_route_info(batch_message.topic)
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {batch_message.topic}"
+                    )
 
-            # 4. 获取队列和Broker
-            routing_result = self._message_router.route_message(
-                batch_message.topic, batch_message
-            )
-            if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {batch_message.topic}"
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {batch_message.topic}"
+                    )
+
+                # 5. 获取Broker地址
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for: {broker_data.broker_name}"
+                    )
+
+                logger.debug(
+                    "Sending oneway batch message to broker",
+                    extra={
+                        "message_count": len(messages),
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": batch_message.topic,
+                    },
                 )
 
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
-
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {batch_message.topic}"
+                # 6. 单向发送批量消息到Broker
+                self._batch_send_message_to_broker_oneway(
+                    batch_message, target_broker_addr, message_queue
                 )
 
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {batch_message.topic}"
+                # 更新统计（单向发送不计入成功/失败）
+                trace_context.success()
+                logger.debug(
+                    "Oneway batch message sent successfully",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": messages[0].topic if messages else "unknown",
+                    },
                 )
 
-            # 5. 获取Broker地址
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for: {broker_data.broker_name}"
+            except Exception as e:
+                trace_context.failure()
+                logger.error(
+                    "Failed to send oneway batch messages",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": messages[0].topic if messages else "unknown",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
                 )
 
-            logger.debug(
-                "Sending oneway batch message to broker",
-                extra={
-                    "message_count": len(messages),
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": batch_message.topic,
-                },
-            )
+                if isinstance(e, ProducerError):
+                    raise
 
-            # 6. 单向发送批量消息到Broker
-            self._batch_send_message_to_broker_oneway(
-                batch_message, target_broker_addr, message_queue
-            )
-
-            # 更新统计（单向发送不计入成功/失败）
-            logger.debug(
-                "Oneway batch message sent successfully",
-                extra={
-                    "message_count": len(messages),
-                    "topic": messages[0].topic if messages else "unknown",
-                },
-            )
-
-        except Exception as e:
-            logger.error(
-                "Failed to send oneway batch messages",
-                extra={
-                    "message_count": len(messages),
-                    "topic": messages[0].topic if messages else "unknown",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
-
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Oneway batch message send failed: {e}") from e
+                raise MessageSendError(f"Oneway batch message send failed: {e}") from e
 
     def _init_nameserver_connections(self) -> None:
         """初始化NameServer连接"""
