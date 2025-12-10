@@ -1,12 +1,16 @@
-#! /usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import threading
+import asyncio
 from collections import deque
-from threading import Lock
-from typing import Deque
+from types import CoroutineType
+from typing import Any, Deque
 
-from pyrocketmq.broker import BrokerClient, BrokerManager, TopicBrokerMapping
+from pyrocketmq.broker import (
+    AsyncBrokerClient,
+    AsyncBrokerManager,
+    AsyncTopicBrokerMapping,
+)
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     CONTENT_SPLITTER,
@@ -16,14 +20,17 @@ from pyrocketmq.model import (
     TraceContext,
     TraceTransferBean,
 )
-from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
+from pyrocketmq.nameserver import (
+    AsyncNameServerManager,
+    create_async_nameserver_manager,
+)
 from pyrocketmq.queue_helper import (
+    AsyncMessageRouter,
     BrokerNotAvailableError,
-    MessageRouter,
     QueueNotAvailableError,
     RouteNotFoundError,
 )
-from pyrocketmq.remote import ConnectionPool, RemoteConfig
+from pyrocketmq.remote import AsyncConnectionPool, RemoteConfig
 from pyrocketmq.trace import TraceConfig
 from pyrocketmq.transport import TransportConfig
 
@@ -35,15 +42,15 @@ contentSplitter = CONTENT_SPLITTER  # 内容分隔符，对应Go版本的分隔�
 logger = get_logger(__name__)
 
 
-class TraceDispatcher:
+class AsyncTraceDispatcher:
     # ========================================================================
     # LIFECYCLE MANAGEMENT MODULE
-    # 功能：管理 TraceDispatcher 的生命周期，包括初始化、启动和停止分发器及其后台线程
+    # 功能：管理 AsyncTraceDispatcher 的生命周期，包括初始化、启动和停止分发器及其后台任务
     # 包含函数：__init__, start, stop
     # ========================================================================
 
     def __init__(self, config: TraceConfig):
-        """初始化跟踪分发器 (TraceDispatcher)。
+        """初始化异步跟踪分发器 (AsyncTraceDispatcher)。
 
         Args:
             config (TraceConfig): 跟踪配置对象，包含跟踪相关的配置参数
@@ -56,44 +63,44 @@ class TraceDispatcher:
         self._running: bool = False
 
         # 核心组件
-        self._topic_mapping: TopicBrokerMapping = TopicBrokerMapping()
+        self._topic_mapping: AsyncTopicBrokerMapping = AsyncTopicBrokerMapping()
 
         # 消息路由器
-        self._message_router: MessageRouter = MessageRouter(
+        self._message_router: AsyncMessageRouter = AsyncMessageRouter(
             topic_mapping=self._topic_mapping,
         )
 
         # NameServer连接管理
-        self._nameserver_manager: NameServerManager = create_nameserver_manager(
-            self._config.namesrv_addr
+        self._nameserver_manager: AsyncNameServerManager = (
+            create_async_nameserver_manager(self._config.namesrv_addr)
         )
 
-        # Broker管理器（使用现有的连接池管理）
+        # Broker管理器（使用异步连接池管理）
         transport_config = TransportConfig(
             host="localhost",  # 默认值，会被Broker覆盖
             port=10911,  # 默认值，会被Broker覆盖
         )
         remote_config = RemoteConfig()
-        self._broker_manager: BrokerManager = BrokerManager(
+        self._broker_manager: AsyncBrokerManager = AsyncBrokerManager(
             remote_config=remote_config,
             transport_config=transport_config,
         )
 
-        # 消息队列管理
+        # 消息队列管理 - 使用线程安全的队列
         self._queue: Deque[TraceContext] = deque()
-        self._lock = Lock()  # 用于线程安全
+        self._queue_lock = asyncio.Lock()  # 用于异步队列安全
 
-        # 线程同步
-        self._flush_thread = None
-        self._stop_event = threading.Event()  # 停止事件
-        self._flush_event = threading.Event()  # 刷新触发事件
+        # 异步任务管理
+        self._flush_task = None
+        self._stop_event = asyncio.Event()  # 停止事件
+        self._flush_event = asyncio.Event()  # 刷新触发事件
 
-    def start(self):
-        """启动跟踪分发器。
+    async def start(self):
+        """启动异步跟踪分发器。
 
-        启动 NameServer 管理器和 Broker 管理器，然后启动后台刷新线程，
+        启动 NameServer 管理器和 Broker 管理器，然后启动后台刷新任务，
         开始处理跟踪数据的分发。如果分发器已经在运行，则不会重复启动。
-        刷新线程将以守护进程方式运行。
+        刷新任务将以异步任务方式运行。
 
         Raises:
             RuntimeError: 当启动组件失败时可能抛出
@@ -102,26 +109,24 @@ class TraceDispatcher:
             self._running = True
 
             # 启动 NameServer 管理器
-            self._nameserver_manager.start()
+            await self._nameserver_manager.start()
 
             # 启动 Broker 管理器
-            self._broker_manager.start()
+            await self._broker_manager.start()
 
             self._stop_event.clear()
-            # 启动刷新线程
-            self._flush_thread = threading.Thread(
-                target=self._flush_worker,
+            # 启动刷新任务
+            self._flush_task = asyncio.create_task(
+                self._flush_worker(),
                 name="trace-dispatcher-flush-worker",
-                daemon=True,
             )
-            self._flush_thread.start()
 
-    def stop(self):
-        """停止跟踪分发器并回收资源。
+    async def stop(self):
+        """停止异步跟踪分发器并回收资源。
 
-        停止后台刷新线程、NameServer 管理器和 Broker 管理器，
+        停止后台刷新任务、NameServer 管理器和 Broker 管理器，
         并清理所有相关资源。调用此方法后，分发器将不再处理
-        新的跟踪数据。会等待刷新线程完成当前任务，最多等待5秒。
+        新的跟踪数据。会等待刷新任务完成当前任务，最多等待5秒。
 
         Raises:
             RuntimeError: 当停止组件失败时可能抛出
@@ -130,25 +135,32 @@ class TraceDispatcher:
             self._running = False
             # 设置停止事件
             self._stop_event.set()
-            # 设置刷新事件以唤醒工作线程
+            # 设置刷新事件以唤醒工作任务
             self._flush_event.set()
 
-            # 等待刷新线程完成
-            if self._flush_thread and self._flush_thread.is_alive():
-                self._flush_thread.join(timeout=5.0)  # 最多等待5秒
+            # 等待刷新任务完成
+            if self._flush_task and not self._flush_task.done():
+                try:
+                    await asyncio.wait_for(self._flush_task, timeout=5.0)  # 最多等待5秒
+                except asyncio.TimeoutError:
+                    self._flush_task.cancel()
+                    try:
+                        await self._flush_task
+                    except asyncio.CancelledError:
+                        pass
 
             # 清空队列中的剩余数据
-            with self._lock:
+            async with self._queue_lock:
                 self._queue.clear()
 
             # 停止 Broker 管理器并回收连接资源
-            self._broker_manager.shutdown()
+            await self._broker_manager.shutdown()
 
             # 停止 NameServer 管理器并回收连接资源
-            self._nameserver_manager.stop()
+            await self._nameserver_manager.stop()
 
-            # 清空线程引用
-            self._flush_thread = None
+            # 清空任务引用
+            self._flush_task = None
 
     # ========================================================================
     # DATA PROCESSING MODULE
@@ -157,8 +169,8 @@ class TraceDispatcher:
     # 包含函数：dispatch, _flush_worker, _commit
     # ========================================================================
 
-    def dispatch(self, ctx: TraceContext):
-        """分发跟踪上下文到队列 (Queue)。
+    async def dispatch(self, ctx: TraceContext):
+        """分发跟踪上下文到异步队列 (Queue)。
 
         将跟踪上下文添加到内部队列中等待处理。当队列中的数据量达到
         配置的最大批量大小时，会自动触发刷新操作。
@@ -169,7 +181,7 @@ class TraceDispatcher:
         Raises:
             RuntimeError: 当队列操作失败时可能抛出
         """
-        with self._lock:
+        async with self._queue_lock:
             # 将跟踪上下文添加到队列
             self._queue.append(ctx)
 
@@ -178,19 +190,25 @@ class TraceDispatcher:
                 # 触发刷新事件
                 self._flush_event.set()
 
-    def _flush_worker(self):
-        """刷新工作线程的主循环。
+    async def _flush_worker(self):
+        """刷新工作异步任务的主循环。
 
-        持续运行的工作线程，等待刷新事件或停止事件。当收到刷新事件时，
-        执行数据提交操作；当收到停止事件时，退出线程。
-        线程以守护进程模式运行。
+        持续运行的异步任务，等待刷新事件或停止事件。当收到刷新事件时，
+        执行数据提交操作；当收到停止事件时，退出任务。
+        任务以异步方式运行。
 
         Raises:
-            RuntimeError: 当线程操作异常时可能抛出
+            RuntimeError: 当任务操作异常时可能抛出
         """
         while not self._stop_event.is_set():
             # 等待刷新事件或停止事件
-            self._flush_event.wait()
+            await asyncio.wait(
+                [
+                    asyncio.create_task(self._flush_event.wait()),
+                    asyncio.create_task(self._stop_event.wait()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
             # 如果收到停止信号，退出循环
             if self._stop_event.is_set():
@@ -200,10 +218,10 @@ class TraceDispatcher:
             self._flush_event.clear()
 
             # 执行刷新操作
-            self._commit()
+            await self._commit()
 
-    def _commit(self):
-        """提交队列中的所有跟踪数据。
+    async def _commit(self):
+        """异步提交队列中的所有跟踪数据。
 
         从队列中取出所有待处理的跟踪上下文，按主题和区域ID进行分组，
         然后将分组后的数据批量发送到对应的 Broker。此操作是线程安全的。
@@ -218,7 +236,7 @@ class TraceDispatcher:
             QueueNotAvailableError: 当没有可用队列时抛出
             BrokerNotAvailableError: 当没有可用 Broker 时抛出
         """
-        with self._lock:
+        async with self._queue_lock:
             # 获取当前队列中的所有数据
             batch_ctx_list: list[TraceContext] = list(self._queue)
             # 清空队列
@@ -243,8 +261,9 @@ class TraceDispatcher:
             # 将上下文转换为bean并添加到对应分组
             keyed_ctx.setdefault(key, []).append(ctx.marshal2bean())
 
-        # 发送分组后的数据到远程 broker
-        # 每个key对应一个独立的消息
+        # 并发发送分组后的数据到远程 broker
+        # 使用 asyncio.gather 实现并发发送
+        tasks: list[CoroutineType[Any, Any, None]] = []
         for key, ctx_list in keyed_ctx.items():
             arr: list[str] = key.split(contentSplitter)
             topic: str = key
@@ -253,7 +272,11 @@ class TraceDispatcher:
                 topic = arr[0]
                 regionID = arr[1]
 
-            self._flush(topic, regionID, ctx_list)
+            tasks.append(self._flush(topic, regionID, ctx_list))
+
+        # 并发执行所有刷新任务
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # ========================================================================
     # MESSAGE ROUTING & SENDING MODULE
@@ -264,8 +287,10 @@ class TraceDispatcher:
     # 包含函数：_flush, _send_trace_data_by_mq, _send_message_to_broker, update_route_info
     # ========================================================================
 
-    def _flush(self, topic: str, regionID: str, data: list[TraceTransferBean]) -> None:
-        """批量刷新跟踪数据到消息队列 (Message Queue)。
+    async def _flush(
+        self, topic: str, regionID: str, data: list[TraceTransferBean]
+    ) -> None:
+        """异步批量刷新跟踪数据到消息队列 (Message Queue)。
 
         将批量跟踪数据按照消息大小限制进行分割，确保每个消息不超过
         配置的最大消息大小。将分割后的数据发送到指定的主题和区域。
@@ -306,9 +331,9 @@ class TraceDispatcher:
 
             # 如果添加新数据会超过限制，先发送已有数据
             if current_size + new_data_size > self._config.max_msg_size and not flushed:
-                # 发送数据
+                # 异步发送数据
                 try:
-                    self._send_trace_data_by_mq(
+                    await self._send_trace_data_by_mq(
                         topic, keyset, regionID, "".join(builder)
                     )
                 except Exception as e:
@@ -327,14 +352,16 @@ class TraceDispatcher:
         # 如果还有未发送的数据，发送它
         if not flushed and keyset:
             try:
-                self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
+                await self._send_trace_data_by_mq(
+                    topic, keyset, regionID, "".join(builder)
+                )
             except Exception as e:
                 logger.error(f"Failed to send trace data: {e}")
 
-    def _send_trace_data_by_mq(
+    async def _send_trace_data_by_mq(
         self, topic: str, keyset: set[str], region_id: str, data: str
     ):
-        """通过消息队列 (MQ) 发送跟踪数据。
+        """通过消息队列 (MQ) 异步发送跟踪数据。
 
         构造消息对象并设置传输键，通过路由器选择目标队列和 Broker，
         然后将跟踪数据发送到选定的 Broker。
@@ -363,10 +390,13 @@ class TraceDispatcher:
         message: Message = Message(topic=topic, body=data.encode())
         message.set_keys("".join(list(keyset)))
 
-        if message.topic not in self._topic_mapping.get_all_topics():
-            _ = self.update_route_info(message.topic)
+        all_topics = await self._topic_mapping.aget_all_topics()
+        if message.topic not in all_topics:
+            _ = await self.update_route_info(message.topic)
 
-        routing_result = self._message_router.route_message(message.topic, message)
+        routing_result = await self._message_router.aroute_message(
+            message.topic, message
+        )
         if not routing_result.success:
             raise RouteNotFoundError(
                 f"Route not found for topic: {message.topic}, error: {routing_result.error}"
@@ -398,7 +428,7 @@ class TraceDispatcher:
             },
         )
 
-        send_result: SendMessageResult = self._send_message_to_broker(
+        send_result: SendMessageResult = await self._send_message_to_broker(
             message, target_broker_addr, message_queue
         )
         if not send_result.is_success:
@@ -411,8 +441,8 @@ class TraceDispatcher:
                 },
             )
 
-    def update_route_info(self, topic: str) -> bool:
-        """更新指定主题的路由信息。
+    async def update_route_info(self, topic: str) -> bool:
+        """异步更新指定主题的路由信息。
 
         从 NameServer 获取主题的路由数据，更新 Broker 连接池，
         并刷新本地路由缓存。如果更新失败，会尝试强制刷新缓存。
@@ -430,7 +460,9 @@ class TraceDispatcher:
         Raises:
             ConnectionError: 当无法连接到 NameServer 时抛出
         """
-        topic_route_data = self._nameserver_manager.get_topic_route(topic)
+        # 直接使用异步的 get_topic_route 操作
+        topic_route_data = await self._nameserver_manager.get_topic_route(topic)
+
         if not topic_route_data:
             logger.error(
                 "Failed to get topic route data",
@@ -438,7 +470,7 @@ class TraceDispatcher:
             )
             return False
 
-        # 维护broker连接
+        # 并发维护broker连接
         for broker_data in topic_route_data.broker_data_list:
             for idx, broker_addr in broker_data.broker_addresses.items():
                 logger.info(
@@ -449,13 +481,14 @@ class TraceDispatcher:
                         "broker_name": broker_data.broker_name,
                     },
                 )
-                self._broker_manager.add_broker(
+                # 异步执行 add_broker 操作
+                await self._broker_manager.add_broker(
                     broker_addr,
                     broker_data.broker_name,
                 )
 
         # 更新本地缓存
-        success = self._topic_mapping.update_route_info(topic, topic_route_data)
+        success = await self._topic_mapping.aupdate_route_info(topic, topic_route_data)
         if success:
             logger.info(
                 "Route info updated for topic",
@@ -472,15 +505,15 @@ class TraceDispatcher:
             )
 
         # 如果所有NameServer都失败，强制刷新缓存
-        return self._topic_mapping.force_refresh(topic)
+        return await self._topic_mapping.aforce_refresh(topic)
 
-    def _send_message_to_broker(
+    async def _send_message_to_broker(
         self, message: Message, broker_addr: str, message_queue: MessageQueue
     ) -> SendMessageResult:
-        """发送消息到指定的 Broker。
+        """异步发送消息到指定的 Broker。
 
         使用连接池获取与目标 Broker 的连接，通过 BrokerClient
-        同步发送消息到指定的队列。
+        异步发送消息到指定的队列。
 
         此方法是实际的网络传输层，被 _send_trace_data_by_mq 调用。
 
@@ -497,10 +530,13 @@ class TraceDispatcher:
             TimeoutError: 当发送消息超时时抛出
             BrokerNotAvailableError: 当 Broker 不可用时抛出
         """
+        # 使用异步连接池
 
-        pool: ConnectionPool = self._broker_manager.must_connection_pool(broker_addr)
-        with pool.get_connection() as broker_remote:
-            return BrokerClient(broker_remote).sync_send_message(
+        pool: AsyncConnectionPool = await self._broker_manager.must_connection_pool(
+            broker_addr
+        )
+        async with pool.get_connection() as broker_remote:
+            return await AsyncBrokerClient(broker_remote).async_send_message(
                 TraceGroupName,
                 message.body,
                 message_queue,
