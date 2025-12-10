@@ -88,6 +88,10 @@ class TraceDispatcher:
         self._stop_event = threading.Event()  # 停止事件
         self._flush_event = threading.Event()  # 刷新触发事件
 
+        # 路由刷新定时任务
+        self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
+        self._route_refresh_thread: threading.Thread | None = None  # 路由刷新线程
+
     def start(self):
         """启动跟踪分发器。
 
@@ -116,6 +120,14 @@ class TraceDispatcher:
             )
             self._flush_thread.start()
 
+            # 启动路由刷新线程
+            self._route_refresh_thread = threading.Thread(
+                target=self._route_refresh_loop,
+                name="trace-dispatcher-route-refresh-thread",
+                daemon=True,
+            )
+            self._route_refresh_thread.start()
+
     def stop(self):
         """停止跟踪分发器并回收资源。
 
@@ -137,6 +149,10 @@ class TraceDispatcher:
             if self._flush_thread and self._flush_thread.is_alive():
                 self._flush_thread.join(timeout=5.0)  # 最多等待5秒
 
+            # 等待路由刷新线程完成
+            if self._route_refresh_thread and self._route_refresh_thread.is_alive():
+                self._route_refresh_thread.join(timeout=5.0)  # 最多等待5秒
+
             # 清空队列中的剩余数据
             with self._lock:
                 self._queue.clear()
@@ -149,6 +165,7 @@ class TraceDispatcher:
 
             # 清空线程引用
             self._flush_thread = None
+            self._route_refresh_thread = None
 
     # ========================================================================
     # DATA PROCESSING MODULE
@@ -363,13 +380,15 @@ class TraceDispatcher:
         message: Message = Message(topic=topic, body=data.encode())
         message.set_keys("".join(list(keyset)))
 
-        if message.topic not in self._topic_mapping.get_all_topics():
-            _ = self.update_route_info(message.topic)
+        if self._config.trace_topic not in self._topic_mapping.get_all_topics():
+            _ = self.update_route_info(self._config.trace_topic)
 
-        routing_result = self._message_router.route_message(message.topic, message)
+        routing_result = self._message_router.route_message(
+            self._config.trace_topic, message
+        )
         if not routing_result.success:
             raise RouteNotFoundError(
-                f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                f"Route not found for topic: {self._config.trace_topic}, error: {routing_result.error}"
             )
 
         message_queue = routing_result.message_queue
@@ -377,24 +396,24 @@ class TraceDispatcher:
 
         if not message_queue:
             raise QueueNotAvailableError(
-                f"No available queue for topic: {message.topic}"
+                f"No available queue for topic: {self._config.trace_topic}"
             )
         if not broker_data:
             raise BrokerNotAvailableError(
-                f"No available broker data for topic: {message.topic}"
+                f"No available broker data for topic: {self._config.trace_topic}"
             )
 
         target_broker_addr = routing_result.broker_address
         if not target_broker_addr:
             raise BrokerNotAvailableError(
-                f"No available broker address for topic: {message.topic}"
+                f"No available broker address for topic: {self._config.trace_topic}"
             )
         logger.debug(
             "Sending trace message to broker",
             extra={
                 "broker_address": target_broker_addr,
                 "queue": message_queue.full_name,
-                "topic": message.topic,
+                "topic": self._config.trace_topic,
             },
         )
 
@@ -507,3 +526,62 @@ class TraceDispatcher:
                 message.properties,
                 flag=message.flag,
             )
+
+    def _route_refresh_loop(self) -> None:
+        """路由刷新循环
+
+        定期刷新所有Topic的路由信息，确保跟踪数据能够正确发送到最新的Broker。
+        """
+        logger.info(
+            "Trace route refresh loop started",
+            extra={
+                "refresh_interval": self._route_refresh_interval,
+            },
+        )
+
+        # 首次执行立即刷新一次
+        self._refresh_all_routes()
+
+        while self._running:
+            try:
+                # 等待指定间隔或停止事件
+                if self._stop_event.wait(timeout=self._route_refresh_interval / 1000):
+                    # 收到停止信号，退出循环
+                    break
+
+                # 检查是否仍在运行
+                if not self._running:
+                    break
+
+                # 执行路由刷新
+                self._refresh_all_routes()
+
+            except Exception as e:
+                logger.error(
+                    "Error in route refresh loop",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+                # 发生错误时等待较短时间后重试
+                if self._stop_event.wait(timeout=5):
+                    break
+
+        logger.info("Trace route refresh loop stopped")
+
+    def _refresh_all_routes(self) -> None:
+        """刷新所有Topic的路由信息"""
+        topics = list(self._topic_mapping.get_all_topics())
+
+        for topic in topics:
+            try:
+                _ = self.update_route_info(topic)
+            except Exception as e:
+                logger.debug(
+                    "Failed to refresh route",
+                    extra={
+                        "topic": topic,
+                        "error": str(e),
+                    },
+                )
