@@ -325,9 +325,7 @@ class TraceDispatcher:
             if current_size + new_data_size > self._config.max_msg_size and not flushed:
                 # 发送数据
                 try:
-                    self._send_trace_data_by_mq(
-                        topic, keyset, regionID, "".join(builder)
-                    )
+                    self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
                 except Exception as e:
                     logger.error(f"Failed to send trace data: {e}")
                 # 重置
@@ -344,13 +342,11 @@ class TraceDispatcher:
         # 如果还有未发送的数据，发送它
         if not flushed and keyset:
             try:
-                self._send_trace_data_by_mq(topic, keyset, regionID, "".join(builder))
+                self._send_trace_data_by_mq(keyset, regionID, "".join(builder))
             except Exception as e:
                 logger.error(f"Failed to send trace data: {e}")
 
-    def _send_trace_data_by_mq(
-        self, topic: str, keyset: set[str], region_id: str, data: str
-    ):
+    def _send_trace_data_by_mq(self, keyset: set[str], region_id: str, data: str):
         """通过消息队列 (MQ) 发送跟踪数据。
 
         构造消息对象并设置传输键，通过路由器选择目标队列和 Broker，
@@ -363,7 +359,6 @@ class TraceDispatcher:
         4. 委托给 _send_message_to_broker 实际发送消息
 
         Args:
-            topic (str): 消息主题名称
             keyset (set[str]): 传输键集合，用于消息索引和检索
             region_id (str): 区域标识符，可为空字符串
             data (str): 要发送的跟踪数据内容
@@ -377,43 +372,41 @@ class TraceDispatcher:
             BrokerNotAvailableError: 当没有可用 Broker 地址时抛出
             ConnectionError: 当与 Broker 连接失败时抛出
         """
-        message: Message = Message(topic=topic, body=data.encode())
+        trace_topic = self._config.trace_topic
+
+        message: Message = Message(topic=trace_topic, body=data.encode())
         message.set_keys("".join(list(keyset)))
 
-        if self._config.trace_topic not in self._topic_mapping.get_all_topics():
-            _ = self.update_route_info(self._config.trace_topic)
+        if trace_topic not in self._topic_mapping.get_all_topics():
+            _ = self.update_route_info(trace_topic)
 
-        routing_result = self._message_router.route_message(
-            self._config.trace_topic, message
-        )
+        routing_result = self._message_router.route_message(trace_topic, message)
         if not routing_result.success:
             raise RouteNotFoundError(
-                f"Route not found for topic: {self._config.trace_topic}, error: {routing_result.error}"
+                f"Route not found for topic: {trace_topic}, error: {routing_result.error}"
             )
 
         message_queue = routing_result.message_queue
         broker_data = routing_result.broker_data
 
         if not message_queue:
-            raise QueueNotAvailableError(
-                f"No available queue for topic: {self._config.trace_topic}"
-            )
+            raise QueueNotAvailableError(f"No available queue for topic: {trace_topic}")
         if not broker_data:
             raise BrokerNotAvailableError(
-                f"No available broker data for topic: {self._config.trace_topic}"
+                f"No available broker data for topic: {trace_topic}"
             )
 
         target_broker_addr = routing_result.broker_address
         if not target_broker_addr:
             raise BrokerNotAvailableError(
-                f"No available broker address for topic: {self._config.trace_topic}"
+                f"No available broker address for topic: {trace_topic}"
             )
         logger.debug(
             "Sending trace message to broker",
             extra={
                 "broker_address": target_broker_addr,
                 "queue": message_queue.full_name,
-                "topic": self._config.trace_topic,
+                "topic": trace_topic,
             },
         )
 

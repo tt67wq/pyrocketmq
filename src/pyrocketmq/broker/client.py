@@ -287,6 +287,8 @@ class BrokerClient:
                 properties=properties,
                 **kwargs,
             )
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            print(request)
 
             # 发送请求并获取响应
             start_time = time.time()
