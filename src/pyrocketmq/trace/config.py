@@ -15,10 +15,10 @@ class AccessChannel(Enum):
 class TraceConfig:
     """Trace configuration for RocketMQ message tracing."""
 
-    trace_topic: str
     group_name: str
     access: AccessChannel
     namesrv_addr: str
+    trace_topic: str = "RMQ_SYS_TRACE_TOPIC"
     max_batch_size: int = 20  # Default max batch size for trace messages
     max_msg_size: int = 4 * 1024 * 1024  # Default max message size (4MB)
 
@@ -38,9 +38,9 @@ class TraceConfig:
     @classmethod
     def create_local_config(
         cls,
-        trace_topic: str,
         group_name: str,
         namesrv_addr: str,
+        trace_topic: str = "RMQ_SYS_TRACE_TOPIC",
         max_batch_size: int = 20,
         max_msg_size: int = 4 * 1024 * 1024,
     ) -> "TraceConfig":
@@ -57,9 +57,9 @@ class TraceConfig:
     @classmethod
     def create_cloud_config(
         cls,
-        trace_topic: str,
         group_name: str,
         namesrv_addr: str,
+        trace_topic: str = "RMQ_SYS_TRACE_TOPIC",
         max_batch_size: int = 20,
         max_msg_size: int = 4 * 1024 * 1024,
     ) -> "TraceConfig":
