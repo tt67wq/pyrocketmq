@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import threading
+import time
 from collections import deque
 from threading import Lock
 from typing import Deque
@@ -92,6 +93,10 @@ class TraceDispatcher:
         self._route_refresh_interval: int = 30000  # 30秒刷新一次路由信息
         self._route_refresh_thread: threading.Thread | None = None  # 路由刷新线程
 
+        # commit 定时任务
+        self._commit_interval: float = 0.005  # 5ms提交一次数据
+        self._commit_thread: threading.Thread | None = None  # commit任务线程
+
     def start(self):
         """启动跟踪分发器。
 
@@ -128,6 +133,14 @@ class TraceDispatcher:
             )
             self._route_refresh_thread.start()
 
+            # 启动 commit 定时任务线程
+            self._commit_thread = threading.Thread(
+                target=self._commit_worker,
+                name="trace-dispatcher-commit-worker",
+                daemon=True,
+            )
+            self._commit_thread.start()
+
     def stop(self):
         """停止跟踪分发器并回收资源。
 
@@ -153,6 +166,10 @@ class TraceDispatcher:
             if self._route_refresh_thread and self._route_refresh_thread.is_alive():
                 self._route_refresh_thread.join(timeout=5.0)  # 最多等待5秒
 
+            # 等待 commit 线程完成
+            if self._commit_thread and self._commit_thread.is_alive():
+                self._commit_thread.join(timeout=5.0)  # 最多等待5秒
+
             # 清空队列中的剩余数据
             with self._lock:
                 self._queue.clear()
@@ -166,6 +183,7 @@ class TraceDispatcher:
             # 清空线程引用
             self._flush_thread = None
             self._route_refresh_thread = None
+            self._commit_thread = None
 
     # ========================================================================
     # DATA PROCESSING MODULE
@@ -194,6 +212,45 @@ class TraceDispatcher:
             if len(self._queue) >= self._config.max_batch_size:
                 # 触发刷新事件
                 self._flush_event.set()
+
+    def _commit_worker(self):
+        """定时提交工作线程
+
+        每 5 毫秒执行一次 _commit 操作，定期提交队列中的跟踪数据。
+        使用 time.sleep 实现高精度定时。
+        """
+        logger.info(
+            "Trace commit worker started",
+            extra={
+                "commit_interval": self._commit_interval,
+            },
+        )
+
+        while self._running:
+            try:
+                # 检查是否收到停止信号
+                if self._stop_event.is_set():
+                    break
+
+                # 执行提交操作
+                self._commit()
+
+                # 精确定时等待
+                time.sleep(self._commit_interval)
+
+            except Exception as e:
+                logger.error(
+                    "Error in commit worker",
+                    extra={
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+                # 发生错误时等待较短时间后重试
+                if self._stop_event.wait(timeout=0.01):
+                    break
+
+        logger.info("Trace commit worker stopped")
 
     def _flush_worker(self):
         """刷新工作线程的主循环。
