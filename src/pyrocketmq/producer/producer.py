@@ -38,7 +38,6 @@ from pyrocketmq.logging import get_logger
 from pyrocketmq.model import HeartbeatData, ProducerData, SendMessageResult
 from pyrocketmq.model.message import Message, MessageProperty, encode_batch
 from pyrocketmq.model.message_queue import MessageQueue
-from pyrocketmq.model.trace import MessageType, TraceBean, TraceContext, TraceType
 from pyrocketmq.nameserver import NameServerManager, create_nameserver_manager
 
 # Local imports - producer
@@ -50,6 +49,7 @@ from pyrocketmq.producer.errors import (
     ProducerStartError,
     ProducerStateError,
 )
+from pyrocketmq.producer.trace_context import trace_message
 from pyrocketmq.producer.utils import validate_message
 from pyrocketmq.queue_helper import (
     BrokerNotAvailableError,
@@ -248,172 +248,80 @@ class Producer:
         )
 
         # Create trace context for tracking
-        start_time = time.time()
-        trace_context = None
-        if self._trace_dispatcher:
-            trace_context = TraceContext(
-                trace_type=TraceType.PUB,
-                timestamp=int(start_time * 1000),
-                region_id="",
-                region_name="",
-                group_name=self._config.producer_group,
-                cost_time=0,
-                is_success=True,
-                request_id="",
-                context_code=0,
-                trace_beans=[],
-            )
+        with trace_message(
+            self._trace_dispatcher, self._config.producer_group, message
+        ) as trace_context:
+            try:
+                # 1. 验证消息
+                validate_message(message, self._config.max_message_size)
 
-        try:
-            # 1. 验证消息
-            validate_message(message, self._config.max_message_size)
+                # 2. 更新路由信息
+                if message.topic not in self._topic_mapping.get_all_topics():
+                    _ = self.update_route_info(message.topic)
 
-            # 2. 更新路由信息
-            if message.topic not in self._topic_mapping.get_all_topics():
-                _ = self.update_route_info(message.topic)
-
-            # 3. 获取队列和Broker
-            routing_result = self._message_router.route_message(message.topic, message)
-            if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                # 3. 获取队列和Broker
+                routing_result = self._message_router.route_message(
+                    message.topic, message
                 )
-
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
-
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {message.topic}"
-                )
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {message.topic}"
-                )
-
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for topic: {message.topic}"
-                )
-            logger.debug(
-                "Sending message to broker",
-                extra={
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": message.topic,
-                },
-            )
-
-            # 4. 发送消息到Broker
-            send_result = self._send_message_to_broker(
-                message, target_broker_addr, message_queue
-            )
-
-            if send_result.is_success:
-                self._total_sent += 1
-
-                # Add trace information if enabled
-                if self._trace_dispatcher and trace_context:
-                    end_time = time.time()
-                    cost_time = int((end_time - start_time) * 1000)
-                    trace_context.cost_time = cost_time
-                    trace_context.is_success = True
-
-                    # Create trace bean
-                    trace_bean = TraceBean(
-                        topic=message.topic,
-                        msg_id=send_result.msg_id or "",
-                        offset_msg_id=send_result.msg_id or "",
-                        tags=message.get_tags() or "",
-                        keys=message.get_keys() or "",
-                        store_host=target_broker_addr or "",
-                        client_host="",
-                        store_time=int(end_time * 1000),
-                        retry_times=0,
-                        body_length=len(message.body),
-                        msg_type=MessageType.NORMAL,
+                if not routing_result.success:
+                    raise RouteNotFoundError(
+                        f"Route not found for topic: {message.topic}, error: {routing_result.error}"
                     )
-                    trace_context.trace_beans = [trace_bean]
 
-                    # Dispatch trace context
-                    self._trace_dispatcher.dispatch(trace_context)
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
 
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {message.topic}"
+                    )
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {message.topic}"
+                    )
+
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for topic: {message.topic}"
+                    )
+                logger.debug(
+                    "Sending message to broker",
+                    extra={
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": message.topic,
+                    },
+                )
+
+                # 4. 发送消息到Broker
+                send_result = self._send_message_to_broker(
+                    message, target_broker_addr, message_queue
+                )
+
+                if send_result.is_success:
+                    self._total_sent += 1
+                    trace_context.success()
+                else:
+                    self._total_failed += 1
+                    trace_context.failure()
                 return send_result
-            else:
+
+            except Exception as e:
                 self._total_failed += 1
+                trace_context.failure()
 
-                # Add trace information for failed send
-                if self._trace_dispatcher and trace_context:
-                    end_time = time.time()
-                    cost_time = int((end_time - start_time) * 1000)
-                    trace_context.cost_time = cost_time
-                    trace_context.is_success = False
-
-                    # Create trace bean for failed send
-                    trace_bean = TraceBean(
-                        topic=message.topic,
-                        msg_id="",
-                        offset_msg_id="",
-                        tags=message.get_tags() or "",
-                        keys=message.get_keys() or "",
-                        store_host=target_broker_addr or "",
-                        client_host="",
-                        store_time=int(end_time * 1000),
-                        retry_times=0,
-                        body_length=len(message.body),
-                        msg_type=MessageType.NORMAL,
-                    )
-                    trace_context.trace_beans = [trace_bean]
-
-                    # Dispatch trace context
-                    self._trace_dispatcher.dispatch(trace_context)
-
-                return send_result
-
-        except Exception as e:
-            self._total_failed += 1
-
-            # Add trace information for exception
-            if self._trace_dispatcher and trace_context:
-                end_time = time.time()
-                cost_time = int((end_time - start_time) * 1000)
-                trace_context.cost_time = cost_time
-                trace_context.is_success = False
-
-                # Create trace bean for exception
-                trace_bean = TraceBean(
-                    topic=message.topic,
-                    msg_id="",
-                    offset_msg_id="",
-                    tags=message.get_tags() or "",
-                    keys=message.get_keys() or "",
-                    store_host="",
-                    client_host="",
-                    store_time=int(end_time * 1000),
-                    retry_times=0,
-                    body_length=len(message.body),
-                    msg_type=MessageType.NORMAL,
+                logger.error(
+                    "Failed to send message",
+                    extra={
+                        "topic": message.topic,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
                 )
-                trace_context.trace_beans = [trace_bean]
 
-                # Dispatch trace context
-                self._trace_dispatcher.dispatch(trace_context)
-
-            logger.error(
-                "Failed to send message",
-                extra={
-                    "topic": message.topic,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
-
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Message send failed: {e}") from e
+                raise MessageSendError(f"Message send failed: {e}") from e
 
     def send_batch(self, *messages: Message) -> SendMessageResult:
         """批量发送消息

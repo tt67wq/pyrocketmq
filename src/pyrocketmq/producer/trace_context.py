@@ -35,16 +35,19 @@ class TraceContextManager:
     """
 
     def __init__(
-        self, trace_dispatcher: TraceDispatcher, group_name: str, message: Message
+        self,
+        trace_dispatcher: TraceDispatcher | None,
+        group_name: str,
+        message: Message,
     ) -> None:
         """初始化跟踪上下文管理器
 
         Args:
-            trace_dispatcher: TraceDispatcher实例
+            trace_dispatcher: TraceDispatcher实例，可以为None
             group_name: 生产者组名
             message: 要跟踪的消息
         """
-        self._trace_dispatcher: TraceDispatcher = trace_dispatcher
+        self._trace_dispatcher: TraceDispatcher | None = trace_dispatcher
         self._group_name: str = group_name
         self._message: Message = message
         self._trace_context: TraceContext | None = None
@@ -121,7 +124,7 @@ class TraceContextManager:
             is_success: 是否成功
             cost_time_ms: 耗时（毫秒）
         """
-        if not self._trace_context:
+        if not self._trace_context or not self._trace_dispatcher:
             return
 
         end_time = time.time()
@@ -172,12 +175,12 @@ class TraceContextManager:
 
 @contextmanager
 def trace_message(
-    trace_dispatcher: TraceDispatcher, group_name: str, message: Message
+    trace_dispatcher: TraceDispatcher | None, group_name: str, message: Message
 ) -> Generator[TraceContextManager, None, None]:
     """跟踪消息的上下文管理器函数
 
     Args:
-        trace_dispatcher: TraceDispatcher实例
+        trace_dispatcher: TraceDispatcher实例，可以为None
         group_name: 生产者组名
         message: 要跟踪的消息
 
