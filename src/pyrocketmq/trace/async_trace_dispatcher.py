@@ -31,7 +31,7 @@ from pyrocketmq.queue_helper import (
     RouteNotFoundError,
 )
 from pyrocketmq.remote import AsyncConnectionPool, RemoteConfig
-from pyrocketmq.trace import TraceConfig
+from pyrocketmq.trace.config import TraceConfig
 from pyrocketmq.transport import TransportConfig
 
 RmqSysTraceTopic = "RMQ_SYS_TRACE_TOPIC"
