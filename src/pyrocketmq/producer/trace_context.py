@@ -82,7 +82,12 @@ class TraceContextManager:
         return False  # 不抑制异常
 
     def _create_trace_bean(
-        self, msg_id: str, store_host: str, store_time: float, is_success: bool
+        self,
+        msg_id: str,
+        store_host: str,
+        store_time: float,
+        is_success: bool,
+        offset_msg_id: str = "",
     ) -> TraceBean:
         """创建跟踪 Bean
 
@@ -91,6 +96,7 @@ class TraceContextManager:
             store_host: 存储主机地址
             store_time: 存储时间戳
             is_success: 是否成功
+            offset_msg_id: 偏移消息ID，默认为空
 
         Returns:
             TraceBean: 跟踪 Bean 对象
@@ -98,7 +104,9 @@ class TraceContextManager:
         return TraceBean(
             topic=self._message.topic,
             msg_id=msg_id,
-            offset_msg_id=msg_id if is_success else "",
+            offset_msg_id=offset_msg_id
+            if offset_msg_id
+            else (msg_id if is_success else ""),
             tags=self._message.get_tags() or "",
             keys=self._message.get_keys() or "",
             store_host=store_host,
@@ -115,6 +123,7 @@ class TraceContextManager:
         store_host: str = "",
         is_success: bool = True,
         cost_time_ms: int = 0,
+        offset_msg_id: str = "",
     ) -> None:
         """分发跟踪信息
 
@@ -123,6 +132,7 @@ class TraceContextManager:
             store_host: 存储主机地址
             is_success: 是否成功
             cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
         """
         if not self._trace_context or not self._trace_dispatcher:
             return
@@ -133,13 +143,19 @@ class TraceContextManager:
         )
         self._trace_context.is_success = is_success
 
-        trace_bean = self._create_trace_bean(msg_id, store_host, end_time, is_success)
+        trace_bean = self._create_trace_bean(
+            msg_id, store_host, end_time, is_success, offset_msg_id
+        )
         self._trace_context.trace_beans = [trace_bean]
 
         self._trace_dispatcher.dispatch(self._trace_context)
 
     def success(
-        self, msg_id: str = "", store_host: str = "", cost_time_ms: int = 0
+        self,
+        msg_id: str = "",
+        store_host: str = "",
+        cost_time_ms: int = 0,
+        offset_msg_id: str = "",
     ) -> None:
         """标记成功
 
@@ -147,16 +163,22 @@ class TraceContextManager:
             msg_id: 消息ID
             store_host: 存储主机地址
             cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
         """
         self._dispatch_trace(
             msg_id=msg_id,
             store_host=store_host,
             is_success=True,
             cost_time_ms=cost_time_ms,
+            offset_msg_id=offset_msg_id,
         )
 
     def failure(
-        self, msg_id: str = "", store_host: str = "", cost_time_ms: int = 0
+        self,
+        msg_id: str = "",
+        store_host: str = "",
+        cost_time_ms: int = 0,
+        offset_msg_id: str = "",
     ) -> None:
         """标记失败
 
@@ -164,12 +186,14 @@ class TraceContextManager:
             msg_id: 消息ID
             store_host: 存储主机地址
             cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
         """
         self._dispatch_trace(
             msg_id=msg_id,
             store_host=store_host,
             is_success=False,
             cost_time_ms=cost_time_ms,
+            offset_msg_id=offset_msg_id,
         )
 
 

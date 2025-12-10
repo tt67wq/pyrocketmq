@@ -246,6 +246,7 @@ class Producer:
         message.set_property(
             MessageProperty.PRODUCER_GROUP, self._config.producer_group
         )
+        begin_ts: float = time.time()
 
         # Create trace context for tracking
         with trace_message(
@@ -301,10 +302,20 @@ class Producer:
 
                 if send_result.is_success:
                     self._total_sent += 1
-                    trace_context.success(send_result.msg_id)
+                    trace_context.success(
+                        send_result.msg_id,
+                        target_broker_addr,
+                        int((time.time() - begin_ts) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
                 else:
                     self._total_failed += 1
-                    trace_context.failure(send_result.msg_id)
+                    trace_context.failure(
+                        send_result.msg_id,
+                        target_broker_addr,
+                        int((time.time() - begin_ts) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
                 return send_result
 
             except Exception as e:
