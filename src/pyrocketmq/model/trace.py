@@ -135,8 +135,8 @@ class TraceContext:
         trans_keys: list[str] = []
         for bean in self.trace_beans:
             trans_keys.append(bean.msg_id)
-            # if bean.keys:
-            #     trans_keys.append(bean.keys)
+            if bean.keys:
+                trans_keys.append(bean.keys)
 
         return TraceTransferBean(
             trans_data=trans_data + FIELD_SPLITTER, trans_key=trans_keys
