@@ -399,6 +399,9 @@ class RemotingRequestFactory:
             born_timestamp=int(time.time() * 1000),
             **kwargs,
         )
+        # if producer_group == "_INNER_TRACE_PRODUCER":
+        #     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        #     print(header.encode())
 
         return RemotingCommand(
             code=RequestCode.SEND_MESSAGE,
