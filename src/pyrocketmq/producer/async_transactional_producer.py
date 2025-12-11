@@ -136,7 +136,9 @@ class AsyncTransactionProducer(AsyncProducer):
         transaction_id: str | None = ""
         try:
             # 1. 发送带有事务标记的消息
-            send_result = await self._send_message_with_transaction_flag(message)
+            send_result, broker_addr = await self._send_message_with_transaction_flag(
+                message
+            )
 
             if not send_result.is_success:
                 raise MessageSendError(
@@ -166,6 +168,7 @@ class AsyncTransactionProducer(AsyncProducer):
                 local_state,
                 send_result.message_queue,
                 transaction_id or "",
+                broker_addr,
             )
 
             # 5. 构造事务发送结果
@@ -269,7 +272,7 @@ class AsyncTransactionProducer(AsyncProducer):
 
     async def _send_message_with_transaction_flag(
         self, message: Message
-    ) -> SendMessageResult:
+    ) -> tuple[SendMessageResult, str]:
         """异步发送带有事务标记的消息，按需注册事务检查处理器"""
         # 检查Producer状态
         if not self._running:
@@ -300,11 +303,12 @@ class AsyncTransactionProducer(AsyncProducer):
                 # 注册事务检查处理器
 
                 # 发送消息
-                return await self._send_to_broker(
+                result = await self._send_to_broker(
                     broker_remote,
                     message,
                     routing_result.message_queue,
                 )
+                return result, broker_addr
 
         except (ProducerError, BrokerError):
             # 重新抛出已知异常
@@ -366,6 +370,7 @@ class AsyncTransactionProducer(AsyncProducer):
         local_state: LocalTransactionState,
         message_queue: MessageQueue,
         transaction_id: str,
+        broker_addr: str | None = None,
     ) -> None:
         """异步发送事务状态确认
 
@@ -385,10 +390,11 @@ class AsyncTransactionProducer(AsyncProducer):
             raise ValueError("Invalid message ID")
 
         try:
-            # 获取Broker地址（传入topic参数）
-            broker_addr: str | None = await self._get_broker_addr_by_name(
-                message_queue.broker_name, message_queue.topic
-            )
+            # 使用传入的broker_addr或获取Broker地址
+            if not broker_addr:
+                broker_addr = await self._get_broker_addr_by_name(
+                    message_queue.broker_name, message_queue.topic
+                )
             if not broker_addr:
                 raise ValueError("Broker address not found")
 
