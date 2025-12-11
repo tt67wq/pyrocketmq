@@ -59,12 +59,16 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
+
+# Local imports - producer trace
+from pyrocketmq.producer.trace_context import async_trace_message
 from pyrocketmq.producer.utils import validate_message
 from pyrocketmq.queue_helper import AsyncMessageRouter, RoutingStrategy
 
 # Local imports - remote
 from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.config import RemoteConfig
+from pyrocketmq.trace import AsyncTraceDispatcher, TraceConfig
 from pyrocketmq.transport.config import TransportConfig
 
 logger = get_logger(__name__)
@@ -151,6 +155,19 @@ class AsyncProducer:
         self._background_task: asyncio.Task[None] | None = None
         self._shutdown_event: asyncio.Event = asyncio.Event()
 
+        # Trace dispatcher for message tracing (optional)
+        self._trace_dispatcher: AsyncTraceDispatcher | None = None
+        if self._config.enable_trace:
+            trace_config = TraceConfig.create_local_config(
+                group_name=self._config.producer_group,
+                namesrv_addr=self._config.namesrv_addr,
+                trace_topic=self._config.trace_topic or "RMQ_SYS_TRACE_TOPIC",
+                max_batch_size=self._config.trace_batch_size or 20,
+                max_msg_size=self._config.trace_msg_size or 4 * 1024 * 1024,
+            )
+            self._trace_dispatcher = AsyncTraceDispatcher(trace_config)
+            logger.info("Async trace dispatcher initialized")
+
         logger.info(
             "AsyncProducer initialized",
             extra={"producer_group": self._config.producer_group},
@@ -180,6 +197,11 @@ class AsyncProducer:
 
             # 3. 启动后台任务（路由更新等）
             self._start_background_tasks()
+
+            # 4. 启动 Trace dispatcher（如果启用）
+            if self._trace_dispatcher:
+                await self._trace_dispatcher.start()
+                logger.info("Async trace dispatcher started")
 
             # 设置运行状态
             self._running = True
@@ -222,10 +244,15 @@ class AsyncProducer:
             # 1. 停止后台任务
             await self._stop_background_tasks()
 
-            # 2. 关闭Broker管理器
+            # 2. 停止 Trace dispatcher（如果启用）
+            if self._trace_dispatcher:
+                await self._trace_dispatcher.stop()
+                logger.info("Async trace dispatcher stopped")
+
+            # 3. 关闭Broker管理器
             await self._broker_manager.shutdown()
 
-            # 3. 关闭NameServer连接
+            # 4. 关闭NameServer连接
             await self._close_nameserver_connections()
 
             logger.info(
@@ -265,83 +292,104 @@ class AsyncProducer:
         message.set_property(
             MessageProperty.PRODUCER_GROUP, self._config.producer_group
         )
+        begin_ts: float = time.time()
 
-        try:
-            # 1. 验证消息
-            validate_message(message, self._config.max_message_size)
+        # Create async trace context for tracking
+        async with async_trace_message(
+            self._trace_dispatcher, self._config.producer_group, message
+        ) as trace_context:
+            try:
+                # 1. 验证消息
+                validate_message(message, self._config.max_message_size)
 
-            # 2. 更新路由信息
-            all_topics = await self._topic_mapping.aget_all_topics()
-            if message.topic not in all_topics:
-                updated: bool = await self.update_route_info(message.topic)
-                if not updated:
+                # 2. 更新路由信息
+                all_topics = await self._topic_mapping.aget_all_topics()
+                if message.topic not in all_topics:
+                    updated: bool = await self.update_route_info(message.topic)
+                    if not updated:
+                        raise RouteNotFoundError(
+                            f"Updated failed for topic: {message.topic}"
+                        )
+
+                # 3. 获取队列和Broker
+                routing_result = await self._message_router.aroute_message(
+                    message.topic, message
+                )
+                if not routing_result.success:
                     raise RouteNotFoundError(
-                        f"Updated failed for topic: {message.topic}"
+                        f"Route not found for topic: {message.topic}, error: {routing_result.error}"
                     )
 
-            # 3. 获取队列和Broker
-            routing_result = await self._message_router.aroute_message(
-                message.topic, message
-            )
-            if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {message.topic}, error: {routing_result.error}"
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
+
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {message.topic}"
+                    )
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {message.topic}"
+                    )
+
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for topic: {message.topic}"
+                    )
+                logger.debug(
+                    "Sending message async to broker",
+                    extra={
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": message.topic,
+                    },
                 )
 
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
-
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {message.topic}"
-                )
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {message.topic}"
+                # 4. 发送消息到Broker
+                send_result = await self._send_message_to_broker_async(
+                    message, target_broker_addr, message_queue
                 )
 
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for topic: {message.topic}"
-                )
-            logger.debug(
-                "Sending message async to broker",
-                extra={
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": message.topic,
-                },
-            )
+                if send_result.is_success:
+                    self._total_sent += 1
+                    await trace_context.success(
+                        send_result.msg_id,
+                        target_broker_addr,
+                        int((time.time() - begin_ts) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
+                    return send_result
+                else:
+                    self._total_failed += 1
+                    await trace_context.failure(
+                        send_result.msg_id,
+                        target_broker_addr,
+                        int((time.time() - begin_ts) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
+                    return send_result
 
-            # 4. 发送消息到Broker
-            send_result = await self._send_message_to_broker_async(
-                message, target_broker_addr, message_queue
-            )
-
-            if send_result.is_success:
-                self._total_sent += 1
-                return send_result
-            else:
+            except Exception as e:
                 self._total_failed += 1
-                return send_result
+                await trace_context.failure(
+                    message.get_unique_client_message_id() or ""
+                )
 
-        except Exception as e:
-            self._total_failed += 1
-            logger.error(
-                "Failed to send async message",
-                extra={
-                    "topic": message.topic,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
+                logger.error(
+                    "Failed to send async message",
+                    extra={
+                        "topic": message.topic,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
-            if isinstance(e, ProducerError):
-                raise
+                if isinstance(e, ProducerError):
+                    raise
 
-            raise MessageSendError(f"Async message send failed: {e}") from e
+                raise MessageSendError(f"Async message send failed: {e}") from e
 
     async def send_batch(self, *messages: Message) -> SendMessageResult:
         """异步批量发送消息
@@ -371,110 +419,120 @@ class AsyncProducer:
         if not messages:
             raise ValueError("至少需要提供一个消息进行批量发送")
 
-        try:
-            # 1. 验证所有消息
-            for i, message in enumerate(messages):
-                validate_message(message, self._config.max_message_size)
+        # 将多个消息编码为批量消息
+        batch_message = encode_batch(*messages)
+        batch_message.set_property(
+            MessageProperty.PRODUCER_GROUP, self._config.producer_group
+        )
 
-                # 检查所有消息的主题是否相同
-                if i > 0 and message.topic != messages[0].topic:
-                    raise ValueError(
-                        f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
-                    )
+        # Create async trace context for tracking
+        async with async_trace_message(
+            self._trace_dispatcher, self._config.producer_group, batch_message
+        ) as trace_context:
+            try:
+                # 1. 验证所有消息
+                for i, message in enumerate(messages):
+                    validate_message(message, self._config.max_message_size)
 
-            # 2. 将多个消息编码为批量消息
-            batch_message = encode_batch(*messages)
-            batch_message.set_property(
-                MessageProperty.PRODUCER_GROUP, self._config.producer_group
-            )
-            logger.debug(
-                "Encoded messages into async batch message",
-                extra={
-                    "message_count": len(messages),
-                    "batch_size_bytes": len(batch_message.body),
-                    "topic": batch_message.topic,
-                },
-            )
+                    # 检查所有消息的主题是否相同
+                    if i > 0 and message.topic != messages[0].topic:
+                        raise ValueError(
+                            f"批量消息中的主题不一致: {messages[0].topic} vs {message.topic}"
+                        )
 
-            # 3. 更新路由信息
-            all_topics = await self._topic_mapping.aget_all_topics()
-            if batch_message.topic not in all_topics:
-                _ = await self.update_route_info(batch_message.topic)
-
-            # 4. 获取队列和Broker
-            routing_result = await self._message_router.aroute_message(
-                batch_message.topic, batch_message
-            )
-            if not routing_result.success:
-                raise RouteNotFoundError(
-                    f"Route not found for topic: {batch_message.topic}"
-                )
-
-            message_queue = routing_result.message_queue
-            broker_data = routing_result.broker_data
-
-            if not message_queue:
-                raise QueueNotAvailableError(
-                    f"No available queue for topic: {batch_message.topic}"
-                )
-            if not broker_data:
-                raise BrokerNotAvailableError(
-                    f"No available broker data for topic: {batch_message.topic}"
-                )
-
-            target_broker_addr = routing_result.broker_address
-            if not target_broker_addr:
-                raise BrokerNotAvailableError(
-                    f"No available broker address for topic: {batch_message.topic}"
-                )
-            logger.debug(
-                "Sending async batch message to broker",
-                extra={
-                    "message_count": len(messages),
-                    "broker_address": target_broker_addr,
-                    "queue": message_queue.full_name,
-                    "topic": batch_message.topic,
-                },
-            )
-
-            # 5. 发送批量消息到Broker
-            send_result = await self._batch_send_message_to_broker_async(
-                batch_message, target_broker_addr, message_queue
-            )
-
-            if send_result.is_success:
-                self._total_sent += len(messages)
-                logger.info(
-                    "Async batch send success",
+                logger.debug(
+                    "Encoded messages into async batch message",
                     extra={
                         "message_count": len(messages),
+                        "batch_size_bytes": len(batch_message.body),
                         "topic": batch_message.topic,
-                        "queue_id": send_result.queue_id,
-                        "msg_id": send_result.msg_id,
                     },
                 )
-                return send_result
-            else:
+
+                # 2. 更新路由信息
+                all_topics = await self._topic_mapping.aget_all_topics()
+                if batch_message.topic not in all_topics:
+                    _ = await self.update_route_info(batch_message.topic)
+
+                # 3. 获取队列和Broker
+                routing_result = await self._message_router.aroute_message(
+                    batch_message.topic, batch_message
+                )
+                if not routing_result.success:
+                    raise RouteNotFoundError(
+                        f"Route not found for topic: {batch_message.topic}"
+                    )
+
+                message_queue = routing_result.message_queue
+                broker_data = routing_result.broker_data
+
+                if not message_queue:
+                    raise QueueNotAvailableError(
+                        f"No available queue for topic: {batch_message.topic}"
+                    )
+                if not broker_data:
+                    raise BrokerNotAvailableError(
+                        f"No available broker data for topic: {batch_message.topic}"
+                    )
+
+                target_broker_addr = routing_result.broker_address
+                if not target_broker_addr:
+                    raise BrokerNotAvailableError(
+                        f"No available broker address for topic: {batch_message.topic}"
+                    )
+                logger.debug(
+                    "Sending async batch message to broker",
+                    extra={
+                        "message_count": len(messages),
+                        "broker_address": target_broker_addr,
+                        "queue": message_queue.full_name,
+                        "topic": batch_message.topic,
+                    },
+                )
+
+                # 4. 发送批量消息到Broker
+                send_result = await self._batch_send_message_to_broker_async(
+                    batch_message, target_broker_addr, message_queue
+                )
+
+                if send_result.is_success:
+                    self._total_sent += len(messages)
+                    await trace_context.success(send_result.msg_id)
+                    logger.info(
+                        "Async batch send success",
+                        extra={
+                            "message_count": len(messages),
+                            "topic": batch_message.topic,
+                            "queue_id": send_result.queue_id,
+                            "msg_id": send_result.msg_id,
+                        },
+                    )
+                    return send_result
+                else:
+                    self._total_failed += len(messages)
+                    await trace_context.failure(send_result.msg_id)
+                    return send_result
+
+            except Exception as e:
                 self._total_failed += len(messages)
-                return send_result
+                await trace_context.failure(
+                    batch_message.get_unique_client_message_id() or ""
+                )
+                logger.error(
+                    "Failed to send async batch messages",
+                    extra={
+                        "message_count": len(messages),
+                        "topic": messages[0].topic if messages else "unknown",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
 
-        except Exception as e:
-            self._total_failed += len(messages)
-            logger.error(
-                "Failed to send async batch messages",
-                extra={
-                    "message_count": len(messages),
-                    "topic": messages[0].topic if messages else "unknown",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
+                if isinstance(e, ProducerError):
+                    raise
 
-            if isinstance(e, ProducerError):
-                raise
-
-            raise MessageSendError(f"Async batch message send failed: {e}") from e
+                raise MessageSendError(f"Async batch message send failed: {e}") from e
 
     async def oneway(self, message: Message) -> None:
         """异步单向发送消息

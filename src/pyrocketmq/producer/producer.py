@@ -456,7 +456,9 @@ class Producer:
 
             except Exception as e:
                 self._total_failed += len(messages)
-                trace_context.failure()
+                trace_context.failure(
+                    batch_message.get_unique_client_message_id() or ""
+                )
                 logger.error(
                     "Failed to send batch messages",
                     extra={
