@@ -235,6 +235,14 @@ class Message:
         """
         return self.get_property(MessageProperty.RETRY_TOPIC)
 
+    def get_unique_client_message_id(self) -> str | None:
+        """获取唯一客户端消息ID
+
+        Returns:
+            唯一客户端消息ID
+        """
+        return self.get_property(MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX)
+
     def set_retry_topic(self, topic: str) -> None:
         """设置重试主题
 

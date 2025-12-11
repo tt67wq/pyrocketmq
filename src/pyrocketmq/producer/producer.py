@@ -320,7 +320,7 @@ class Producer:
 
             except Exception as e:
                 self._total_failed += 1
-                trace_context.failure()
+                trace_context.failure(message.get_unique_client_message_id() or "")
 
                 logger.error(
                     "Failed to send message",

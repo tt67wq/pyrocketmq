@@ -6,6 +6,7 @@
 """
 
 import logging
+import time
 from typing import Any
 
 from pyrocketmq.broker.client import BrokerClient
@@ -33,6 +34,7 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
+from pyrocketmq.producer.trace_context import trace_message
 from pyrocketmq.queue_helper import RoutingResult
 from pyrocketmq.remote import ConnectionPool
 from pyrocketmq.remote.sync_remote import Remote
@@ -135,50 +137,67 @@ class TransactionProducer(Producer):
         transaction_id: str | None = ""
         try:
             # 1. 发送带有事务标记的消息
-            send_result = self._send_message_with_transaction_flag(message)
-
-            if not send_result.is_success:
-                raise MessageSendError(
-                    message=f"发送事务消息失败: {send_result.status_name}",
-                    topic=message.topic,
-                    broker=send_result.message_queue.broker_name,
+            with trace_message(
+                self._trace_dispatcher, self._config.producer_group, message
+            ) as trace_context:
+                begin_t: float = time.time()
+                send_result, broker_addr = self._send_message_with_transaction_flag(
+                    message
                 )
 
-            # 2. 从结果中获取Broker分配的transactionId
-            if send_result.transaction_id:
-                message.set_property(
-                    MessageProperty.TRANSACTION_ID, send_result.transaction_id
+                if not send_result.is_success:
+                    trace_context.failure(
+                        send_result.msg_id,
+                        broker_addr,
+                        int((time.time() - begin_t) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
+                    raise MessageSendError(
+                        message=f"发送事务消息失败: {send_result.status_name}",
+                        topic=message.topic,
+                        broker=send_result.message_queue.broker_name,
+                    )
+                trace_context.success(
+                    send_result.msg_id,
+                    broker_addr,
+                    int((time.time() - begin_t) * 1000),
+                    send_result.offset_msg_id or "",
                 )
 
-            transaction_id = message.get_property(
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
-            )
-            if transaction_id:
-                message.transaction_id = transaction_id
+                # 2. 从结果中获取Broker分配的transactionId
+                if send_result.transaction_id:
+                    message.set_property(
+                        MessageProperty.TRANSACTION_ID, send_result.transaction_id
+                    )
 
-            # 3. 执行本地事务
-            local_state: LocalTransactionState = self._execute_local_transaction(
-                message, transaction_id or "", arg
-            )
+                transaction_id = message.get_unique_client_message_id()
+                if transaction_id:
+                    message.transaction_id = transaction_id
 
-            # 4. 发送事务状态确认
-            self._send_transaction_confirmation(
-                send_result,
-                local_state,
-                send_result.message_queue,
-                send_result.transaction_id or "",
-            )
+                # 3. 执行本地事务
+                local_state: LocalTransactionState = self._execute_local_transaction(
+                    message, transaction_id or "", arg
+                )
 
-            # 5. 构造事务发送结果
-            return TransactionSendResult(
-                status=send_result.status,
-                msg_id=send_result.msg_id,
-                message_queue=send_result.message_queue,
-                queue_offset=send_result.queue_offset,
-                transaction_id=transaction_id,
-                offset_msg_id=send_result.offset_msg_id,
-                local_transaction_state=local_state,
-            )
+                # 4. 发送事务状态确认
+                self._send_transaction_confirmation(
+                    send_result,
+                    local_state,
+                    send_result.message_queue,
+                    send_result.transaction_id or "",
+                    broker_addr,
+                )
+
+                # 5. 构造事务发送结果
+                return TransactionSendResult(
+                    status=send_result.status,
+                    msg_id=send_result.msg_id,
+                    message_queue=send_result.message_queue,
+                    queue_offset=send_result.queue_offset,
+                    transaction_id=transaction_id,
+                    offset_msg_id=send_result.offset_msg_id,
+                    local_transaction_state=local_state,
+                )
 
         except Exception as e:
             self._logger.error(
@@ -312,7 +331,7 @@ class TransactionProducer(Producer):
 
     def _send_message_with_transaction_flag(
         self, message: Message
-    ) -> SendMessageResult:
+    ) -> tuple[SendMessageResult, str]:
         """发送带有事务标记的消息，按需注册事务检查处理器"""
         self._check_running()
 
@@ -340,9 +359,10 @@ class TransactionProducer(Producer):
                 # 注册事务检查处理器
 
                 # 发送消息
-                return self._send_to_broker(
+                result = self._send_to_broker(
                     broker_remote, message, routing_result.message_queue, broker_addr
                 )
+                return result, broker_addr
 
         except (ProducerError, BrokerError):
             # 重新抛出已知异常
@@ -415,6 +435,7 @@ class TransactionProducer(Producer):
         local_state: LocalTransactionState,
         message_queue: MessageQueue,
         transaction_id: str,
+        broker_addr: str | None = None,
     ) -> None:
         """发送事务状态确认
 
@@ -432,10 +453,11 @@ class TransactionProducer(Producer):
             raise ValueError("Invalid message ID")
 
         try:
-            # 获取Broker地址
-            broker_addr: str | None = self._get_broker_addr_by_name(
-                message_queue.broker_name, message_queue.topic
-            )
+            # 使用传入的broker_addr或获取Broker地址
+            if not broker_addr:
+                broker_addr = self._get_broker_addr_by_name(
+                    message_queue.broker_name, message_queue.topic
+                )
             if not broker_addr:
                 raise ValueError("Broker address not found")
 
