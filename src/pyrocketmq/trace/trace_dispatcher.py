@@ -432,7 +432,7 @@ class TraceDispatcher:
         trace_topic = self._config.trace_topic
 
         message: Message = Message(topic=trace_topic, body=data.encode())
-        message.set_keys(" ".join(list(keyset)))
+        message.set_keys(list(keyset))
 
         if trace_topic not in self._topic_mapping.get_all_topics():
             _ = self.update_route_info(trace_topic)

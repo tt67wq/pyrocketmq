@@ -409,7 +409,7 @@ class AsyncTraceDispatcher:
         trace_topic = self._config.trace_topic
 
         message: Message = Message(topic=trace_topic, body=data.encode())
-        message.set_keys(" ".join(list(keyset)))
+        message.set_keys(list(keyset))
 
         all_topics = await self._topic_mapping.aget_all_topics()
         if trace_topic not in all_topics:

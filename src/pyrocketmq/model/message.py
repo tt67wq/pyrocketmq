@@ -185,12 +185,14 @@ class Message:
         """
         return self.get_property(MessageProperty.KEYS)
 
-    def set_keys(self, keys: str) -> None:
+    def set_keys(self, keys: str | list[str]) -> None:
         """设置消息键
 
         Args:
             keys: 消息键（多个键用空格分隔）
         """
+        if isinstance(keys, list):
+            keys = " ".join(keys)
         self.set_property(MessageProperty.KEYS, keys)
 
     def add_key(self, key: str) -> None:
