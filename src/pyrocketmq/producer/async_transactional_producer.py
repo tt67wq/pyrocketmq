@@ -6,6 +6,7 @@
 """
 
 import logging
+import time
 from typing import Any
 
 from pyrocketmq.broker.async_client import AsyncBrokerClient
@@ -33,6 +34,7 @@ from pyrocketmq.producer.errors import (
     QueueNotAvailableError,
     RouteNotFoundError,
 )
+from pyrocketmq.producer.trace_context import async_trace_message
 from pyrocketmq.queue_helper import RoutingResult
 from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.async_remote import AsyncRemote
@@ -134,68 +136,89 @@ class AsyncTransactionProducer(AsyncProducer):
             )
 
         transaction_id: str | None = ""
-        try:
-            # 1. 发送带有事务标记的消息
-            send_result, broker_addr = await self._send_message_with_transaction_flag(
-                message
-            )
+        async with async_trace_message(
+            self._trace_dispatcher, self._config.producer_group, message
+        ) as trace_context:
+            try:
+                begin_t: float = time.time()
+                # 1. 发送带有事务标记的消息
+                (
+                    send_result,
+                    broker_addr,
+                ) = await self._send_message_with_transaction_flag(message)
 
-            if not send_result.is_success:
+                if not send_result.is_success:
+                    await trace_context.failure(
+                        send_result.msg_id,
+                        broker_addr,
+                        int((time.time() - begin_t) * 1000),
+                        send_result.offset_msg_id or "",
+                    )
+                    raise MessageSendError(
+                        message=f"发送事务消息失败: {send_result.status_name}",
+                        topic=message.topic,
+                        broker=send_result.message_queue.broker_name,
+                    )
+                await trace_context.success(
+                    send_result.msg_id,
+                    broker_addr,
+                    int((time.time() - begin_t) * 1000),
+                    send_result.offset_msg_id or "",
+                )
+                # 2. 从结果中获取Broker分配的transactionId
+                if send_result.transaction_id:
+                    message.set_property(
+                        MessageProperty.TRANSACTION_ID, send_result.transaction_id
+                    )
+
+                transaction_id = message.get_unique_client_message_id()
+                if transaction_id:
+                    message.transaction_id = transaction_id
+
+                # 3. 异步执行本地事务
+                local_state: LocalTransactionState = (
+                    await self._execute_local_transaction(
+                        message, transaction_id or "", arg
+                    )
+                )
+
+                # 4. 发送事务状态确认
+                await self._send_transaction_confirmation(
+                    send_result,
+                    local_state,
+                    send_result.message_queue,
+                    transaction_id or "",
+                    broker_addr,
+                )
+
+                # 5. 构造事务发送结果
+                return TransactionSendResult(
+                    status=send_result.status,
+                    msg_id=send_result.msg_id,
+                    message_queue=send_result.message_queue,
+                    queue_offset=send_result.queue_offset,
+                    transaction_id=transaction_id,
+                    local_transaction_state=local_state,
+                )
+
+            except Exception as e:
+                await trace_context.failure(
+                    message.get_unique_client_message_id() or ""
+                )
+                self._logger.error(
+                    "Failed to send transaction message",
+                    extra={
+                        "topic": message.topic,
+                        "transaction_id": transaction_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                    exc_info=True,
+                )
                 raise MessageSendError(
-                    message=f"发送事务消息失败: {send_result.status_name}",
+                    message=f"发送事务消息失败: {e}",
                     topic=message.topic,
-                    broker=send_result.message_queue.broker_name,
                 )
-
-            # 2. 从结果中获取Broker分配的transactionId
-            if send_result.transaction_id:
-                message.set_property(
-                    MessageProperty.TRANSACTION_ID, send_result.transaction_id
-                )
-
-            transaction_id = message.get_unique_client_message_id()
-            if transaction_id:
-                message.transaction_id = transaction_id
-
-            # 3. 异步执行本地事务
-            local_state: LocalTransactionState = await self._execute_local_transaction(
-                message, transaction_id or "", arg
-            )
-
-            # 4. 发送事务状态确认
-            await self._send_transaction_confirmation(
-                send_result,
-                local_state,
-                send_result.message_queue,
-                transaction_id or "",
-                broker_addr,
-            )
-
-            # 5. 构造事务发送结果
-            return TransactionSendResult(
-                status=send_result.status,
-                msg_id=send_result.msg_id,
-                message_queue=send_result.message_queue,
-                queue_offset=send_result.queue_offset,
-                transaction_id=transaction_id,
-                local_transaction_state=local_state,
-            )
-
-        except Exception as e:
-            self._logger.error(
-                "Failed to send transaction message",
-                extra={
-                    "topic": message.topic,
-                    "transaction_id": transaction_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-                exc_info=True,
-            )
-            raise MessageSendError(
-                message=f"发送事务消息失败: {e}",
-                topic=message.topic,
-            )
 
     async def _prepare_message_routing(self, message: Message) -> RoutingResult:
         """异步准备消息路由：验证消息、更新路由信息、选择队列"""
