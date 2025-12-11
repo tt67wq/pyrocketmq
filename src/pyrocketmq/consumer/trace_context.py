@@ -2,6 +2,13 @@
 
 This module provides utilities for managing message trace contexts
 in consumer operations, including SubBefore and SubAfter trace types.
+
+Context Code Constants for Consumer Trace:
+    0: SuccessReturn - 消息消费成功
+    1: TimeoutReturn - 消息消费超时
+    2: ExceptionReturn - 消息消费过程中发生异常
+    3: NullReturn - 消息消费返回为空
+    4: FailedReturn - 消息消费失败
 """
 
 import time
@@ -13,6 +20,13 @@ from pyrocketmq.model.message import Message
 from pyrocketmq.model.trace import MessageType, TraceBean, TraceContext, TraceType
 from pyrocketmq.trace import TraceDispatcher
 from pyrocketmq.trace.async_trace_dispatcher import AsyncTraceDispatcher
+
+# Context Code Constants
+SUCCESS_RETURN = 0  # 消息消费成功
+TIMEOUT_RETURN = 1  # 消息消费超时
+EXCEPTION_RETURN = 2  # 消息消费过程中发生异常
+NULL_RETURN = 3  # 消息消费返回为空
+FAILED_RETURN = 4  # 消息消费失败
 
 
 class ConsumerTraceContextManager:
@@ -233,9 +247,14 @@ class ConsumerTraceContextManager:
         """标记失败并发送SubAfter跟踪信息
 
         Args:
-            msg_ext: 消��扩展对象，可以为None
+            msg_ext: 消息扩展对象，可以为None
             cost_time_ms: 耗时（毫秒）
-            context_code: 上下文代码，默认为1（失败）
+            context_code: 上下文代码，默认为1
+                - 0: SuccessReturn - 消息消费成功（仅用于特殊场景）
+                - 1: TimeoutReturn - 消息消费超时或默认失败
+                - 2: ExceptionReturn - 消息消费过程中发生异常
+                - 3: NullReturn - 消息消费返回为空
+                - 4: FailedReturn - 消息消费失败
         """
         self._dispatch_sub_after_trace(
             msg_ext=msg_ext,
@@ -243,6 +262,51 @@ class ConsumerTraceContextManager:
             cost_time_ms=cost_time_ms,
             context_code=context_code,
         )
+
+    def batch_sub_before(self, msg_exts: list[MessageExt]) -> None:
+        """批量发送SubBefore跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表
+        """
+        for msg_ext in msg_exts:
+            self.sub_before(msg_ext)
+
+    def batch_success(
+        self,
+        msg_exts: list[MessageExt],
+        cost_time_ms: int = 0,
+    ) -> None:
+        """批量标记成功并发送SubAfter跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表
+            cost_time_ms: 耗时（毫秒）
+        """
+        for msg_ext in msg_exts:
+            self.success(msg_ext, cost_time_ms)
+
+    def batch_failure(
+        self,
+        msg_exts: list[MessageExt] | None = None,
+        cost_time_ms: int = 0,
+        context_code: int = 1,
+    ) -> None:
+        """批量标记失败并发送SubAfter跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表，可以为None
+            cost_time_ms: 耗时（毫秒）
+            context_code: 上下文代码，默认为1
+                - 0: SuccessReturn - 消息消费成功（仅用于特殊场景）
+                - 1: TimeoutReturn - 消息消费超时或默认失败
+                - 2: ExceptionReturn - 消息消费过程中发生异常
+                - 3: NullReturn - 消息消费返回为空
+                - 4: FailedReturn - 消息消费失败
+        """
+        if msg_exts:
+            for msg_ext in msg_exts:
+                self.failure(msg_ext, cost_time_ms, context_code)
 
 
 @contextmanager
@@ -482,7 +546,12 @@ class AsyncConsumerTraceContextManager:
         Args:
             msg_ext: 消息扩展对象，可以为None
             cost_time_ms: 耗时（毫秒）
-            context_code: 上下文代码，默认为1（失败）
+            context_code: 上下文代码，默认为1
+                - 0: SuccessReturn - 消息消费成功（仅用于特殊场景）
+                - 1: TimeoutReturn - 消息消费超时或默认失败
+                - 2: ExceptionReturn - 消息消费过程中发生异常
+                - 3: NullReturn - 消息消费返回为空
+                - 4: FailedReturn - 消息消费失败
         """
         await self._dispatch_sub_after_trace(
             msg_ext=msg_ext,
@@ -490,6 +559,51 @@ class AsyncConsumerTraceContextManager:
             cost_time_ms=cost_time_ms,
             context_code=context_code,
         )
+
+    async def batch_sub_before(self, msg_exts: list[MessageExt]) -> None:
+        """批量发送SubBefore跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表
+        """
+        for msg_ext in msg_exts:
+            await self.sub_before(msg_ext)
+
+    async def batch_success(
+        self,
+        msg_exts: list[MessageExt],
+        cost_time_ms: int = 0,
+    ) -> None:
+        """批量标记成功并发送SubAfter跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表
+            cost_time_ms: 耗时（毫秒）
+        """
+        for msg_ext in msg_exts:
+            await self.success(msg_ext, cost_time_ms)
+
+    async def batch_failure(
+        self,
+        msg_exts: list[MessageExt] | None = None,
+        cost_time_ms: int = 0,
+        context_code: int = 1,
+    ) -> None:
+        """批量标记失败并发送SubAfter跟踪信息
+
+        Args:
+            msg_exts: 消息扩展对象列表，可以为None
+            cost_time_ms: 耗时（毫秒）
+            context_code: 上下文代码，默认为1
+                - 0: SuccessReturn - 消息消费成功（仅用于特殊场景）
+                - 1: TimeoutReturn - 消费消费超时或默认失败
+                - 2: ExceptionReturn - 消费消费过程中发生异常
+                - 3: NullReturn - 消息消费返回为空
+                - 4: FailedReturn - 消息消费失败
+        """
+        if msg_exts:
+            for msg_ext in msg_exts:
+                await self.failure(msg_ext, cost_time_ms, context_code)
 
 
 @asynccontextmanager
