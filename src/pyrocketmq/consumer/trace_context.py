@@ -198,7 +198,7 @@ class ConsumerTraceContextManager:
 
         self._trace_dispatcher.dispatch(self._sub_after_context)
 
-    def sub_before(self, msg_ext: Any) -> None:
+    def sub_before(self, msg_ext: MessageExt) -> None:
         """发送SubBefore跟踪信息
 
         Args:
@@ -208,7 +208,7 @@ class ConsumerTraceContextManager:
 
     def success(
         self,
-        msg_ext: Any,
+        msg_ext: MessageExt,
         cost_time_ms: int = 0,
     ) -> None:
         """标记成功并发送SubAfter跟踪信息
@@ -226,7 +226,7 @@ class ConsumerTraceContextManager:
 
     def failure(
         self,
-        msg_ext: Any | None = None,
+        msg_ext: MessageExt | None = None,
         cost_time_ms: int = 0,
         context_code: int = 1,
     ) -> None:
@@ -391,7 +391,7 @@ class AsyncConsumerTraceContextManager:
             msg_type=MessageType.NORMAL,
         )
 
-    async def _dispatch_sub_before_trace(self, msg_ext: Any) -> None:
+    async def _dispatch_sub_before_trace(self, msg_ext: MessageExt) -> None:
         """异步分发SubBefore跟踪信息
 
         Args:
@@ -407,7 +407,7 @@ class AsyncConsumerTraceContextManager:
 
     async def _dispatch_sub_after_trace(
         self,
-        msg_ext: Any | None,
+        msg_ext: MessageExt | None,
         is_success: bool,
         cost_time_ms: int = 0,
         context_code: int = 0,
@@ -445,7 +445,7 @@ class AsyncConsumerTraceContextManager:
 
         await self._trace_dispatcher.dispatch(self._sub_after_context)
 
-    async def sub_before(self, msg_ext: Any) -> None:
+    async def sub_before(self, msg_ext: MessageExt) -> None:
         """发送SubBefore跟踪信息
 
         Args:
@@ -455,7 +455,7 @@ class AsyncConsumerTraceContextManager:
 
     async def success(
         self,
-        msg_ext: Any,
+        msg_ext: MessageExt,
         cost_time_ms: int = 0,
     ) -> None:
         """标记成功并发送SubAfter跟踪信息
@@ -473,7 +473,7 @@ class AsyncConsumerTraceContextManager:
 
     async def failure(
         self,
-        msg_ext: Any | None = None,
+        msg_ext: MessageExt | None = None,
         cost_time_ms: int = 0,
         context_code: int = 1,
     ) -> None:

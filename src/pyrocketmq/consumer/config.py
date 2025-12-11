@@ -70,6 +70,12 @@ class ConsumerConfig:
     enable_auto_commit: bool = True  # 是否自动提交偏移量
     enable_message_trace: bool = False  # 是否启用消息追踪
 
+    # === 跟踪配置 ===
+    enable_trace: bool = True  # 是否启用 TraceDispatcher 进行消息跟踪
+    trace_topic: str | None = None  # 跟踪消息发送到的主题
+    trace_batch_size: int | None = None  # 跟踪消息批量发送的大小
+    trace_msg_size: int | None = None  # 单条跟踪消息的最大大小
+
     # === 内部配置 ===
     _client_id: str = field(default="", init=False)  # 客户端ID(内部生成)
     _instance_name: str = field(default="DEFAULT", init=False)  # 实例名称
@@ -261,6 +267,11 @@ class ConsumerConfig:
             # 高级配置
             "enable_auto_commit": self.enable_auto_commit,
             "enable_message_trace": self.enable_message_trace,
+            # 跟踪配置
+            "enable_trace": self.enable_trace,
+            "trace_topic": self.trace_topic,
+            "trace_batch_size": self.trace_batch_size,
+            "trace_msg_size": self.trace_msg_size,
             "client_id": self.client_id,
             "instance_name": self.instance_name,
         }
