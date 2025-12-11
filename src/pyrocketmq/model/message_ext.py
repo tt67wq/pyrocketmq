@@ -10,7 +10,7 @@ from typing import Any
 
 from pyrocketmq.model.message_queue import MessageQueue
 
-from .message import Message, MessageProperty
+from .message import Message
 
 
 class MessageSysFlag:
@@ -241,9 +241,7 @@ class MessageExt(Message):
         # 生成消息ID（基于存储偏移量）
         offset_msg_id = f"{commit_log_offset:016x}"
 
-        msg_id = tmp_msg.get_property(
-            MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX, ""
-        )
+        msg_id = tmp_msg.get_unique_client_message_id()
         if not msg_id:
             msg_id = offset_msg_id
 

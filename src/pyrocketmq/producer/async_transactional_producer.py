@@ -151,9 +151,7 @@ class AsyncTransactionProducer(AsyncProducer):
                     MessageProperty.TRANSACTION_ID, send_result.transaction_id
                 )
 
-            transaction_id = message.get_property(
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
-            )
+            transaction_id = message.get_unique_client_message_id()
             if transaction_id:
                 message.transaction_id = transaction_id
 
@@ -480,9 +478,7 @@ class AsyncTransactionProducer(AsyncProducer):
                         return None
 
             # 解析UNIQ_KEY
-            uniq_key: str | None = callback.msg.get_property(
-                MessageProperty.UNIQUE_CLIENT_MESSAGE_ID_KEY_INDEX
-            )
+            uniq_key: str | None = callback.msg.get_unique_client_message_id()
             if not uniq_key:
                 uniq_key = callback.msg.msg_id
                 if not uniq_key:
