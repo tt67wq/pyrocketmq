@@ -5,12 +5,13 @@ in a clean and structured way, independent of any specific component.
 """
 
 import time
-from contextlib import contextmanager
-from typing import Any, Generator, Type
+from contextlib import asynccontextmanager, contextmanager
+from typing import Any, AsyncGenerator, Generator, Type
 
 from pyrocketmq.model.message import Message
 from pyrocketmq.model.trace import MessageType, TraceBean, TraceContext, TraceType
 from pyrocketmq.trace import TraceDispatcher
+from pyrocketmq.trace.async_trace_dispatcher import AsyncTraceDispatcher
 
 
 class TraceContextManager:
@@ -212,4 +213,209 @@ def trace_message(
         TraceContextManager: 跟踪上下文管理器
     """
     with TraceContextManager(trace_dispatcher, group_name, message) as tracer:
+        yield tracer
+
+
+class AsyncTraceContextManager:
+    """异步跟踪上下文管理器
+
+    用于自动管理异步消息跟踪的生命周期，包括：
+    - 创建跟踪上下文
+    - 记录执行时间
+    - 处理成功/失败情况
+    - 异步分发跟踪信息
+
+    使用示例:
+        # 使用 AsyncTraceDispatcher
+        trace_dispatcher = AsyncTraceDispatcher(config)
+        async with AsyncTraceContextManager(trace_dispatcher, "group_name", message) as trace:
+            # 发送消息
+            result = await send_message_async(...)
+            if result.is_success:
+                await trace.success(result.msg_id, broker_addr)
+            else:
+                await trace.failure()
+    """
+
+    def __init__(
+        self,
+        trace_dispatcher: AsyncTraceDispatcher | None,
+        group_name: str,
+        message: Message,
+    ) -> None:
+        """初始化异步跟踪上下文管理器
+
+        Args:
+            trace_dispatcher: AsyncTraceDispatcher实例，可以为None
+            group_name: 生产者组名
+            message: 要跟踪的消息
+        """
+        self._trace_dispatcher: AsyncTraceDispatcher | None = trace_dispatcher
+        self._group_name: str = group_name
+        self._message: Message = message
+        self._trace_context: TraceContext | None = None
+        self._start_time: float = 0
+
+    async def __aenter__(self) -> "AsyncTraceContextManager":
+        """进入异步上下文，创建跟踪上下文"""
+        self._start_time = time.time()
+        self._trace_context = TraceContext(
+            trace_type=TraceType.PUB,
+            timestamp=int(self._start_time * 1000),
+            region_id="",
+            region_name="",
+            group_name=self._group_name,
+            cost_time=0,
+            is_success=True,
+            request_id="",
+            context_code=0,
+            trace_beans=[],
+        )
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> bool:
+        """退出异步上下文，处理异常情况"""
+        if self._trace_context and (exc_type or exc_val):
+            await self.failure()
+        return False  # 不抑制异常
+
+    def _create_trace_bean(
+        self,
+        msg_id: str,
+        store_host: str,
+        store_time: float,
+        is_success: bool,
+        offset_msg_id: str = "",
+    ) -> TraceBean:
+        """创建跟踪 Bean
+
+        Args:
+            msg_id: 消息ID
+            store_host: 存储主机地址
+            store_time: 存储时间戳
+            is_success: 是否成功
+            offset_msg_id: 偏移消息ID，默认为空
+
+        Returns:
+            TraceBean: 跟踪 Bean 对象
+        """
+        return TraceBean(
+            topic=self._message.topic,
+            msg_id=msg_id,
+            offset_msg_id=offset_msg_id
+            if offset_msg_id
+            else (msg_id if is_success else ""),
+            tags=self._message.get_tags() or "",
+            keys=self._message.get_keys() or "",
+            store_host=store_host,
+            client_host="",
+            store_time=int(store_time * 1000),
+            retry_times=0,
+            body_length=len(self._message.body),
+            msg_type=MessageType.NORMAL,
+        )
+
+    async def _dispatch_trace(
+        self,
+        msg_id: str = "",
+        store_host: str = "",
+        is_success: bool = True,
+        cost_time_ms: int = 0,
+        offset_msg_id: str = "",
+    ) -> None:
+        """异步分发跟踪信息
+
+        Args:
+            msg_id: 消息ID
+            store_host: 存储主机地址
+            is_success: 是否成功
+            cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
+        """
+        if not self._trace_context or not self._trace_dispatcher:
+            return
+
+        end_time = time.time()
+        self._trace_context.cost_time = cost_time_ms or int(
+            (end_time - self._start_time) * 1000
+        )
+        self._trace_context.is_success = is_success
+
+        trace_bean = self._create_trace_bean(
+            msg_id, store_host, end_time, is_success, offset_msg_id
+        )
+        self._trace_context.trace_beans = [trace_bean]
+
+        # 异步分发跟踪信息
+        await self._trace_dispatcher.dispatch(self._trace_context)
+
+    async def success(
+        self,
+        msg_id: str = "",
+        store_host: str = "",
+        cost_time_ms: int = 0,
+        offset_msg_id: str = "",
+    ) -> None:
+        """标记成功
+
+        Args:
+            msg_id: 消息ID
+            store_host: 存储主机地址
+            cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
+        """
+        await self._dispatch_trace(
+            msg_id=msg_id,
+            store_host=store_host,
+            is_success=True,
+            cost_time_ms=cost_time_ms,
+            offset_msg_id=offset_msg_id,
+        )
+
+    async def failure(
+        self,
+        msg_id: str = "",
+        store_host: str = "",
+        cost_time_ms: int = 0,
+        offset_msg_id: str = "",
+    ) -> None:
+        """标记失败
+
+        Args:
+            msg_id: 消息ID
+            store_host: 存储主机地址
+            cost_time_ms: 耗时（毫秒）
+            offset_msg_id: 偏移消息ID
+        """
+        await self._dispatch_trace(
+            msg_id=msg_id,
+            store_host=store_host,
+            is_success=False,
+            cost_time_ms=cost_time_ms,
+            offset_msg_id=offset_msg_id,
+        )
+
+
+@asynccontextmanager
+async def async_trace_message(
+    trace_dispatcher: AsyncTraceDispatcher | None, group_name: str, message: Message
+) -> AsyncGenerator[AsyncTraceContextManager, None]:
+    """异步跟踪消息的上下文管理器函数
+
+    Args:
+        trace_dispatcher: AsyncTraceDispatcher实例，可以为None
+        group_name: 生产者组名
+        message: 要跟踪的消息
+
+    Yields:
+        AsyncTraceContextManager: 异步跟踪上下文管理器
+    """
+    async with AsyncTraceContextManager(
+        trace_dispatcher, group_name, message
+    ) as tracer:
         yield tracer
