@@ -42,7 +42,8 @@ def message_listener(messages: list[MessageExt]) -> ConsumeResult:
             f"{Colors.WHITE}{Colors.BOLD}【收到消息：】{Colors.END} "
             f"{Colors.BLUE}{message.body.decode('utf-8', errors='ignore')}{Colors.END} "
             f"{Colors.MAGENTA}tags: {message.get_tags()}{Colors.END} "
-            f"{Colors.CYAN}keys: {message.get_keys()}{Colors.END}"
+            f"{Colors.CYAN}keys: {message.get_keys()}{Colors.END} "
+            f"{Colors.YELLOW}msg_id: {message.get_unique_client_message_id()}{Colors.END} "
         )
 
     print(f"{Colors.GREEN}✅ 消息处理成功，数量: {len(messages)}{Colors.END}")

@@ -403,6 +403,10 @@ class BaseConsumer:
         if self._config.message_model == MessageModel.CLUSTERING:
             self._subscribe_retry_topic()
 
+        # trace
+        if self._trace_dispatcher:
+            self._trace_dispatcher.start()
+
     def shutdown(self) -> None:
         """
         停止消费者.
