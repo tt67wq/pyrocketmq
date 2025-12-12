@@ -67,6 +67,7 @@ from pyrocketmq.nameserver.async_manager import (
 )
 from pyrocketmq.remote import AsyncConnectionPool
 from pyrocketmq.remote.config import RemoteConfig
+from pyrocketmq.trace import AsyncTraceDispatcher, TraceConfig
 
 logger = get_logger(__name__)
 
@@ -184,6 +185,16 @@ class AsyncBaseConsumer:
         # 启动时间
         self._start_time = time.time()
 
+        # 初始化跟踪分发器
+        self._trace_dispatcher = None
+        if self._config.enable_trace:
+            self._trace_dispatcher = AsyncTraceDispatcher(
+                TraceConfig.create_local_config(
+                    group_name=self._config.consumer_group,
+                    namesrv_addr=self._config.namesrv_addr,
+                )
+            )
+
         self._logger.info(
             "异步消费者初始化完成",
             extra={
@@ -191,6 +202,7 @@ class AsyncBaseConsumer:
                 "namesrv_addr": config.namesrv_addr,
                 "message_model": config.message_model,
                 "client_id": config.client_id,
+                "trace_enabled": self._trace_dispatcher is not None,
             },
         )
 
@@ -1783,6 +1795,17 @@ class AsyncBaseConsumer:
 
             # 关闭NameServer管理器
             await self._nameserver_manager.stop()
+
+            # 关闭跟踪分发器
+            if self._trace_dispatcher is not None:
+                try:
+                    await self._trace_dispatcher.stop()
+                    self._logger.info("AsyncTraceDispatcher stopped successfully")
+                except Exception as e:
+                    self._logger.error(
+                        f"Error stopping AsyncTraceDispatcher: {e}",
+                        exc_info=True,
+                    )
 
             # 关闭统计管理器
             self._stats_manager.shutdown()
