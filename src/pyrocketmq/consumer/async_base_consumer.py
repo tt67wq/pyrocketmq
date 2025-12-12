@@ -42,6 +42,11 @@ from pyrocketmq.consumer.errors import (
 from pyrocketmq.consumer.offset_store import ReadOffsetType
 from pyrocketmq.consumer.stats_manager import StatsManager
 from pyrocketmq.consumer.subscription_manager import AsyncSubscriptionManager
+from pyrocketmq.consumer.trace_context import (
+    EXCEPTION_RETURN,
+    FAILED_RETURN,
+    async_trace_consumer_message,
+)
 from pyrocketmq.logging import get_logger
 from pyrocketmq.model import (
     BrokerData,
@@ -785,79 +790,106 @@ class AsyncBaseConsumer:
         if not listener or not context:
             return False
 
-        try:
-            logger.debug(
-                "Processing messages",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": context.topic,
-                    "queue_id": context.queue_id,
-                    "reconsume_times": context.reconsume_times,
-                    "listener_type": type(listener).__name__,
-                },
-            )
-
-            result: ConsumeResult = await listener.consume_message(messages, context)
-
-            # 验证消费结果的有效性
-            if result in [
-                ConsumeResult.COMMIT,
-                ConsumeResult.ROLLBACK,
-                ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT,
-            ]:
-                logger.error(
-                    "Invalid result for async concurrent consumer",
+        async with async_trace_consumer_message(
+            self._trace_dispatcher, self._config.consumer_group
+        ) as trace_context:
+            try:
+                logger.debug(
+                    "Processing messages",
                     extra={
                         "consumer_group": self._config.consumer_group,
+                        "message_count": len(messages),
+                        "topic": context.topic,
+                        "queue_id": context.queue_id,
+                        "reconsume_times": context.reconsume_times,
+                        "listener_type": type(listener).__name__,
+                    },
+                )
+
+                await trace_context.batch_sub_before(messages)
+
+                result: ConsumeResult = await listener.consume_message(
+                    messages, context
+                )
+
+                consume_duration: float = context.get_consume_duration()
+
+                # 验证消费结果的有效性
+                if result in [
+                    ConsumeResult.COMMIT,
+                    ConsumeResult.ROLLBACK,
+                    ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT,
+                ]:
+                    logger.error(
+                        "Invalid result for async concurrent consumer",
+                        extra={
+                            "consumer_group": self._config.consumer_group,
+                            "topic": context.topic,
+                            "queue_id": context.queue_id,
+                            "result": result.value,
+                        },
+                    )
+                    await trace_context.batch_failure(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
+                        EXCEPTION_RETURN,
+                    )
+                    return False
+
+                logger.info(
+                    "Message processing completed",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "message_count": len(messages),
                         "topic": context.topic,
                         "queue_id": context.queue_id,
                         "result": result.value,
                     },
                 )
-                return False
 
-            logger.info(
-                "Message processing completed",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": context.topic,
-                    "queue_id": context.queue_id,
-                    "result": result.value,
-                },
-            )
-
-            return result == ConsumeResult.SUCCESS
-
-        except Exception as e:
-            logger.error(
-                f"Failed to process messages: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "message_count": len(messages),
-                    "topic": context.topic,
-                    "queue_id": context.queue_id,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
-            # 调用异常回调（如果监听器实现了）
-            if hasattr(listener, "on_exception"):
-                try:
-                    await listener.on_exception(messages, context, e)
-                except Exception as callback_error:
-                    logger.error(
-                        f"Exception callback failed: {callback_error}",
-                        extra={
-                            "consumer_group": self._config.consumer_group,
-                            "error": str(callback_error),
-                        },
-                        exc_info=True,
+                is_success: bool = result == ConsumeResult.SUCCESS
+                if is_success:
+                    await trace_context.batch_success(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
                     )
+                else:
+                    await trace_context.batch_failure(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
+                        FAILED_RETURN,
+                    )
+                return is_success
 
-            return False
+            except Exception as e:
+                logger.error(
+                    f"Failed to process messages: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "message_count": len(messages),
+                        "topic": context.topic,
+                        "queue_id": context.queue_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+                await trace_context.batch_failure(messages, 0, EXCEPTION_RETURN)
+
+                # 调用异常回调（如果监听器实现了）
+                if hasattr(listener, "on_exception"):
+                    try:
+                        await listener.on_exception(messages, context, e)
+                    except Exception as callback_error:
+                        logger.error(
+                            f"Exception callback failed: {callback_error}",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "error": str(callback_error),
+                            },
+                            exc_info=True,
+                        )
+
+                return False
 
     async def _orderly_consume_message(
         self, messages: list[MessageExt], message_queue: MessageQueue
@@ -893,79 +925,109 @@ class AsyncBaseConsumer:
         # 获取topic用于日志记录
         topic = messages[0].topic if messages else message_queue.topic
 
-        try:
-            logger.debug(
-                "Processing messages orderly",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": topic,
-                    "message_count": len(messages),
-                    "queue_id": context.queue_id,
-                    "reconsume_times": context.reconsume_times,
-                },
-            )
-
-            result: ConsumeResult = await listener.consume_message(messages, context)
-
-            # 验证消费结果的有效性
-            if result == ConsumeResult.RECONSUME_LATER:
-                logger.error(
-                    "Invalid result for async orderly consumer",
+        async with async_trace_consumer_message(
+            self._trace_dispatcher, self._config.consumer_group
+        ) as trace_context:
+            try:
+                logger.debug(
+                    "Processing messages orderly",
                     extra={
                         "consumer_group": self._config.consumer_group,
                         "topic": topic,
+                        "message_count": len(messages),
                         "queue_id": context.queue_id,
-                        "result": result.value,
+                        "reconsume_times": context.reconsume_times,
                     },
                 )
-                raise InvalidConsumeResultError(
-                    consumer_type="async orderly",
-                    invalid_result=result.value,
-                    valid_results=[
-                        ConsumeResult.SUCCESS.value,
-                        ConsumeResult.COMMIT.value,
-                        ConsumeResult.ROLLBACK.value,
-                        ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT.value,
-                    ],
-                    topic=topic,
-                    queue_id=context.queue_id,
+
+                await trace_context.batch_sub_before(messages)
+                result: ConsumeResult = await listener.consume_message(
+                    messages, context
                 )
 
-            success = result in [ConsumeResult.SUCCESS, ConsumeResult.COMMIT]
-            return success, result
-
-        except InvalidConsumeResultError:
-            raise
-
-        except Exception as e:
-            logger.error(
-                f"Failed to process messages orderly: {e}",
-                extra={
-                    "consumer_group": self._config.consumer_group,
-                    "topic": topic,
-                    "message_count": len(messages),
-                    "queue_id": context.queue_id,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
-
-            # 调用异步异常回调（如果监听器实现了）
-            if hasattr(listener, "on_exception"):
-                try:
-                    await listener.on_exception(messages, context, e)
-                except Exception as callback_error:
+                consume_duration: float = context.get_consume_duration()
+                # 验证消费结果的有效性
+                if result == ConsumeResult.RECONSUME_LATER:
                     logger.error(
-                        f"Exception callback failed: {callback_error}",
+                        "Invalid result for async orderly consumer",
                         extra={
                             "consumer_group": self._config.consumer_group,
                             "topic": topic,
-                            "error": str(callback_error),
+                            "queue_id": context.queue_id,
+                            "result": result.value,
                         },
-                        exc_info=True,
+                    )
+                    await trace_context.batch_failure(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
+                        EXCEPTION_RETURN,
+                    )
+                    raise InvalidConsumeResultError(
+                        consumer_type="async orderly",
+                        invalid_result=result.value,
+                        valid_results=[
+                            ConsumeResult.SUCCESS.value,
+                            ConsumeResult.COMMIT.value,
+                            ConsumeResult.ROLLBACK.value,
+                            ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT.value,
+                        ],
+                        topic=topic,
+                        queue_id=context.queue_id,
                     )
 
-            return False, ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
+                success: bool = result in [ConsumeResult.SUCCESS, ConsumeResult.COMMIT]
+
+                if success:
+                    await trace_context.batch_success(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
+                    )
+                else:
+                    await trace_context.batch_failure(
+                        messages,
+                        int((time.time() - consume_duration) * 1000),
+                        FAILED_RETURN,
+                    )
+                return success, result
+
+            except InvalidConsumeResultError:
+                raise
+
+            except Exception as e:
+                logger.error(
+                    f"Failed to process messages orderly: {e}",
+                    extra={
+                        "consumer_group": self._config.consumer_group,
+                        "topic": topic,
+                        "message_count": len(messages),
+                        "queue_id": context.queue_id,
+                        "error": str(e),
+                    },
+                    exc_info=True,
+                )
+
+                await trace_context.batch_failure(
+                    messages,
+                    0,
+                    EXCEPTION_RETURN,
+                )
+
+                # 调用异步异常回调（如果监听器实现了）
+                if hasattr(listener, "on_exception"):
+                    try:
+                        await listener.on_exception(messages, context, e)
+                    except Exception as callback_error:
+                        logger.error(
+                            f"Exception callback failed: {callback_error}",
+                            extra={
+                                "consumer_group": self._config.consumer_group,
+                                "topic": topic,
+                                "error": str(callback_error),
+                            },
+                            exc_info=True,
+                        )
+
+                return False, ConsumeResult.SUSPEND_CURRENT_QUEUE_A_MOMENT
 
     async def _send_back_message(
         self, message_queue: MessageQueue, message: MessageExt
