@@ -1,27 +1,35 @@
 {
   "module_name": "consumer",
-  "version": "v1.0",
-  "last_updated": "2025-01-09",
+  "version": "v2.0",
+  "last_updated": "2025-01-12",
   "maintainers": ["pyrocketmq开发团队"],
   "review_status": "已完成代码验证和文档同步",
-  "purpose": "提供完整的RocketMQ消费者功能实现，包括并发消费、顺序消费、偏移量管理、订阅管理和消息监听等核心功能。支持同步和异步两种编程模式，适用于高并发消息处理场景。",
+  "purpose": "提供完整的RocketMQ消费者功能实现，包括并发消费、顺序消费、偏移量管理、订阅管理和消息监听等核心功能。支持同步和异步两种编程模式，提供丰富的工厂函数和配置选项，适用于高并发消息处理场景。支持消息追踪功能，提供完整的消费链路监控。",
 
   "functions": [
     {
-      "name": "AsyncConcurrentConsumer",
+      "name": "BaseConsumer/AsyncBaseConsumer",
       "parameters": {
         "config": "ConsumerConfig - 消费者配置对象，包含消费者组、NameServer地址等配置"
       },
-      "return_value": "AsyncConcurrentConsumer实例",
-      "description": "异步并发消费者实现类，支持多线程并发消费消息，适用于无序消息处理场景"
+      "return_value": "BaseConsumer/AsyncBaseConsumer实例",
+      "description": "消费者抽象基类，定义所有消费者的核心接口和基础功能，包括生命周期管理、订阅管理、路由刷新、心跳任务等"
     },
     {
-      "name": "AsyncOrderlyConsumer",
+      "name": "ConcurrentConsumer/AsyncConcurrentConsumer",
       "parameters": {
         "config": "ConsumerConfig - 消费者配置对象"
       },
-      "return_value": "AsyncOrderlyConsumer实例",
-      "description": "异步顺序消费者实现类，保证单个队列内的消息顺序消费"
+      "return_value": "ConcurrentConsumer/AsyncConcurrentConsumer实例",
+      "description": "并发消费者实现类，支持多线程并发消费消息，适用于无序消息处理场景"
+    },
+    {
+      "name": "OrderlyConsumer/AsyncOrderlyConsumer",
+      "parameters": {
+        "config": "ConsumerConfig - 消费者配置对象"
+      },
+      "return_value": "OrderlyConsumer/AsyncOrderlyConsumer实例",
+      "description": "顺序消费者实现类，保证单个队列内的消息顺序消费"
     },
     {
       "name": "ConsumerConfig",
@@ -31,46 +39,83 @@
         "message_model": "MessageModel - 消息模型（集群/广播）",
         "consume_thread_min/max": "int - 消费线程池大小",
         "consume_timeout": "int - 消费超时时间（秒）",
-        "max_reconsume_times": "int - 最大重试次数"
+        "max_reconsume_times": "int - 最大重试次数",
+        "enable_trace": "bool - 是否启用消息追踪"
       },
       "return_value": "ConsumerConfig配置对象",
       "description": "消费者配置管理类，定义所有消费者相关的配置参数"
     },
     {
-      "name": "AsyncMessageListener",
+      "name": "MessageListener/AsyncMessageListener",
       "parameters": {
-        "messages": "List[MessageExt] - 待消费的消息列表"
+        "messages": "List[MessageExt] - 待消费的消息列表",
+        "context": "ConsumeContext/AsyncConsumeContext - 消费上下文"
       },
       "return_value": "ConsumeResult - 消费结果（SUCCESS/RECONSUME_LATER/FAIL）",
-      "description": "异步消息监听器接口，用户需实现此接口来处理异步消息消费逻辑"
+      "description": "消息监听器接口，用户需实现此接口来处理消息消费逻辑"
     },
     {
-      "name": "AsyncSubscriptionManager",
+      "name": "SimpleMessageListener/SimpleAsyncMessageListener",
+      "parameters": {
+        "consume_func": "Callable - 消费处理函数"
+      },
+      "return_value": "SimpleMessageListener/SimpleAsyncMessageListener实例",
+      "description": "简单的消息监听器实现，通过函数式编程简化消息处理"
+    },
+    {
+      "name": "SubscriptionManager/AsyncSubscriptionManager",
       "parameters": {
         "topic": "str - 主题名称",
         "selector": "MessageSelector - 消息选择器（标签或SQL表达式）"
       },
       "return_value": "None",
-      "description": "异步订阅管理器，负责管理Topic的订阅、取消订阅和选择器更新"
+      "description": "订阅管理器，负责管理Topic的订阅、取消订阅和选择器更新"
     },
     {
-      "name": "AsyncOffsetStore",
+      "name": "OffsetStore/AsyncOffsetStore",
       "parameters": {
         "mq": "MessageQueue - 消息队列",
         "offset": "int - 偏移量值",
         "read_offset_type": "ReadOffsetType - 读取类型"
       },
       "return_value": "int或None - 返回读取到的偏移量",
-      "description": "异步偏移量存储接口，负责管理消息消费偏移量的读取、更新和持久化"
+      "description": "偏移量存储接口，负责管理消息消费偏移量的读取、更新和持久化"
     },
     {
-      "name": "AsyncProcessQueue",
+      "name": "LocalOffsetStore/AsyncLocalOffsetStore",
+      "parameters": {
+        "consumer_group": "str - 消费者组",
+        "store_path": "str - 本地存储路径"
+      },
+      "return_value": "LocalOffsetStore/AsyncLocalOffsetStore实例",
+      "description": "本地偏移量存储实现，适用于广播模式"
+    },
+    {
+      "name": "RemoteOffsetStore/AsyncRemoteOffsetStore",
+      "parameters": {
+        "consumer_group": "str - 消费者组",
+        "broker_manager": "BrokerManager - Broker管理器"
+      },
+      "return_value": "RemoteOffsetStore/AsyncRemoteOffsetStore实例",
+      "description": "远程偏移量存储实现，适用于集群模式"
+    },
+    {
+      "name": "ProcessQueue/AsyncProcessQueue",
       "parameters": {
         "max_cache_count": "int - 最大缓存消息数量",
         "max_cache_size_mb": "int - 最大缓存大小（MB）"
       },
-      "return_value": "AsyncProcessQueue实例",
-      "description": "异步消息处理队列，作为消息拉取和消费之间的缓冲区，支持高效的消息管理"
+      "return_value": "ProcessQueue/AsyncProcessQueue实例",
+      "description": "消息处理队列，作为消息拉取和消费之间的缓冲区，支持高效的消息管理"
+    },
+    {
+      "name": "ConsumeFromWhereManager/AsyncConsumeFromWhereManager",
+      "parameters": {
+        "consume_group": "str - 消费者组",
+        "consume_from_where": "ConsumeFromWhere - 消费起始位置"
+      },
+      "return_value": "ConsumeFromWhereManager/AsyncConsumeFromWhereManager实例",
+      "description": "消费起始位置管理器，负责确定新订阅队列的消费起始位置"
     },
     {
       "name": "AllocateQueueStrategy",
@@ -81,6 +126,51 @@
       },
       "return_value": "List[MessageQueue] - 分配给当前消费者的队列列表",
       "description": "队列分配策略接口，定义消费者如何分配Topic下的消息队列"
+    },
+    {
+      "name": "TraceContext/ConsumerTraceContextManager",
+      "parameters": {
+        "trace_dispatcher": "TraceDispatcher/AsyncTraceDispatcher - 追踪分发器",
+        "group_name": "str - 消费者组名称",
+        "message": "MessageExt - 消息对象"
+      },
+      "return_value": "TraceContext/ConsumerTraceContextManager实例",
+      "description": "消息追踪上下文管理器，用于跟踪消息消费过程"
+    },
+    {
+      "name": "StatsManager",
+      "parameters": {},
+      "return_value": "StatsManager实例",
+      "description": "统计管理器，负责收集和管理消费者的运行统计信息"
+    },
+    {
+      "name": "工厂函数",
+      "functions": [
+        {
+          "name": "create_consumer/create_async_consumer",
+          "description": "创建同步/异步消费者实例"
+        },
+        {
+          "name": "create_concurrent_consumer/create_async_concurrent_consumer",
+          "description": "创建并发消费者实例"
+        },
+        {
+          "name": "create_orderly_consumer/create_async_orderly_consumer",
+          "description": "创建顺序消费者实例"
+        },
+        {
+          "name": "create_high_performance_async_consumer",
+          "description": "创建高性能异步消费者，优化的配置参数"
+        },
+        {
+          "name": "create_memory_optimized_async_consumer",
+          "description": "创建内存优化的异步消费者，减少内存使用"
+        },
+        {
+          "name": "create_and_start_async_consumer",
+          "description": "创建并启动异步消费者，一步到位"
+        }
+      ]
     }
   ],
 
@@ -91,6 +181,7 @@
       "pyrocketmq.model - 消息模型和数据结构",
       "pyrocketmq.remote - 远程通信模块",
       "pyrocketmq.logging - 日志模块",
+      "pyrocketmq.trace - 消息追踪模块，支持TraceDispatcher和AsyncTraceDispatcher",
       "pyrocketmq.utils - 工具类（ReadWriteLock等）"
     ],
     "external": [
@@ -100,7 +191,9 @@
       "bisect - 二分查找算法支持",
       "typing - 类型注解支持",
       "time - 时间相关函数",
-      "collections - 集合类"
+      "collections - 集合类",
+      "contextlib - 上下文管理器支持",
+      "json - JSON序列化支持"
     ]
   },
 
@@ -109,31 +202,75 @@
     "files": [
       {
         "name": "__init__.py",
-        "description": "模块导出接口"
+        "description": "模块导出接口，定义所有公开的API"
       },
       {
-        "name": "config.py",
-        "description": "消费者配置管理"
+        "name": "base_consumer.py",
+        "description": "同步消费者抽象基类，定义核心接口和基础功能"
       },
       {
         "name": "async_base_consumer.py",
-        "description": "异步消费者基类"
+        "description": "异步消费者抽象基类，使用asyncio异步编程模型，支持trace功能"
+      },
+      {
+        "name": "concurrent_consumer.py",
+        "description": "同步并发消费者实现"
       },
       {
         "name": "async_concurrent_consumer.py",
         "description": "异步并发消费者实现"
       },
       {
+        "name": "orderly_consumer.py",
+        "description": "同步顺序消费者实现"
+      },
+      {
         "name": "async_orderly_consumer.py",
         "description": "异步顺序消费者实现"
+      },
+      {
+        "name": "config.py",
+        "description": "消费者配置管理，包含所有可配置参数"
+      },
+      {
+        "name": "factory.py",
+        "description": "消费者工厂类，提供丰富的创建函数"
+      },
+      {
+        "name": "listener.py",
+        "description": "同步消息监听器接口"
+      },
+      {
+        "name": "async_listener.py",
+        "description": "异步消息监听器接口"
+      },
+      {
+        "name": "process_queue.py",
+        "description": "同步消息处理队列"
       },
       {
         "name": "async_process_queue.py",
         "description": "异步消息处理队列"
       },
       {
+        "name": "subscription_manager.py",
+        "description": "同步订阅管理器"
+      },
+      {
         "name": "async_subscription_manager.py",
         "description": "异步订阅管理器"
+      },
+      {
+        "name": "offset_store.py",
+        "description": "偏移量存储抽象基类"
+      },
+      {
+        "name": "local_offset_store.py",
+        "description": "本地偏移量存储实现"
+      },
+      {
+        "name": "remote_offset_store.py",
+        "description": "远程偏移量存储实现"
       },
       {
         "name": "async_offset_store.py",
@@ -141,107 +278,157 @@
       },
       {
         "name": "async_local_offset_store.py",
-        "description": "异步本地偏移量存储实现"
+        "description": "异步本地偏移量存储"
       },
       {
         "name": "async_remote_offset_store.py",
-        "description": "异步远程偏移量存储实现"
+        "description": "异步远程偏移量存储"
       },
       {
-        "name": "async_listener.py",
-        "description": "异步消息监听器接口"
+        "name": "offset_store_factory.py",
+        "description": "同步偏移量存储工厂"
+      },
+      {
+        "name": "async_offset_store_factory.py",
+        "description": "异步偏移量存储工厂"
+      },
+      {
+        "name": "consume_from_where_manager.py",
+        "description": "同步消费起始位置管理"
+      },
+      {
+        "name": "async_consume_from_where_manager.py",
+        "description": "异步消费起始位置管理"
       },
       {
         "name": "allocate_queue_strategy.py",
-        "description": "队列分配策略"
+        "description": "队列分配策略，支持平均和哈希分配"
       },
       {
-        "name": "errors.py",
-        "description": "消费者异常定义"
-      },
-      {
-        "name": "factory.py",
-        "description": "消费者工厂类"
+        "name": "queue_selector.py",
+        "description": "队列选择器"
       },
       {
         "name": "stats_manager.py",
-        "description": "统计管理器"
+        "description": "统计管理器，收集消费统计信息"
+      },
+      {
+        "name": "trace_context.py",
+        "description": "消息追踪上下文管理，支持消费链路追踪"
+      },
+      {
+        "name": "errors.py",
+        "description": "消费者核心异常定义"
       },
       {
         "name": "subscription_exceptions.py",
-        "description": "订阅相关异常"
+        "description": "订阅相关异常定义"
       }
     ],
     "key_features": [
-      "完整的异步消费者实现",
+      "完整的同步和异步消费者实现",
       "支持并发和顺序两种消费模式",
       "灵活的偏移量管理（本地/远程）",
       "多种队列分配策略",
-      "完善的错误处理和重试机制"
+      "完善的错误处理和重试机制",
+      "丰富的工厂函数和便利方法",
+      "消息追踪支持（TraceDispatcher/AsyncTraceDispatcher）",
+      "高性能和内存优化版本",
+      "完整的统计和监控功能"
     ]
   },
+
   "core_components": [
     {
-      "name": "AsyncConcurrentConsumer",
-      "description": "异步并发消费者，支持多线程并发消费无序消息",
+      "name": "BaseConsumer/AsyncBaseConsumer",
+      "description": "消费者抽象基类，定义核心接口和生命周期管理",
       "core_features": [
-        "多线程并发消费：使用线程池并发处理消息",
+        "生命周期管理：start/shutdown/is_running",
+        "订阅管理：subscribe/unsubscribe/get_subscribed_topics",
+        "路由管理：自动刷新路由信息，适应Broker变化",
+        "心跳机制：定期向Broker发送心跳，保持连接",
+        "重平衡：支持队列重分配",
+        "消息拉取：支持批量拉取和流控",
+        "消息过滤：支持标签和SQL表达式过滤",
+        "异常处理：完善的异常捕获和处理机制",
+        "资源管理：自动清理和资源释放",
+        "Trace支持（AsyncBaseConsumer）：集成AsyncTraceDispatcher"
+      ],
+      "key_methods": [
+        "start/shutdown: 启动和关闭消费者",
+        "subscribe/unsubscribe: 订阅和取消订阅主题",
+        "get_config: 获取消费者配置",
+        "get_consumer_info: 获取消费者运行信息",
+        "get_message_listener: 获取消息监听器",
+        "check_reconsume_times: 检查消息重试次数"
+      ]
+    },
+    {
+      "name": "ConcurrentConsumer/AsyncConcurrentConsumer",
+      "description": "并发消费者，支持多线程并发消费无序消息",
+      "core_features": [
+        "多线程并发：使用线程池并发处理消息",
         "消息预取：支持批量预取消息提升性能",
         "流控机制：控制消费速度，防止内存溢出",
-        "自动重试：消费失败时自动重试机制"
+        "自动重试：消费失败时自动重试机制",
+        "消费结果处理：支持SUCCESS/RECONSUME_LATER/FAIL",
+        "消息过滤：在消费前进行消息过滤"
       ],
       "key_methods": [
         "start: 启动消费者",
         "shutdown: 优雅关闭消费者",
         "subscribe: 订阅主题",
-        "unsubscribe: 取消订阅",
-        "pause: 暂停消费",
-        "resume: 恢复消费"
+        "register_message_listener: 注册消息监听器",
+        "pause/resume: 暂停/恢复消费（异步版本）"
       ]
     },
     {
-      "name": "AsyncOrderlyConsumer",
-      "description": "异步顺序消费者，保证单个队列内消息的顺序性",
+      "name": "OrderlyConsumer/AsyncOrderlyConsumer",
+      "description": "顺序消费者，保证单个队列内消息的顺序性",
       "core_features": [
         "消息顺序保证：单队列内严格顺序消费",
         "分布式锁：使用Broker锁机制保证全局顺序",
         "故障恢复：锁超时和恢复机制",
-        "单线程处理：每个队列使用单线程确保顺序"
+        "单线程处理：每个队列使用单线程确保顺序",
+        "锁管理：lock_queue/unlock_queue方法"
       ],
       "key_methods": [
         "start: 启动消费者",
         "shutdown: 优雅关闭消费者",
         "subscribe: 订阅主题",
-        "unlock_queue: 强制解锁队列"
+        "lock_queue: 锁定队列",
+        "unlock_queue: 解锁队列",
+        "register_message_listener: 注册消息监听器"
       ]
     },
     {
-      "name": "AsyncProcessQueue",
-      "description": "异步消息处理队列，作为消息拉取和消费之间的缓冲",
+      "name": "ProcessQueue/AsyncProcessQueue",
+      "description": "消息处理队列，作为消息拉取和消费之间的缓冲",
       "core_features": [
         "消息缓存：缓存拉取的消息，支持批量消费",
         "容量控制：支持最大消息数量和内存大小限制",
         "消息排序：按偏移量顺序维护消息",
-        "过期清理：自动清理过期消息"
+        "过期清理：自动清理过期消息",
+        "统计信息：提供队列状态统计"
       ],
       "configuration": [
-        "max_cache_count: 最大缓存消息数（默认1000）",
-        "max_cache_size_mb: 最大缓存大小MB（默认100MB）",
+        "max_cache_count: 最大缓存消息数",
+        "max_cache_size_mb: 最大缓存大小MB",
         "pull_threshold_for_all: 消息数量阈值",
         "pull_threshold_for_topic: 主题消息数量阈值"
       ]
     },
     {
-      "name": "AsyncOffsetStore",
-      "description": "异步偏移量存储管理，支持本地和远程两种模式",
+      "name": "OffsetStore/AsyncOffsetStore",
+      "description": "偏移量存储管理，支持本地和远程两种模式",
       "implementations": [
         {
-          "name": "AsyncLocalOffsetStore",
+          "name": "LocalOffsetStore/AsyncLocalOffsetStore",
           "description": "本地偏移量存储，保存在本地文件",
           "use_case": "广播模式消费"
         },
         {
-          "name": "AsyncRemoteOffsetStore",
+          "name": "RemoteOffsetStore/AsyncRemoteOffsetStore",
           "description": "远程偏移量存储，保存在Broker",
           "use_case": "集群模式消费"
         }
@@ -254,61 +441,108 @@
       ]
     },
     {
-      "name": "AllocateQueueStrategy",
-      "description": "队列分配策略接口，定义消费者组内队列分配规则",
-      "implementations": [
+      "name": "TraceContext Management",
+      "description": "消息追踪功能，支持完整的消费链路监控",
+      "components": [
         {
-          "name": "AverageAllocateStrategy",
-          "description": "平均分配策略，尽可能平均分配队列",
-          "algorithm": "按消费者数量平均分配，余数按顺序分配"
+          "name": "TraceContext",
+          "description": "追踪上下文数据结构"
         },
         {
-          "name": "CircleAllocateStrategy",
-          "description": "环形分配策略，按消费者ID哈希分配",
-          "algorithm": "基于消费者ID哈希值进行环形分配"
+          "name": "ConsumerTraceContextManager",
+          "description": "消费者追踪上下文管理器，自动管理追踪生命周期"
+        },
+        {
+          "name": "TraceDispatcher/AsyncTraceDispatcher",
+          "description": "追踪分发器，异步发送追踪数据"
+        }
+      ],
+      "trace_types": ["SubBefore: 消费开始前追踪", "SubAfter: 消费完成后追踪"],
+      "context_codes": [
+        "SUCCESS_RETURN (0): 消费成功",
+        "TIMEOUT_RETURN (1): 消费超时",
+        "EXCEPTION_RETURN (2): 消费异常",
+        "NULL_RETURN (3): 返回为空",
+        "FAILED_RETURN (4): 消费失败"
+      ]
+    },
+    {
+      "name": "Factory Functions",
+      "description": "工厂函数集合，简化消费者创建过程",
+      "categories": [
+        {
+          "name": "基础创建函数",
+          "functions": [
+            "create_consumer/create_async_consumer",
+            "create_concurrent_consumer/create_async_concurrent_consumer",
+            "create_orderly_consumer/create_async_orderly_consumer"
+          ]
+        },
+        {
+          "name": "优化版本",
+          "functions": [
+            "create_high_performance_async_consumer",
+            "create_memory_optimized_async_consumer"
+          ]
+        },
+        {
+          "name": "便利启动函数",
+          "functions": [
+            "create_and_start_async_consumer",
+            "quick_start_async_consumer"
+          ]
         }
       ]
     }
   ],
+
   "call_flow": {
     "startup_flow": [
-      "1. 创建ConsumerConfig配置对象",
-      "2. 根据消费模式创建AsyncConcurrentConsumer或AsyncOrderlyConsumer",
-      "3. 注册AsyncMessageListener消息监听器",
-      "4. 通过AsyncSubscriptionManager订阅Topic",
+      "1. 创建ConsumerConfig配置对象，可以启用trace功能",
+      "2. 根据消费模式创建消费者实例（Concurrent/Orderly）",
+      "3. 注册MessageListener消息监听器",
+      "4. 通过subscribe方法订阅Topic",
       "5. 调用start()方法启动消费者",
-      "6. 从broker模块导入并初始化TopicBrokerMapping进行路由管理",
-      "7. 启动路由刷新任务和心跳任务",
-      "8. 执行重平衡获取分配的队列",
-      "9. 开始消息拉取和消费循环"
+      "6. 初始化TopicBrokerMapping进行路由管理",
+      "7. 启动路由刷新任务（定期更新路由信息）",
+      "8. 启动心跳任务（维持与Broker的连接）",
+      "9. 如果启用trace，初始化TraceDispatcher/AsyncTraceDispatcher",
+      "10. 执行重平衡获取分配的队列",
+      "11. 开始消息拉取和消费循环"
     ],
     "consume_flow": {
       "concurrent": [
         "1. 从Broker批量拉取消息",
-        "2. 将消息存入AsyncProcessQueue缓存",
+        "2. 将消息存入ProcessQueue缓存",
         "3. 使用线程池并发处理消息",
-        "4. 调用用户实现的AsyncMessageListener.consume_message()",
-        "5. 根据返回的ConsumeResult处理成功/失败",
-        "6. 更新消费偏移量到AsyncOffsetStore",
-        "7. 定期持久化偏移量"
+        "4. 如果启用trace，创建ConsumerTraceContextManager",
+        "5. 调用用户实现的MessageListener.consume_message()",
+        "6. 记录trace信息（消费开始/结束）",
+        "7. 根据返回的ConsumeResult处理成功/失败",
+        "8. 更新消费偏移量到OffsetStore",
+        "9. 定期持久化偏移量"
       ],
       "orderly": [
         "1. 获取队列本地锁和远程锁",
         "2. 从Broker拉取消息（单条或小批量）",
-        "3. 按顺序处理消息",
-        "4. 等待当前消息消费完成再处理下一条",
-        "5. 更新偏移量并释放锁",
-        "6. 处理失败时保持锁不释放"
+        "3. 如果启用trace，创建追踪上下文",
+        "4. 按顺序处理消息",
+        "5. 记录消费耗时和结果",
+        "6. 等待当前消息消费完成再处理下一条",
+        "7. 更新偏移量并释放锁",
+        "8. 处理失败时保持锁不释放"
       ]
     },
     "shutdown_flow": [
       "1. 调用shutdown()方法",
       "2. 停止消息拉取任务",
-      "3. 等待正在处理的消费任务完成",
-      "4. 持久化所有未保存的偏移量",
-      "5. 释放队列锁（顺序消费）",
-      "6. 关闭网络连接和清理资源",
-      "7. 停止后台任务（心跳、路由刷新）"
+      "3. 停止路由刷新和心跳任务",
+      "4. 如果启用trace，关闭TraceDispatcher",
+      "5. 等待正在处理的消费任务完成",
+      "6. 持久化所有未保存的偏移量",
+      "7. 释放队列锁（顺序消费）",
+      "8. 关闭网络连接和清理资源",
+      "9. 停止后台任务"
     ]
   },
 
@@ -322,13 +556,18 @@
           "ConsumerShutdownError": "消费者关闭异常",
           "ConsumerStateError": "消费者状态错误",
           "SubscribeError": "订阅操作失败",
+          "UnsubscribeError": "取消订阅失败",
           "MessageConsumeError": "消息消费异常",
           "MessagePullError": "消息拉取异常",
           "OffsetError": "偏移量操作异常",
+          "OffsetFetchError": "获取偏移量失败",
           "RebalanceError": "重平衡异常",
           "BrokerNotAvailableError": "Broker不可用",
           "NetworkError": "网络通信异常",
-          "TimeoutError": "操作超时"
+          "TimeoutError": "操作超时",
+          "NameServerError": "NameServer异常",
+          "ConfigError": "配置错误",
+          "ValidationError": "参数验证错误"
         }
       },
       "SubscriptionError": {
@@ -337,7 +576,9 @@
           "InvalidTopicError": "无效的Topic",
           "InvalidSelectorError": "无效的选择器",
           "TopicNotSubscribedError": "Topic未订阅",
-          "SubscriptionConflictError": "订阅冲突"
+          "SubscriptionConflictError": "订阅冲突",
+          "SubscriptionDataError": "订阅数据错误",
+          "SubscriptionLimitExceededError": "超过订阅限制"
         }
       }
     },
@@ -361,6 +602,11 @@
         "lock_timeout": "远程锁超时自动释放",
         "force_unlock": "消费者异常退出时强制释放锁",
         "lock_renewal": "定期续期防止锁过期"
+      },
+      "trace_error_handling": {
+        "async_trace_failure": "追踪失败不影响主流程",
+        "trace_data_loss": "追踪数据丢失自动忽略",
+        "trace_dispatcher_recovery": "分发器异常自动恢复"
       }
     }
   }
