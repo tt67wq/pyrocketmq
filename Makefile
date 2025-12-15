@@ -5,7 +5,7 @@ UVX=uvx
 PYTHON_PATH=src/pyrocketmq
 DIST_DIR=dist
 BUILD_DIR=build
-REMOTE_HUB=dewuPython
+REMOTE_HUB=Python
 PYTHON_FILES=$(sort $(wildcard $(PYTHON_PATH)/*.py))
 
 

@@ -11,6 +11,8 @@
 
 > **🚀 生产就绪**: pyrocketmq是一个功能完整的Python RocketMQ客户端库，提供高性能、可靠的消息队列生产者和消费者功能。
 
+> **⚠️ 重要提示**: 当前版本仅支持 RocketMQ 4.x 协议，**不支持 5.x 及以上版本**。请确保您的 RocketMQ 服务器版本为 4.x。
+
 pyrocketmq是一个纯Python实现的RocketMQ客户端库，完全兼容RocketMQ TCP协议规范。项目提供了完整的协议模型层、网络传输层、远程通信层以及NameServer和Broker客户端实现，同时包含完整的生产者和消费者功能。
 
 **版本**: 0.1.0（开发版本，1.0版本即将发布）
@@ -60,7 +62,7 @@ uv sync
 ### 环境要求
 
 - Python 3.11+
-- RocketMQ 4.x+
+- RocketMQ 4.x（**注意：当前版本仅支持RocketMQ 4.x协议，暂不支持5.x及以上版本**）
 - Linux/macOS/Windows
 
 ### 消息生产者使用
